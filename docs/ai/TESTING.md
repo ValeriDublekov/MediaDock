@@ -11,10 +11,10 @@ From repository root:
 
 ```powershell
 python -m unittest discover -s backend/tests -v
+npx firebase emulators:exec "npx vitest run firebase/tests/rules.test.ts"
 ```
 
-This validates the RuTracker title parser in backend/ against local Atom fixtures and makes no
-OMDb or Firebase calls.
+This validates the RuTracker title parser in backend/ and the Firestore security rules via the emulator suite.
 
 ## Planned Test Layers
 

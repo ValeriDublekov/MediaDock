@@ -1,8 +1,55 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+  
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAllowlisted() {
+      return isAuthenticated() &&
+             exists(/databases/$(database)/documents/allowlist/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/allowlist/$(request.auth.uid)).data.enabled == true &&
+             (
+               !("email" in request.auth.token) || 
+               request.auth.token.email == null || 
+               get(/databases/$(database)/documents/allowlist/$(request.auth.uid)).data.email == request.auth.token.email
+             );
+    }
+
+    match /titles/{titleId} {
+      allow read: if isAllowlisted();
+      allow write: if false;
+      
+      match /occurrences/{occurrenceId} {
+        allow read: if isAllowlisted();
+        allow write: if false;
+      }
+    }
+    
+    match /omdbCache/{cacheId} {
+      allow read, write: if false;
+    }
+    
+    match /scanRuns/{runId} {
+      allow read, write: if false;
+    }
+    
+    match /allowlist/{userId} {
+      // Allowlist writes are server-only. Read is own access check only.
+      allow read: if isAuthenticated() && request.auth.uid == userId;
+      allow write: if false;
+    }
+    
+    // Extension point: reserved users namespace
+    // Kept denied until a concrete watchlist or download-queue schema is added
+    // to DATA_CONTRACTS.md with owner-access and field-validation tests.
+    match /users/{userId}/{document=**} {
+      allow read, write: if false;
+    }
+    
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }
