@@ -1,9 +1,15 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { CatalogRepository, Title } from '../domain/catalog';
 import { useCatalog } from '../application/useCatalog';
+import { CatalogFilterBar } from './CatalogFilterBar';
 import { TitleCard } from './TitleCard';
 import { CatalogSkeleton } from './CatalogSkeleton';
-import { AlertCircle, RefreshCw, Film, Loader2 } from 'lucide-react';
+import {
+  CatalogFilterState,
+  DEFAULT_FILTER_STATE,
+  filterAndSortTitles,
+} from '../domain/catalogFilter';
+import { AlertCircle, RefreshCw, Film, Loader2, FilterX, RotateCcw } from 'lucide-react';
 
 interface CatalogViewProps {
   repository?: CatalogRepository;
@@ -21,6 +27,12 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository, pageSize =
     loadNextPage,
     retry,
   } = useCatalog({ repository, pageSize });
+
+  const [filterState, setFilterState] = useState<CatalogFilterState>(DEFAULT_FILTER_STATE);
+
+  const filteredTitles = useMemo(() => {
+    return filterAndSortTitles(titles, filterState);
+  }, [titles, filterState]);
 
   if (isLoading) {
     return <CatalogSkeleton count={pageSize} />;
@@ -65,18 +77,63 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository, pageSize =
   }
 
   return (
-    <div className="space-y-8">
-      {/* Semantic Responsive Poster Grid */}
-      <section aria-label="Media Catalog Grid">
+    <div className="space-y-6">
+      {/* Filter and Search Bar */}
+      <CatalogFilterBar
+        filterState={filterState}
+        onFilterChange={setFilterState}
+        titles={titles}
+        filteredCount={filteredTitles.length}
+        totalLoadedCount={titles.length}
+      />
+
+      {/* Main Content Area */}
+      {filteredTitles.length > 0 ? (
+        <section aria-label="Media Catalog Grid">
+          <div
+            data-testid="catalog-list"
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+          >
+            {filteredTitles.map((item: Title) => (
+              <TitleCard key={item.id} title={item} repository={repository} />
+            ))}
+          </div>
+        </section>
+      ) : (
+        /* Empty Filtered State */
         <div
-          data-testid="catalog-list"
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+          data-testid="catalog-empty-filtered"
+          className="flex flex-col items-center justify-center py-16 text-center px-4 bg-neutral-900 border border-neutral-800 rounded-xl"
         >
-          {titles.map((item: Title) => (
-            <TitleCard key={item.id} title={item} repository={repository} />
-          ))}
+          <div className="w-12 h-12 rounded-full bg-neutral-800 text-amber-400 flex items-center justify-center mb-4">
+            <FilterX className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-semibold text-neutral-100 mb-1">No matching titles found</h3>
+          <p className="text-sm text-neutral-400 max-w-md mb-6">
+            No loaded items match your current filter and search criteria. Try adjusting your filters or loading more items from the catalog.
+          </p>
+          <div className="flex flex-wrap gap-3 justify-center">
+            <button
+              onClick={() => setFilterState(DEFAULT_FILTER_STATE)}
+              data-testid="clear-filters-button"
+              className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 text-sm font-medium text-neutral-200 bg-neutral-800 border border-neutral-700 rounded-lg hover:bg-neutral-700 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Reset Filters
+            </button>
+            {hasMore && (
+              <button
+                onClick={loadNextPage}
+                disabled={isLoadingMore}
+                data-testid="catalog-load-more-from-empty-button"
+                className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 text-sm font-semibold text-neutral-950 bg-amber-500 rounded-lg hover:bg-amber-400 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer disabled:opacity-50"
+              >
+                {isLoadingMore ? 'Loading...' : 'Load More Items from Server'}
+              </button>
+            )}
+          </div>
         </div>
-      </section>
+      )}
 
       {/* Error state during loadNextPage */}
       {error && titles.length > 0 && (

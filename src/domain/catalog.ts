@@ -27,6 +27,8 @@ export interface Title {
   awards?: string | null;
   boxOffice?: string | null;
   ratings?: Rating[] | null;
+  qualities?: string[] | null;
+  occurrences?: Occurrence[] | null;
 }
 
 export interface Occurrence {
