@@ -24,6 +24,8 @@ jobs:
     name: Run Media Scanner
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
     steps:
       - name: Checkout repository
@@ -40,11 +42,11 @@ jobs:
         run: pip install -e ./backend
 
       - name: Decode Firebase Service Account Credentials
-        if: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
+        if: ${{ env.FIREBASE_SERVICE_ACCOUNT != '' }}
         run: |
           mkdir -p ~/.config/gcloud
           CRED_PATH="$HOME/.config/gcloud/firebase_service_account.json"
-          echo "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}" | base64 --decode > "$CRED_PATH"
+          echo "$FIREBASE_SERVICE_ACCOUNT" | base64 --decode > "$CRED_PATH"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$CRED_PATH" >> $GITHUB_ENV
 
       - name: Execute Scanner
