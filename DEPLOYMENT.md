@@ -71,10 +71,10 @@ when workflows are implemented.
 
 The scanner workflow (`.github/workflows/scanner.yml`) decodes `FIREBASE_SERVICE_ACCOUNT` into a temporary environment file outside the checked out repository and sets `GOOGLE_APPLICATION_CREDENTIALS` for the step. Credentials are never committed, logged, or uploaded as build artifacts.
 
-### Variables or Pages build environment
+### Variables for Pages build environment
 
 Store public Firebase web configuration using the `VITE_*` names expected by the
-frontend. Do not add `OMDB_API_KEY`, private keys, or Admin project credentials to
+frontend as **Repository Variables** (not Secrets). Do not add `OMDB_API_KEY`, private keys, or Admin project credentials to
 the Pages build job.
 
 ### Repository settings
