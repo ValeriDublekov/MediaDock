@@ -1,4 +1,4 @@
-# Deployment
+# Deployment 
 
 This is the target deployment runbook for Cloud Firestore, Firebase Authentication,
 the daily GitHub Actions scanner, and the React GitHub Pages site. It becomes fully
