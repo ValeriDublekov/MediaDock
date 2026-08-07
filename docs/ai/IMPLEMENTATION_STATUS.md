@@ -2,24 +2,26 @@
 
 ## Current Milestone
 
-M0 - Sanitized legacy implementation, safe configuration, root placeholders, and seed documentation reconciled.
+Frontend scaffolding and Firebase initialization.
 
 ## Completed
 
-- P00: Placed existing scanner and config under `legacy/`, sanitized configuration, created `.env.example`, `.gitignore`, and target directory placeholders.
-- P01: Reconciled seed documentation (`docs/ai/*.md`) with post-bootstrap repository layout.
-- P02: Scaffolded installable Python backend in `backend/` with `src` layout, copied title parser and Atom fixture unit tests without changing parser behavior.
+- M0: Sanitized legacy implementation, safe configuration, root placeholders, and seed documentation reconciled.
+- Backend: Scaffolded installable Python backend in `backend/` with `src` layout and title parser unit tests.
+- P09A: Scaffolded Vite React TypeScript frontend with Firebase initialization, Google Sign-In, and focused auth tests mocked at the adapter boundary.
 
 ## Current Repository Reality
 
 - Legacy source is isolated under `legacy/`.
-- Installable Python backend exists under `backend/` using a `src` layout (`movies_feed`).
-- Title parser unit tests pass against local Atom fixtures via `python -m unittest discover -s backend/tests -v` with no live network calls.
-- Target directory placeholders (`frontend/`, `firebase/`, `.github/workflows/`) exist.
+- Installable Python backend exists under `backend/`.
+- Frontend exists at root using Vite 6, React 19, TypeScript 5.8, and Tailwind 4.
+- Authentication components (`AuthGate`, `AuthProvider`) are implemented and tested.
+- Title parser unit tests pass against local Atom fixtures via `python -m unittest discover -s backend/tests -v`.
+- Frontend auth tests pass via `npx vitest run src/test/auth.test.tsx`.
 
 ## Next Prompt
 
-P03 - Add Typed Configuration and RSS Models.
+P09B - Implement Catalog Queries and UI (or next available).
 
 ## Blockers
 
