@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: movies-feed
+Version: 0.1.0
+Summary: MediaDock backend scanner and title parser
+Requires-Python: >=3.10
+Requires-Dist: feedparser>=6.0.0

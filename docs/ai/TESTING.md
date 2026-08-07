@@ -10,10 +10,10 @@ added here only after their scaffolds have been created and the commands verifie
 From repository root:
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m unittest discover -s backend/tests -v
 ```
 
-This validates the RuTracker title parser against local Atom fixtures and makes no
+This validates the RuTracker title parser in backend/ against local Atom fixtures and makes no
 OMDb or Firebase calls.
 
 ## Planned Test Layers

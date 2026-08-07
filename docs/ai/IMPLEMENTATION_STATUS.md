@@ -8,17 +8,18 @@ M0 - Sanitized legacy implementation, safe configuration, root placeholders, and
 
 - P00: Placed existing scanner and config under `legacy/`, sanitized configuration, created `.env.example`, `.gitignore`, and target directory placeholders.
 - P01: Reconciled seed documentation (`docs/ai/*.md`) with post-bootstrap repository layout.
+- P02: Scaffolded installable Python backend in `backend/` with `src` layout, copied title parser and Atom fixture unit tests without changing parser behavior.
 
 ## Current Repository Reality
 
 - Legacy source is isolated under `legacy/`.
-- Target directory placeholders (`backend/`, `frontend/`, `firebase/`, `.github/workflows/`) exist.
-- Documentation in `docs/ai/*.md` accurately reflects repository state.
-- Legacy parser unit tests pass against local fixtures.
+- Installable Python backend exists under `backend/` using a `src` layout (`movies_feed`).
+- Title parser unit tests pass against local Atom fixtures via `python -m unittest discover -s backend/tests -v` with no live network calls.
+- Target directory placeholders (`frontend/`, `firebase/`, `.github/workflows/`) exist.
 
 ## Next Prompt
 
-P02 - Scaffold the Python Backend.
+P03 - Add Typed Configuration and RSS Models.
 
 ## Blockers
 

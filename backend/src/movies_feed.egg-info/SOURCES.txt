@@ -1,0 +1,9 @@
+pyproject.toml
+src/movies_feed/__init__.py
+src/movies_feed/rutracker_parser.py
+src/movies_feed.egg-info/PKG-INFO
+src/movies_feed.egg-info/SOURCES.txt
+src/movies_feed.egg-info/dependency_links.txt
+src/movies_feed.egg-info/requires.txt
+src/movies_feed.egg-info/top_level.txt
+tests/test_rutracker_parser.py
