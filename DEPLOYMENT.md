@@ -4,7 +4,7 @@ This is the target deployment runbook for Cloud Firestore, Firebase Authenticati
 the daily GitHub Actions scanner, and the React GitHub Pages site. It becomes fully
 executable as prompts P08 and P12-P14 are completed.
 
-## Deployment Model
+## Deployment Model 
 
 | Component | Platform | Credentials |
 | --- | --- | --- |
