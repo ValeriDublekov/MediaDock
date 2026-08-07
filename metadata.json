@@ -1,0 +1,6 @@
+{
+  "name": "MediaDock",
+  "description": "Private media catalog aggregating torrent RSS feeds, OMDb metadata, and Cloud Firestore storage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

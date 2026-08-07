@@ -1,0 +1,35 @@
+{
+  "omdb_api_key": "",
+  "days_to_keep": 5,
+  "rss_feeds": {
+    "Movies (HD)": {
+      "url": "https://feed.rutracker.cc/atom/f/313.atom",
+      "type": "movie"
+    },
+    "Series (HD)": {
+      "url": "https://feed.rutracker.cc/atom/f/2366.atom",
+      "type": "series"
+    },
+    "New Series / Episodes": {
+      "url": "https://feed.rutracker.cc/atom/f/1803.atom",
+      "type": "series"
+    }
+  },
+  "video_settings": {
+    "quality_tags": ["1080p", "2160p", "4K", "720p"],
+    "rip_tags": ["BDRip", "WEB-DL", "Blu-ray", "WEBRip"]
+  },
+  "filters": {
+    "default_movie_rating": 6.5,
+    "default_series_rating": 7.0,
+    "default_min_votes": 0,
+    "default_show_new": true,
+    "excluded_genres": ["Horror"],
+    "excluded_countries": ["India", "Turkey"]
+  },
+  "cache": {
+    "enabled": true,
+    "cache_days": 5
+  },
+  "archive_reports": true
+}

@@ -1,0 +1,45 @@
+# Node and Vite outputs
+node_modules/
+build/
+dist/
+coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+.pytest_cache/
+
+# Environment and Credentials
+.env*
+!.env.example
+*service-account*.json
+firebase-admin*.json
+
+# Firebase & Emulator state
+.firebase/
+firebase-export*
+*.emulator.state
+
+# Data and Generated Outputs
+data/
+output/
+legacy/data/
+legacy/output/
+
+# Logs
+*.log
+
+# IDE and OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
