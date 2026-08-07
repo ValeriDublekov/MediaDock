@@ -1,0 +1,194 @@
+from abc import ABC, abstractmethod
+import datetime
+from typing import Any, Dict, List, Optional
+
+from .models import OmdbCacheEntry, Occurrence, ScanRun, Title
+
+
+def merge_titles(existing: Title, incoming: Title) -> Title:
+    """Merges refreshed metadata while preserving earliest first_seen_at.
+
+    Uses latest last_seen_at, and merges other OMDb/metadata fields.
+    """
+    first_seen_at = min(existing.first_seen_at, incoming.first_seen_at)
+    last_seen_at = max(existing.last_seen_at, incoming.last_seen_at)
+
+    imdb_id = incoming.imdb_id if incoming.imdb_id is not None else existing.imdb_id
+    imdb_rating = incoming.imdb_rating if incoming.imdb_rating is not None else existing.imdb_rating
+    imdb_votes = incoming.imdb_votes if incoming.imdb_votes is not None else existing.imdb_votes
+    metascore = incoming.metascore if incoming.metascore is not None else existing.metascore
+    genres = incoming.genres if incoming.genres else existing.genres
+    countries = incoming.countries if incoming.countries else existing.countries
+    director = incoming.director if incoming.director is not None else existing.director
+    plot = incoming.plot if incoming.plot is not None else existing.plot
+    poster_url = incoming.poster_url if incoming.poster_url is not None else existing.poster_url
+    runtime = incoming.runtime if incoming.runtime is not None else existing.runtime
+    awards = incoming.awards if incoming.awards is not None else existing.awards
+    box_office = incoming.box_office if incoming.box_office is not None else existing.box_office
+    ratings = incoming.ratings if incoming.ratings else existing.ratings
+
+    return Title(
+        title=incoming.title or existing.title,
+        normalized_title=incoming.normalized_title or existing.normalized_title,
+        year=incoming.year if incoming.year is not None else existing.year,
+        media_type=incoming.media_type or existing.media_type,
+        first_seen_at=first_seen_at,
+        last_seen_at=last_seen_at,
+        updated_at=incoming.updated_at,
+        imdb_id=imdb_id,
+        imdb_rating=imdb_rating,
+        imdb_votes=imdb_votes,
+        metascore=metascore,
+        genres=genres,
+        countries=countries,
+        director=director,
+        plot=plot,
+        poster_url=poster_url,
+        runtime=runtime,
+        awards=awards,
+        box_office=box_office,
+        ratings=ratings,
+    )
+
+
+def merge_occurrences(existing: Occurrence, incoming: Occurrence) -> Occurrence:
+    """Merges duplicate occurrences by preserving earliest first_seen_at and latest last_seen_at."""
+    first_seen_at = min(existing.first_seen_at, incoming.first_seen_at)
+    last_seen_at = max(existing.last_seen_at, incoming.last_seen_at)
+    return Occurrence(
+        source_feed_id=incoming.source_feed_id,
+        source_feed_name=incoming.source_feed_name,
+        feed_entry_id=incoming.feed_entry_id,
+        torrent_url=incoming.torrent_url,
+        raw_title=incoming.raw_title,
+        quality=incoming.quality if incoming.quality is not None else existing.quality,
+        rip_type=incoming.rip_type if incoming.rip_type is not None else existing.rip_type,
+        first_seen_at=first_seen_at,
+        last_seen_at=last_seen_at,
+    )
+
+
+class TitleRepository(ABC):
+    @abstractmethod
+    def get(self, title_id: str) -> Optional[Title]:
+        """Fetches a Title by its ID."""
+        pass
+
+    @abstractmethod
+    def upsert(self, title_id: str, title: Title) -> None:
+        """Inserts a Title or merges metadata if already existing."""
+        pass
+
+    @abstractmethod
+    def list_all(self) -> List[Title]:
+        """Lists all Titles in the repository."""
+        pass
+
+
+class OccurrenceRepository(ABC):
+    @abstractmethod
+    def get(self, title_id: str, occurrence_id: str) -> Optional[Occurrence]:
+        """Fetches an Occurrence by title ID and occurrence ID."""
+        pass
+
+    @abstractmethod
+    def upsert(self, title_id: str, occurrence_id: str, occurrence: Occurrence) -> None:
+        """Inserts an Occurrence or merges lastSeenAt if already existing."""
+        pass
+
+    @abstractmethod
+    def list_by_title(self, title_id: str) -> List[Occurrence]:
+        """Lists all Occurrences associated with a Title."""
+        pass
+
+
+class OmdbCacheRepository(ABC):
+    @abstractmethod
+    def get(self, cache_key: str) -> Optional[OmdbCacheEntry]:
+        """Fetches an OMDb cache entry by its deterministic key."""
+        pass
+
+    @abstractmethod
+    def set(self, cache_key: str, entry: OmdbCacheEntry) -> None:
+        """Stores or replaces an OMDb cache entry."""
+        pass
+
+
+class ScanRunRepository(ABC):
+    @abstractmethod
+    def get(self, run_id: str) -> Optional[ScanRun]:
+        """Fetches a ScanRun by its ID."""
+        pass
+
+    @abstractmethod
+    def upsert(self, run_id: str, run: ScanRun) -> None:
+        """Stores or updates a ScanRun by its ID."""
+        pass
+
+    @abstractmethod
+    def list_all(self) -> List[ScanRun]:
+        """Lists all ScanRuns in the repository."""
+        pass
+
+
+class FakeTitleRepository(TitleRepository):
+    def __init__(self) -> None:
+        self._store: Dict[str, Title] = {}
+
+    def get(self, title_id: str) -> Optional[Title]:
+        return self._store.get(title_id)
+
+    def upsert(self, title_id: str, title: Title) -> None:
+        existing = self._store.get(title_id)
+        if existing:
+            self._store[title_id] = merge_titles(existing, title)
+        else:
+            self._store[title_id] = title
+
+    def list_all(self) -> List[Title]:
+        return list(self._store.values())
+
+
+class FakeOccurrenceRepository(OccurrenceRepository):
+    def __init__(self) -> None:
+        self._store: Dict[str, Dict[str, Occurrence]] = {}
+
+    def get(self, title_id: str, occurrence_id: str) -> Optional[Occurrence]:
+        return self._store.get(title_id, {}).get(occurrence_id)
+
+    def upsert(self, title_id: str, occurrence_id: str, occurrence: Occurrence) -> None:
+        if title_id not in self._store:
+            self._store[title_id] = {}
+        existing = self._store[title_id].get(occurrence_id)
+        if existing:
+            self._store[title_id][occurrence_id] = merge_occurrences(existing, occurrence)
+        else:
+            self._store[title_id][occurrence_id] = occurrence
+
+    def list_by_title(self, title_id: str) -> List[Occurrence]:
+        return list(self._store.get(title_id, {}).values())
+
+
+class FakeOmdbCacheRepository(OmdbCacheRepository):
+    def __init__(self) -> None:
+        self._store: Dict[str, OmdbCacheEntry] = {}
+
+    def get(self, cache_key: str) -> Optional[OmdbCacheEntry]:
+        return self._store.get(cache_key)
+
+    def set(self, cache_key: str, entry: OmdbCacheEntry) -> None:
+        self._store[cache_key] = entry
+
+
+class FakeScanRunRepository(ScanRunRepository):
+    def __init__(self) -> None:
+        self._store: Dict[str, ScanRun] = {}
+
+    def get(self, run_id: str) -> Optional[ScanRun]:
+        return self._store.get(run_id)
+
+    def upsert(self, run_id: str, run: ScanRun) -> None:
+        self._store[run_id] = run
+
+    def list_all(self) -> List[ScanRun]:
+        return list(self._store.values())
