@@ -13,6 +13,7 @@ From repository root:
 python -m unittest discover -s backend/tests -v
 npx firebase emulators:exec "npx vitest run firebase/tests/rules.test.ts"
 npx vitest run src/test/auth.test.tsx
+npx vitest run src/test/catalogRepository.test.ts
 ```
 
 This validates the RuTracker title parser in backend/ and the Firestore security rules via the emulator suite.

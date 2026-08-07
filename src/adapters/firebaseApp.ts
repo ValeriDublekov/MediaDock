@@ -1,8 +1,10 @@
 import { initializeApp, FirebaseApp } from 'firebase/app';
 import { getAuth as getFirebaseAuth, Auth } from 'firebase/auth';
+import { getFirestore as getFirebaseFirestore, Firestore } from 'firebase/firestore';
 
 let appInstance: FirebaseApp | null = null;
 let authInstance: Auth | null = null;
+let dbInstance: Firestore | null = null;
 
 export function getAuth(): Auth {
   if (!authInstance) {
@@ -25,3 +27,14 @@ export function getAuth(): Auth {
   }
   return authInstance;
 }
+
+export function getDb(): Firestore {
+  if (!dbInstance) {
+    if (!appInstance) {
+      getAuth();
+    }
+    dbInstance = getFirebaseFirestore(appInstance!);
+  }
+  return dbInstance;
+}
+
