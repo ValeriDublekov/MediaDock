@@ -1,0 +1,58 @@
+name: Daily Scanner
+
+on:
+  schedule:
+    # Run daily at 04:00 UTC
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run scanner in dry-run mode (no Firestore writes)"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scanner-run
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Run Media Scanner
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+          cache-dependency-path: "backend/pyproject.toml"
+
+      - name: Install Python package and dependencies
+        run: pip install -e ./backend
+
+      - name: Decode Firebase Service Account Credentials
+        if: ${{ secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
+        run: |
+          mkdir -p ~/.config/gcloud
+          CRED_PATH="$HOME/.config/gcloud/firebase_service_account.json"
+          echo "${{ secrets.FIREBASE_SERVICE_ACCOUNT }}" | base64 --decode > "$CRED_PATH"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$CRED_PATH" >> $GITHUB_ENV
+
+      - name: Execute Scanner
+        env:
+          OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
+        run: |
+          EXTRA_ARGS=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            EXTRA_ARGS="--dry-run"
+          fi
+          python -m movies_feed.cli $EXTRA_ARGS

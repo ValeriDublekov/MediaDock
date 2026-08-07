@@ -12,6 +12,7 @@ Frontend Repository Boundary & Catalog Data Contracts.
 - P09B: Defined typed catalog repository interfaces, Firestore read adapter (`FirestoreCatalogAdapter`), and explicit `UserDataWriteRepository` extension point; tested repository boundary using Vitest mocks.
 - P10: Implemented newest-first catalog querying, custom `useCatalog` pagination hook with duplicate suppression, retry state handling, `CatalogView` UI, and comprehensive Vitest tests.
 - P12: Added pull-request CI workflow in `.github/workflows/ci.yml` executing backend tests, frontend typecheck, Vitest unit tests, Firestore Emulator security rules tests, and production build without requiring production credentials.
+- P13: Added daily scanner workflow `.github/workflows/scanner.yml` with cron schedule, manual `workflow_dispatch` with `dry_run` input, concurrency controls, least permissions, timeout limits, base64 secret decoding, and documented deployment procedures in `DEPLOYMENT.md`.
 
 ## Current Repository Reality
 
@@ -22,6 +23,7 @@ Frontend Repository Boundary & Catalog Data Contracts.
 - Catalog data layer uses repository interface with cursor pagination, duplicate suppression, loading, error, empty, retry, and end-of-results state handling.
 - Frontend components do not import Firestore query APIs directly.
 - Pull-request CI configured in GitHub Actions for backend/frontend testing, typechecking, and build validation.
+- Daily scanner GitHub Actions workflow configured for scheduled and dry-run execution.
 
 ## Next Prompt
 

@@ -64,15 +64,12 @@ when workflows are implemented.
 
 ### Secrets
 
-| Purpose | Expected secret |
-| --- | --- |
-| OMDb requests | `OMDB_API_KEY` |
-| Firebase Admin scanner access | Name selected and documented by P13 |
+| Purpose | Expected secret | Format / Usage |
+| --- | --- | --- |
+| OMDb requests | `OMDB_API_KEY` | String OMDb API key |
+| Firebase Admin scanner access | `FIREBASE_SERVICE_ACCOUNT` | Base64-encoded Firebase Admin service account JSON (`base64 -w 0 <key.json>`) |
 
-Prefer credentials that are short-lived or narrowly scoped when the selected
-Firebase/GitHub integration supports them. If a service-account JSON key is used,
-store an encoded representation as one GitHub Secret and decode it only inside the
-scanner job's temporary environment. Do not echo or upload it as an artifact.
+The scanner workflow (`.github/workflows/scanner.yml`) decodes `FIREBASE_SERVICE_ACCOUNT` into a temporary environment file outside the checked out repository and sets `GOOGLE_APPLICATION_CREDENTIALS` for the step. Credentials are never committed, logged, or uploaded as build artifacts.
 
 ### Variables or Pages build environment
 
@@ -85,20 +82,20 @@ the Pages build job.
 1. Enable GitHub Actions required by the committed workflows.
 2. Configure Pages source as GitHub Actions.
 3. Protect the deployment environment if desired.
-4. Keep workflow permissions at their documented minimum.
+4. Keep workflow permissions at their documented minimum (`contents: read`).
 
 ## First Scanner Deployment
 
 Do not wait for the first cron execution.
 
-1. Confirm backend CI and emulator integration tests pass.
+1. Confirm backend CI and emulator integration tests pass (`python -m unittest discover -s backend/tests -v`).
 2. Confirm production Firestore rules/indexes are deployed.
-3. Configure secrets without printing them.
-4. Run `workflow_dispatch` in dry-run mode if available.
-5. Inspect sanitized counters and confirm no production write occurred.
-6. Run one manual normal scan.
-7. Verify one `scanRuns` record, title IDs, occurrence IDs, and cache timestamps.
-8. Rerun once and confirm no duplicate title/occurrence documents are created.
+3. Configure `OMDB_API_KEY` and `FIREBASE_SERVICE_ACCOUNT` in GitHub Repository Secrets.
+4. Trigger `.github/workflows/scanner.yml` manually via `workflow_dispatch` with `dry_run: true`.
+5. Inspect sanitized run counters in the job logs and confirm no production Firestore write occurred (`titles_created: 0`, `occurrences_created: 0`).
+6. Trigger `workflow_dispatch` without dry-run mode (`dry_run: false`).
+7. In Firebase Console, verify one `scanRuns/{run_id}` record, title documents under `titles/{id}`, occurrence documents under `titles/{id}/occurrences/{occ_id}`, and cached OMDb entries in `omdbCache`.
+8. Rerun `workflow_dispatch` once more and verify no duplicate title or occurrence documents are created due to deterministic ID merging.
 
 If OMDb reports a daily limit, stop repeated manual runs and verify cache behavior.
 
