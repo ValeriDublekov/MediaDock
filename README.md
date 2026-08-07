@@ -1,12 +1,6 @@
 # Media Hub Dashboard & Scanner
 
-> **Migration status:** The current JSON/HTML implementation remains operational
-> while a Firestore + React migration is prepared. Start with
-> [AI_STUDIO_MIGRATION_GUIDE.md](AI_STUDIO_MIGRATION_GUIDE.md) and check
-> [docs/ai/IMPLEMENTATION_STATUS.md](docs/ai/IMPLEMENTATION_STATUS.md) before
-> changing the repository structure.
-
-## Migration Documentation
+## Documentation
 
 - [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md) - current and staged local setup,
    execution, testing, and emulator workflow.

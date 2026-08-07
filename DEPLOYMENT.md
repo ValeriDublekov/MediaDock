@@ -88,7 +88,7 @@ the Pages build job.
 
 Do not wait for the first cron execution.
 
-1. Confirm backend CI and emulator integration tests pass (`python -m unittest discover -s backend/tests -v`).
+1. Confirm all canonical checks from `docs/ai/TESTING.md` pass.
 2. Confirm production Firestore rules/indexes are deployed.
 3. Configure `OMDB_API_KEY` and `FIREBASE_SERVICE_ACCOUNT` in GitHub Repository Secrets.
 4. Trigger `.github/workflows/scanner.yml` manually via `workflow_dispatch` with `dry_run: true`.

@@ -62,37 +62,23 @@ a second occurrence.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `lookupTitle` | string | Normalized request title |
-| `lookupYear` | number or null | Requested year |
-| `status` | string | `found` or an explicitly supported negative status |
-| `payload` | map or null | Validated OMDb response needed for normalization |
-| `fetchedAt` | Timestamp | Successful/negative lookup time |
-| `expiresAt` | Timestamp | Cache validity boundary |
+| `lookupTitle`, `lookupYear` | string, number/null | Normalized request |
+| `status` | string | `found` or supported negative status |
+| `payload` | map or null | Validated OMDb response |
+| `fetchedAt`, `expiresAt` | Timestamp | Fetch time and validity boundary |
 
-The cache key is deterministic from normalized title and year. Do not cache
-transport failures or API-limit responses as successful misses. Cache freshness
-uses `expiresAt`, not client clock-formatted strings.
+Cache key is deterministic from title and year. Do not cache transport failures.
 
 ## `scanRuns/{runId}`
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `startedAt` | Timestamp | Run start |
-| `finishedAt` | Timestamp or null | Run completion |
-| `status` | string | `running`, `succeeded`, `partial`, or `failed` |
-| `trigger` | string | `schedule`, `manual`, or `local` |
-| `feedsProcessed` | number | Counter |
-| `entriesSeen` | number | Counter |
-| `titlesCreated` | number | Counter |
-| `occurrencesCreated` | number | Counter |
-| `cacheHits` | number | Counter |
-| `omdbRequests` | number | Counter |
-| `ignoredEntries` | number | Counter |
-| `errorCount` | number | Counter |
+| `startedAt`, `finishedAt` | Timestamp | Run start and completion |
+| `status`, `trigger` | string | `running/succeeded/partial/failed`, `schedule/manual/local` |
+| `feedsProcessed`, `entriesSeen`, `titlesCreated`, `occurrencesCreated`, `cacheHits`, `omdbRequests`, `ignoredEntries`, `errorCount` | number | Counters |
 | `errorSummary` | array | Bounded sanitized summaries |
 
-Run IDs may be generated per execution; idempotency is required for catalog data,
-not for scan-run audit documents.
+Run IDs may be generated per execution; idempotency is required for catalog data.
 
 ## `allowlist/{uid}`
 

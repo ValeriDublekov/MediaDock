@@ -55,16 +55,10 @@ python -m movies_feed.cli --parse-only backend/tests/fixtures/movies_feed.atom
 
 ## Testing
 
-The canonical, currently verified commands live in `docs/ai/TESTING.md`.
-
-Run tests in this order:
-1. **Frontend Unit/Component Tests:** `npx vitest run src/test`
-2. **Backend Unit/Integration Tests:** `npx firebase emulators:exec "python -m unittest discover -s backend/tests -v"`
-3. **Firestore Security Rules Tests:** `npx firebase emulators:exec "npx vitest run firebase/tests/rules.test.ts"`
-4. **Frontend Typecheck:** `npm run lint`
-5. **Frontend Production Build:** `npm run build`
+The canonical, currently verified commands live in `docs/ai/TESTING.md`. Please refer to that document for the exact commands to run frontend tests, backend tests, rules tests, and typechecks.
 
 Do not use live RSS, OMDb, Firebase, or deployed Pages as a substitute for unit and emulator tests.
+
 
 ## Troubleshooting
 
