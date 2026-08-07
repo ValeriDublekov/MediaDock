@@ -13,6 +13,7 @@ Frontend Repository Boundary & Catalog Data Contracts.
 - P10: Implemented newest-first catalog querying, custom `useCatalog` pagination hook with duplicate suppression, retry state handling, `CatalogView` UI, and comprehensive Vitest tests.
 - P12: Added pull-request CI workflow in `.github/workflows/ci.yml` executing backend tests, frontend typecheck, Vitest unit tests, Firestore Emulator security rules tests, and production build without requiring production credentials.
 - P13: Added daily scanner workflow `.github/workflows/scanner.yml` with cron schedule, manual `workflow_dispatch` with `dry_run` input, concurrency controls, least permissions, timeout limits, base64 secret decoding, and documented deployment procedures in `DEPLOYMENT.md`.
+- P14: Added GitHub Pages deployment workflow `.github/workflows/pages.yml` with configured Vite base path, correct variables mapping, and Pages upload artifact actions.
 
 ## Current Repository Reality
 
@@ -24,14 +25,21 @@ Frontend Repository Boundary & Catalog Data Contracts.
 - Frontend components do not import Firestore query APIs directly.
 - Pull-request CI configured in GitHub Actions for backend/frontend testing, typechecking, and build validation.
 - Daily scanner GitHub Actions workflow configured for scheduled and dry-run execution.
+- GitHub Pages workflow configured for `main` branch deployment.
 
 ## Next Prompt
 
-P11 - Client-Side Filtering and Catalog Detail Views.
+MVP Complete. Follow DEPLOYMENT.md to launch the system.
 
 ## Blockers
 
-- Firebase project identifiers and authorized user account are not configured yet.
+- Firebase project identifiers and authorized user account must be configured for production.
+
+## Residual Risks
+
+- The OMDb rate limit will halt scanner execution for the day. Cache reuse must be monitored.
+- Allowlist addition requires a manual write to the Firestore database using Firebase Console.
+- Unpaginated local filtering currently handles all pages loaded into memory, which may become slow if thousands of entries are retained locally.
 
 ## Update Rules
 
