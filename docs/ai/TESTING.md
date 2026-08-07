@@ -2,21 +2,22 @@
 
 ## Status
 
-Only the legacy parser test command exists today. Commands for target modules are
-added here only after their scaffolds have been created and the commands verified.
+Backend unit/integration tests, frontend component/repository unit tests, Firestore security rules tests, TypeScript check, and Vite build are verified and executed in PR CI.
 
 ## Current Canonical Check
 
 From repository root:
 
 ```powershell
-python -m unittest discover -s backend/tests -v
+pip install -e ./backend
+npx firebase emulators:exec "python -m unittest discover -s backend/tests -v"
+npx tsc --noEmit
+npx vitest run src/test
 npx firebase emulators:exec "npx vitest run firebase/tests/rules.test.ts"
-npx vitest run src/test/auth.test.tsx
-npx vitest run src/test/catalogRepository.test.ts
+npm run build
 ```
 
-This validates the RuTracker title parser in backend/ and the Firestore security rules via the emulator suite.
+This validates backend unit/integration suites, frontend TypeScript typing, component/repository unit tests, Firestore security rules via emulator, and frontend production compilation.
 
 ## Planned Test Layers
 

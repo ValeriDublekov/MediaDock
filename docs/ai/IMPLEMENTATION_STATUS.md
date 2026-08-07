@@ -11,6 +11,7 @@ Frontend Repository Boundary & Catalog Data Contracts.
 - P09A: Scaffolded Vite React TypeScript frontend with Firebase initialization, Google Sign-In, and focused auth tests mocked at the adapter boundary.
 - P09B: Defined typed catalog repository interfaces, Firestore read adapter (`FirestoreCatalogAdapter`), and explicit `UserDataWriteRepository` extension point; tested repository boundary using Vitest mocks.
 - P10: Implemented newest-first catalog querying, custom `useCatalog` pagination hook with duplicate suppression, retry state handling, `CatalogView` UI, and comprehensive Vitest tests.
+- P12: Added pull-request CI workflow in `.github/workflows/ci.yml` executing backend tests, frontend typecheck, Vitest unit tests, Firestore Emulator security rules tests, and production build without requiring production credentials.
 
 ## Current Repository Reality
 
@@ -20,6 +21,7 @@ Frontend Repository Boundary & Catalog Data Contracts.
 - Authentication components (`AuthGate`, `AuthProvider`) are implemented and tested.
 - Catalog data layer uses repository interface with cursor pagination, duplicate suppression, loading, error, empty, retry, and end-of-results state handling.
 - Frontend components do not import Firestore query APIs directly.
+- Pull-request CI configured in GitHub Actions for backend/frontend testing, typechecking, and build validation.
 
 ## Next Prompt
 
