@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Title, Occurrence, CatalogRepository } from '../domain/catalog';
+import { firestoreCatalogAdapter } from '../adapters/firestoreCatalogAdapter';
 import { PosterImage } from './PosterImage';
 import { Star, ExternalLink, Download, Film, Layers, Award, Clock, Globe } from 'lucide-react';
 
@@ -11,7 +12,7 @@ interface TitleCardProps {
 
 export const TitleCard: React.FC<TitleCardProps> = ({
   title,
-  repository,
+  repository = firestoreCatalogAdapter,
   occurrences: initialOccurrences,
 }) => {
   const [occurrences, setOccurrences] = useState<Occurrence[] | undefined>(initialOccurrences);

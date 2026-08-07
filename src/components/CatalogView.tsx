@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { CatalogRepository, Title } from '../domain/catalog';
 import { useCatalog } from '../application/useCatalog';
+import { firestoreCatalogAdapter } from '../adapters/firestoreCatalogAdapter';
 import { CatalogFilterBar } from './CatalogFilterBar';
 import { TitleCard } from './TitleCard';
 import { CatalogSkeleton } from './CatalogSkeleton';
@@ -16,7 +17,7 @@ interface CatalogViewProps {
   pageSize?: number;
 }
 
-export const CatalogView: React.FC<CatalogViewProps> = ({ repository, pageSize = 10 }) => {
+export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestoreCatalogAdapter, pageSize = 10 }) => {
   const {
     titles,
     isLoading,
