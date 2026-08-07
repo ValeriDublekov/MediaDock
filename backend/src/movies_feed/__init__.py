@@ -20,5 +20,12 @@ from .repository import (
     merge_occurrences,
     merge_titles,
 )
+from .firestore_repository import (
+    FirestoreTitleRepository,
+    FirestoreOccurrenceRepository,
+    FirestoreOmdbCacheRepository,
+    FirestoreScanRunRepository,
+    get_firestore_client,
+)
 
 __version__ = "0.1.0"
