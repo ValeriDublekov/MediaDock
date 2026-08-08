@@ -532,7 +532,7 @@ class ScannerService:
                 return
             omdb_payload = cache_entry.payload
             omdb_result = self.omdb_client._normalize_payload(omdb_payload)
-        else:
+        elif omdb_result is None:
             if run.omdb_requests >= self.config.omdb_limit:
                 logger.info("Soft limit reached for OMDb requests in this run.")
                 run.ignored_entries += 1
