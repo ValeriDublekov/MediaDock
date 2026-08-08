@@ -45,15 +45,37 @@ export class FirestoreParseLogAdapter implements ParseLogRepository {
     const db = this.getDbInstance();
     const logsRef = collection(db, 'parseLogs');
 
-    // Query ordered by processedAt desc with limit
-    const q = query(
-      logsRef,
-      orderBy('processedAt', 'desc'),
-      limit(limitCount)
-    );
+    let docs;
+    try {
+      // Query ordered by processedAt desc with limit
+      const q = query(
+        logsRef,
+        orderBy('processedAt', 'desc'),
+        limit(limitCount)
+      );
+      const snapshot = await getDocs(q);
+      docs = snapshot.docs;
+    } catch (primaryErr: unknown) {
+      // If error is permission-denied, throw informative error for UI
+      const errStr = String(primaryErr);
+      if (errStr.includes('permission-denied') || errStr.includes('Missing or insufficient permissions')) {
+        throw new Error(
+          'Missing or insufficient permissions за колекцията "parseLogs". Моля, уверете се, че сте логнати и правилата във Firebase Firestore Security Rules съдържат allow read за parseLogs (match /parseLogs/{logId} { allow read: if isAllowlisted(); }).'
+        );
+      }
+      
+      // Fallback: try un-ordered query in case index is building or missing
+      try {
+        const fallbackQ = query(logsRef, limit(limitCount));
+        const snapshot = await getDocs(fallbackQ);
+        docs = snapshot.docs;
+      } catch (fallbackErr) {
+        throw primaryErr;
+      }
+    }
 
-    const snapshot = await getDocs(q);
-    const logs = snapshot.docs.map(mapDocToParseLog);
+    const logs = docs.map(mapDocToParseLog);
+    logs.sort((a, b) => b.processedAt.getTime() - a.processedAt.getTime());
 
     // Filter to retain only entries from the last 7 days (1 week retention rule)
     const oneWeekAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
