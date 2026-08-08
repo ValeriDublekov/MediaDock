@@ -2,7 +2,6 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
-import requests
 
 
 class OmdbError(Exception):
@@ -94,12 +93,13 @@ class HttpTransport(ABC):
 class RequestsHttpTransport(HttpTransport):
     def get(self, url: str, params: Dict[str, Any], timeout: float) -> Dict[str, Any]:
         try:
+            import requests
             response = requests.get(url, params=params, timeout=timeout)
             response.raise_for_status()
             return response.json()
-        except requests.Timeout as e:
-            raise TimeoutError(str(e)) from e
-        except requests.RequestException as e:
+        except Exception as e:
+            if "Timeout" in e.__class__.__name__:
+                raise TimeoutError(str(e)) from e
             raise IOError(str(e)) from e
 
 
@@ -181,13 +181,20 @@ class OmdbClient:
     def __repr__(self) -> str:
         return f"OmdbClient(transport={self._transport.__class__.__name__})"
 
-    def _make_request(self, title: str, year: Optional[str] = None) -> Dict[str, Any]:
+    def _make_request(
+        self,
+        title: str,
+        year: Optional[str] = None,
+        media_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
         params = {
             "apikey": self._api_key,
             "t": title,
         }
         if year:
             params["y"] = str(year)
+        if media_type and media_type.lower() in ("movie", "series"):
+            params["type"] = media_type.lower()
 
         try:
             return self._transport.get(self._base_url, params, timeout=self._timeout)
@@ -195,18 +202,25 @@ class OmdbClient:
             sanitized_msg = _sanitize_string(str(e), self._api_key)
             raise OmdbTransportError(f"HTTP transport failed: {sanitized_msg}") from e
 
-    def get_movie_info(self, title: str, year: Optional[str] = None) -> OmdbMovieResult:
+    def get_movie_info(
+        self,
+        title: str,
+        year: Optional[str] = None,
+        media_type: Optional[str] = None,
+    ) -> OmdbMovieResult:
         if not title:
             raise ValueError("Title must not be empty")
 
         payload = None
 
-        # 1. Primary lookup: Title + Year (if year is specified)
+        # 1. Primary lookup: Title + Year + Media Type (if year is specified)
         if year:
             try:
-                data = self._make_request(title, year)
+                data = self._make_request(title, year, media_type)
                 if data.get("Response") == "True":
-                    payload = data
+                    resp_type = data.get("Type", "").lower()
+                    if not media_type or media_type.lower() not in ("movie", "series") or resp_type == media_type.lower():
+                        payload = data
                 else:
                     err_msg = data.get("Error", "")
                     if "limit reached" in err_msg.lower():
@@ -214,7 +228,19 @@ class OmdbClient:
             except OmdbTransportError:
                 raise
 
-        # 2. Fallback lookup: Title only
+        # 2. Fallback lookup: Title + Media Type (without year, if media_type is specified)
+        if payload is None and media_type and media_type.lower() in ("movie", "series"):
+            data = self._make_request(title, media_type=media_type)
+            if data.get("Response") == "True":
+                resp_type = data.get("Type", "").lower()
+                if resp_type == media_type.lower():
+                    payload = data
+            else:
+                err_msg = data.get("Error", "")
+                if "limit reached" in err_msg.lower():
+                    raise OmdbLimitReachedError("Daily API limit reached")
+
+        # 3. Fallback lookup: Title only (without year or media_type filter)
         if payload is None:
             data = self._make_request(title)
             if data.get("Response") == "True":
@@ -225,7 +251,7 @@ class OmdbClient:
                     raise OmdbLimitReachedError("Daily API limit reached")
                 raise OmdbNoMatchError(f"OMDb lookup failed: {err_msg}")
 
-        # 3. Return typed normalized result
+        # 4. Return typed normalized result
         return self._normalize_payload(payload)
 
     def _normalize_payload(self, data: Dict[str, Any]) -> OmdbMovieResult:

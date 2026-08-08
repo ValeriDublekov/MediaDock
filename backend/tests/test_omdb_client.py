@@ -184,11 +184,9 @@ class OmdbClientTests(unittest.TestCase):
         self.assertEqual(len(transport.requests), 2)
 
     def test_transport_timeout_raises_transport_error_and_hides_api_key(self):
-        import requests
-        # Raise standard requests timeout which might have the API key in its details
         raw_error_message = "Timeout occurred connecting to https://www.omdbapi.com/?apikey=secret_key_12345&t=Some"
         responses = [
-            requests.Timeout(raw_error_message)
+            TimeoutError(raw_error_message)
         ]
         transport = MockHttpTransport(responses)
         client = OmdbClient("secret_key_12345", transport=transport)
@@ -242,6 +240,40 @@ class OmdbClientTests(unittest.TestCase):
 
         self.assertIsNone(_parse_int_with_commas("N/A"))
         self.assertEqual(_parse_int_with_commas("1,234,567"), 1234567)
+
+    def test_series_season_year_fallback_finds_series(self):
+        # 1st request with season year 2026 fails, 2nd request with type=series and no year succeeds
+        responses = [
+            {"Response": "False", "Error": "Series not found!"},
+            {
+                "Response": "True",
+                "Title": "Silo",
+                "Year": "2023–",
+                "imdbID": "tt14688458",
+                "Type": "series",
+                "Genre": "Drama, Sci-Fi"
+            }
+        ]
+        transport = MockHttpTransport(responses)
+        client = OmdbClient("secret_key_12345", transport=transport)
+
+        result = client.get_movie_info("Silo", "2026", media_type="series")
+
+        self.assertEqual(result.title, "Silo")
+        self.assertEqual(result.year, 2023)
+        self.assertEqual(result.media_type, "series")
+        self.assertEqual(result.imdb_id, "tt14688458")
+
+        # Verify transport requests
+        self.assertEqual(len(transport.requests), 2)
+        # 1st request: title + year + type=series
+        self.assertEqual(transport.requests[0][1]["t"], "Silo")
+        self.assertEqual(transport.requests[0][1]["y"], "2026")
+        self.assertEqual(transport.requests[0][1]["type"], "series")
+        # 2nd request: title + type=series (without year)
+        self.assertEqual(transport.requests[1][1]["t"], "Silo")
+        self.assertNotIn("y", transport.requests[1][1])
+        self.assertEqual(transport.requests[1][1]["type"], "series")
 
 
 if __name__ == "__main__":

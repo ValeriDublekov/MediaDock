@@ -68,6 +68,8 @@ describe('TriggerScannerModal', () => {
   });
 
   it('opens modal if credentials are missing on 1-click trigger', async () => {
+    vi.stubEnv('VITE_GITHUB_PAT', '');
+    vi.stubEnv('VITE_GITHUB_OWNER', '');
     render(<TriggerScannerModal />);
 
     fireEvent.click(screen.getByTestId('trigger-scanner-button'));

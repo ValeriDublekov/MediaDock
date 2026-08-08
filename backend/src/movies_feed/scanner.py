@@ -366,7 +366,8 @@ class ScannerService:
             payload = None
             t0_omdb = time.perf_counter()
             try:
-                omdb_result = self.omdb_client.get_movie_info(parsed.title, parsed.year)
+                media_type_hint = "series" if parsed.is_series else (feed_def.get("type") if feed_def.get("type") in ("movie", "series") else None)
+                omdb_result = self.omdb_client.get_movie_info(parsed.title, parsed.year, media_type=media_type_hint)
                 status = "found"
                 payload = omdb_result.raw_payload
             except OmdbNoMatchError:

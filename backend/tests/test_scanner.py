@@ -20,7 +20,7 @@ class MockOmdbClient(OmdbClient):
         self.request_count = 0
         self.limit_reached_on = -1
 
-    def get_movie_info(self, title: str, year: str = None) -> OmdbMovieResult:
+    def get_movie_info(self, title: str, year: str = None, media_type: str = None) -> OmdbMovieResult:
         self.request_count += 1
         if self.limit_reached_on > 0 and self.request_count >= self.limit_reached_on:
             raise OmdbLimitReachedError("limit reached")

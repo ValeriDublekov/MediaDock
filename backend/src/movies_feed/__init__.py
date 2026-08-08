@@ -22,13 +22,16 @@ from .repository import (
     merge_occurrences,
     merge_titles,
 )
-from .firestore_repository import (
-    FirestoreTitleRepository,
-    FirestoreOccurrenceRepository,
-    FirestoreOmdbCacheRepository,
-    FirestoreParseLogRepository,
-    FirestoreScanRunRepository,
-    get_firestore_client,
-)
+try:
+    from .firestore_repository import (
+        FirestoreTitleRepository,
+        FirestoreOccurrenceRepository,
+        FirestoreOmdbCacheRepository,
+        FirestoreParseLogRepository,
+        FirestoreScanRunRepository,
+        get_firestore_client,
+    )
+except ImportError:
+    pass
 
 __version__ = "0.1.0"
