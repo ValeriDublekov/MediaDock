@@ -63,6 +63,9 @@ class ScannerService:
         self._session_cache_entries: Dict[str, Optional[OmdbCacheEntry]] = {}
         self._session_titles: Dict[str, Optional[Title]] = {}
         self._session_occurrences: Dict[tuple, Optional[Occurrence]] = {}
+        self._pending_parse_logs: List[ParseLog] = []
+        self._pending_titles: Dict[str, Title] = {}
+        self._pending_occurrences: Dict[tuple[str, str], Occurrence] = {}
 
     def _get_cache_entry(self, cache_key: str) -> Optional[OmdbCacheEntry]:
         if cache_key in self._session_cache_entries:
@@ -70,6 +73,21 @@ class ScannerService:
         entry = self.cache_repo.get(cache_key)
         self._session_cache_entries[cache_key] = entry
         return entry
+
+    def _prefetch_cache_entries(
+        self,
+        cache_keys: List[str],
+        section_timings: Optional[Dict[str, float]] = None,
+    ) -> None:
+        missing_keys = [k for k in set(cache_keys) if k not in self._session_cache_entries]
+        if not missing_keys:
+            return
+        t0 = time.perf_counter()
+        fetched = self.cache_repo.get_many(missing_keys)
+        if section_timings is not None:
+            section_timings["cache_lookup"] += (time.perf_counter() - t0)
+        for k in missing_keys:
+            self._session_cache_entries[k] = fetched.get(k)
 
     def _set_cache_entry(self, cache_key: str, entry: OmdbCacheEntry) -> None:
         self._session_cache_entries[cache_key] = entry
@@ -83,11 +101,6 @@ class ScannerService:
         self._session_titles[title_id] = title
         return title
 
-    def _upsert_title(self, title_id: str, title: Title) -> None:
-        self._session_titles[title_id] = title
-        if not self.config.is_dry_run:
-            self.title_repo.upsert(title_id, title)
-
     def _get_occurrence(self, title_id: str, occurrence_id: str) -> Optional[Occurrence]:
         key = (title_id, occurrence_id)
         if key in self._session_occurrences:
@@ -96,11 +109,61 @@ class ScannerService:
         self._session_occurrences[key] = occ
         return occ
 
-    def _upsert_occurrence(self, title_id: str, occurrence_id: str, occ: Occurrence) -> None:
-        key = (title_id, occurrence_id)
-        self._session_occurrences[key] = occ
-        if not self.config.is_dry_run:
-            self.occurrence_repo.upsert(title_id, occurrence_id, occ)
+    def _stage_title_and_occurrence(
+        self,
+        title_id: str,
+        title_record: Title,
+        occurrence_id: str,
+        occurrence_record: Occurrence,
+        run: ScanRun,
+    ) -> None:
+        existing_title = self._get_title(title_id)
+        if existing_title is None:
+            run.titles_created += 1
+            merged_title = title_record
+        else:
+            merged_title = merge_titles(existing_title, title_record)
+        self._session_titles[title_id] = merged_title
+        self._pending_titles[title_id] = merged_title
+
+        existing_occ = self._get_occurrence(title_id, occurrence_id)
+        if existing_occ is None:
+            run.occurrences_created += 1
+            merged_occ = occurrence_record
+        else:
+            merged_occ = merge_occurrences(existing_occ, occurrence_record)
+        occ_key = (title_id, occurrence_id)
+        self._session_occurrences[occ_key] = merged_occ
+        self._pending_occurrences[occ_key] = merged_occ
+
+    def _flush_parse_logs(self, section_timings: Optional[Dict[str, float]] = None) -> None:
+        if not self._pending_parse_logs or not self.parse_log_repo or self.config.is_dry_run:
+            return
+        t0 = time.perf_counter()
+        self.parse_log_repo.add_many(self._pending_parse_logs)
+        if section_timings is not None:
+            section_timings["parse_log_write"] += (time.perf_counter() - t0)
+        self._pending_parse_logs.clear()
+
+    def _flush_pending_db_upserts(self, section_timings: Optional[Dict[str, float]] = None) -> None:
+        if self.config.is_dry_run:
+            self._pending_titles.clear()
+            self._pending_occurrences.clear()
+            return
+
+        t0 = time.perf_counter()
+        if self._pending_titles:
+            titles_to_upsert = [(tid, t) for tid, t in self._pending_titles.items()]
+            self.title_repo.upsert_many(titles_to_upsert)
+            self._pending_titles.clear()
+
+        if self._pending_occurrences:
+            occs_to_upsert = [(tid, oid, occ) for (tid, oid), occ in self._pending_occurrences.items()]
+            self.occurrence_repo.upsert_many(occs_to_upsert)
+            self._pending_occurrences.clear()
+
+        if section_timings is not None:
+            section_timings["db_upsert"] += (time.perf_counter() - t0)
 
     def is_excluded(self, countries: List[str], genres: List[str]) -> bool:
         excluded_country_set = {c.lower() for c in self.config.excluded_countries}
@@ -127,7 +190,6 @@ class ScannerService:
     ) -> None:
         if not self.parse_log_repo or self.config.is_dry_run:
             return
-        t0 = time.perf_counter()
         if feed_entry_id or torrent_url:
             log_id = get_occurrence_id(feed_entry_id, torrent_url)
         else:
@@ -145,9 +207,7 @@ class ScannerService:
             ignore_reason=ignore_reason,
             processed_at=self.now,
         )
-        self.parse_log_repo.add(log)
-        if section_timings is not None:
-            section_timings["parse_log_write"] += (time.perf_counter() - t0)
+        self._pending_parse_logs.append(log)
 
     def run(self, run_id: str) -> ScanRun:
         self._reset_session_caches()
@@ -186,11 +246,35 @@ class ScannerService:
                     feed = feedparser.parse(feed_def["url"])
                     t_feed = time.perf_counter() - t0_feed
                     section_timings["feed_fetch"] += t_feed
-                    entries_cnt = len(getattr(feed, "entries", []))
+                    entries = getattr(feed, "entries", [])
+                    entries_cnt = len(entries)
                     logger.info(
                         f"Section [feed_fetch]: Feed '{feed_def['name']}' fetched in {t_feed:.4f}s ({entries_cnt} entries)"
                     )
-                    for entry in feed.entries:
+
+                    # Bulk pre-fetch cache entries for this feed
+                    cache_keys_to_prefetch = []
+                    for entry in entries:
+                        raw_title = getattr(entry, "title", "")
+                        if raw_title:
+                            parsed = parse_rutracker_title(
+                                raw_title,
+                                content_type=feed_def.get("type"),
+                                video_settings=self.config.video_settings,
+                            )
+                            if parsed.title:
+                                y = None
+                                if parsed.year:
+                                    try:
+                                        y = int(parsed.year)
+                                    except ValueError:
+                                        pass
+                                ck = get_cache_key(parsed.title, y)
+                                cache_keys_to_prefetch.append(ck)
+                    if cache_keys_to_prefetch:
+                        self._prefetch_cache_entries(cache_keys_to_prefetch, section_timings)
+
+                    for entry in entries:
                         run.entries_seen += 1
                         try:
                             self._process_entry(entry, feed_def, run, section_timings)
@@ -204,6 +288,11 @@ class ScannerService:
                             logger.error(f"Error processing entry {getattr(entry, 'title', '')}: {e}")
                             run.error_count += 1
                             run.error_summary.append(f"Entry error: {e}")
+
+                    # Flush batch parse logs and db upserts for feed
+                    self._flush_parse_logs(section_timings)
+                    self._flush_pending_db_upserts(section_timings)
+
                 except Exception as e:
                     logger.error(f"Error processing feed {feed_def['name']}: {e}")
                     run.error_count += 1
@@ -215,6 +304,8 @@ class ScannerService:
             run.error_count += 1
             run.error_summary.append(f"Fatal error: {e}")
         finally:
+            self._flush_parse_logs(section_timings)
+            self._flush_pending_db_upserts(section_timings)
             run.finished_at = datetime.datetime.now(datetime.timezone.utc)
             run.section_timings = {k: round(v, 4) for k, v in section_timings.items()}
             logger.info("Scan Section Timings Summary:")
@@ -502,17 +593,7 @@ class ScannerService:
 
         # Upsert
         if not self.config.is_dry_run:
-            t0_db = time.perf_counter()
-            existing_title = self._get_title(title_id)
-            if not existing_title:
-                run.titles_created += 1
-            self._upsert_title(title_id, title_record)
-
-            existing_occ = self._get_occurrence(title_id, occurrence_id)
-            if not existing_occ:
-                run.occurrences_created += 1
-            self._upsert_occurrence(title_id, occurrence_id, occurrence_record)
-            section_timings["db_upsert"] += (time.perf_counter() - t0_db)
+            self._stage_title_and_occurrence(title_id, title_record, occurrence_id, occurrence_record, run)
         else:
             # Simulate creation tracking for dry run without storing
             run.titles_created += 1

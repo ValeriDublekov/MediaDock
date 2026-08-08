@@ -74,10 +74,24 @@ class TitleRepository(ABC):
         """Fetches a Title by its ID."""
         pass
 
+    def get_many(self, title_ids: List[str]) -> Dict[str, Title]:
+        """Fetches multiple Titles by their IDs. Default implementation calls get for each."""
+        result: Dict[str, Title] = {}
+        for title_id in set(title_ids):
+            t = self.get(title_id)
+            if t is not None:
+                result[title_id] = t
+        return result
+
     @abstractmethod
     def upsert(self, title_id: str, title: Title) -> None:
         """Inserts a Title or merges metadata if already existing."""
         pass
+
+    def upsert_many(self, titles: List[tuple[str, Title]]) -> None:
+        """Upserts multiple Titles. Default implementation calls upsert for each."""
+        for title_id, title in titles:
+            self.upsert(title_id, title)
 
     @abstractmethod
     def list_all(self) -> List[Title]:
@@ -91,10 +105,24 @@ class OccurrenceRepository(ABC):
         """Fetches an Occurrence by title ID and occurrence ID."""
         pass
 
+    def get_many(self, keys: List[tuple[str, str]]) -> Dict[tuple[str, str], Occurrence]:
+        """Fetches multiple Occurrences by (title_id, occurrence_id) tuple keys."""
+        result: Dict[tuple[str, str], Occurrence] = {}
+        for title_id, occurrence_id in set(keys):
+            occ = self.get(title_id, occurrence_id)
+            if occ is not None:
+                result[(title_id, occurrence_id)] = occ
+        return result
+
     @abstractmethod
     def upsert(self, title_id: str, occurrence_id: str, occurrence: Occurrence) -> None:
         """Inserts an Occurrence or merges lastSeenAt if already existing."""
         pass
+
+    def upsert_many(self, occurrences: List[tuple[str, str, Occurrence]]) -> None:
+        """Upserts multiple Occurrences. Default implementation calls upsert for each."""
+        for title_id, occurrence_id, occ in occurrences:
+            self.upsert(title_id, occurrence_id, occ)
 
     @abstractmethod
     def list_by_title(self, title_id: str) -> List[Occurrence]:
@@ -107,6 +135,15 @@ class OmdbCacheRepository(ABC):
     def get(self, cache_key: str) -> Optional[OmdbCacheEntry]:
         """Fetches an OMDb cache entry by its deterministic key."""
         pass
+
+    def get_many(self, cache_keys: List[str]) -> Dict[str, OmdbCacheEntry]:
+        """Fetches multiple OMDb cache entries by keys."""
+        result: Dict[str, OmdbCacheEntry] = {}
+        for key in set(cache_keys):
+            entry = self.get(key)
+            if entry is not None:
+                result[key] = entry
+        return result
 
     @abstractmethod
     def set(self, cache_key: str, entry: OmdbCacheEntry) -> None:
@@ -136,6 +173,11 @@ class ParseLogRepository(ABC):
     def add(self, log: ParseLog) -> None:
         """Stores a parse log entry."""
         pass
+
+    def add_many(self, logs: List[ParseLog]) -> None:
+        """Stores multiple parse log entries."""
+        for log in logs:
+            self.add(log)
 
     @abstractmethod
     def prune_older_than(self, cutoff: datetime.datetime) -> int:

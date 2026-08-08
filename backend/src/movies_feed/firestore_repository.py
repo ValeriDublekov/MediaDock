@@ -157,6 +157,21 @@ class FirestoreTitleRepository(TitleRepository):
             return title_from_dict(snapshot.to_dict())
         return None
 
+    def get_many(self, title_ids: List[str]) -> Dict[str, Title]:
+        ids = list(set(title_ids))
+        if not ids:
+            return {}
+        result: Dict[str, Title] = {}
+        chunk_size = 500
+        for i in range(0, len(ids), chunk_size):
+            chunk = ids[i : i + chunk_size]
+            doc_refs = [self.collection_ref.document(tid) for tid in chunk]
+            snapshots = self.db.get_all(doc_refs)
+            for snap in snapshots:
+                if snap.exists:
+                    result[snap.id] = title_from_dict(snap.to_dict())
+        return result
+
     def upsert(self, title_id: str, title: Title) -> None:
         doc_ref = self.collection_ref.document(title_id)
 
@@ -172,6 +187,18 @@ class FirestoreTitleRepository(TitleRepository):
 
         transaction = self.db.transaction()
         _upsert_tx(transaction)
+
+    def upsert_many(self, titles: List[tuple[str, Title]]) -> None:
+        if not titles:
+            return
+        chunk_size = 500
+        for i in range(0, len(titles), chunk_size):
+            chunk = titles[i : i + chunk_size]
+            batch = self.db.batch()
+            for title_id, title in chunk:
+                doc_ref = self.collection_ref.document(title_id)
+                batch.set(doc_ref, title.to_dict())
+            batch.commit()
 
     def list_all(self) -> List[Title]:
         docs = self.collection_ref.stream()
@@ -192,6 +219,23 @@ class FirestoreOccurrenceRepository(OccurrenceRepository):
             return occurrence_from_dict(snapshot.to_dict())
         return None
 
+    def get_many(self, keys: List[tuple[str, str]]) -> Dict[tuple[str, str], Occurrence]:
+        unique_keys = list(set(keys))
+        if not unique_keys:
+            return {}
+        result: Dict[tuple[str, str], Occurrence] = {}
+        chunk_size = 500
+        for i in range(0, len(unique_keys), chunk_size):
+            chunk = unique_keys[i : i + chunk_size]
+            doc_refs = [self._get_occ_ref(tid, occ_id) for tid, occ_id in chunk]
+            snapshots = self.db.get_all(doc_refs)
+            for snap in snapshots:
+                if snap.exists:
+                    title_id = snap.reference.parent.parent.id
+                    occ_id = snap.id
+                    result[(title_id, occ_id)] = occurrence_from_dict(snap.to_dict())
+        return result
+
     def upsert(self, title_id: str, occurrence_id: str, occurrence: Occurrence) -> None:
         doc_ref = self._get_occ_ref(title_id, occurrence_id)
 
@@ -207,6 +251,18 @@ class FirestoreOccurrenceRepository(OccurrenceRepository):
 
         transaction = self.db.transaction()
         _upsert_tx(transaction)
+
+    def upsert_many(self, occurrences: List[tuple[str, str, Occurrence]]) -> None:
+        if not occurrences:
+            return
+        chunk_size = 500
+        for i in range(0, len(occurrences), chunk_size):
+            chunk = occurrences[i : i + chunk_size]
+            batch = self.db.batch()
+            for title_id, occurrence_id, occ in chunk:
+                doc_ref = self._get_occ_ref(title_id, occurrence_id)
+                batch.set(doc_ref, occ.to_dict())
+            batch.commit()
 
     def list_by_title(self, title_id: str) -> List[Occurrence]:
         collection_ref = self.db.collection("titles").document(title_id).collection("occurrences")
@@ -225,6 +281,21 @@ class FirestoreOmdbCacheRepository(OmdbCacheRepository):
         if snapshot.exists:
             return cache_entry_from_dict(snapshot.to_dict())
         return None
+
+    def get_many(self, cache_keys: List[str]) -> Dict[str, OmdbCacheEntry]:
+        keys = list(set(cache_keys))
+        if not keys:
+            return {}
+        result: Dict[str, OmdbCacheEntry] = {}
+        chunk_size = 500
+        for i in range(0, len(keys), chunk_size):
+            chunk = keys[i : i + chunk_size]
+            doc_refs = [self.collection_ref.document(k) for k in chunk]
+            snapshots = self.db.get_all(doc_refs)
+            for snap in snapshots:
+                if snap.exists:
+                    result[snap.id] = cache_entry_from_dict(snap.to_dict())
+        return result
 
     def set(self, cache_key: str, entry: OmdbCacheEntry) -> None:
         doc_ref = self.collection_ref.document(cache_key)
@@ -260,6 +331,18 @@ class FirestoreParseLogRepository(ParseLogRepository):
     def add(self, log: ParseLog) -> None:
         doc_ref = self.collection_ref.document(log.id)
         doc_ref.set(log.to_dict())
+
+    def add_many(self, logs: List[ParseLog]) -> None:
+        if not logs:
+            return
+        chunk_size = 500
+        for i in range(0, len(logs), chunk_size):
+            chunk = logs[i : i + chunk_size]
+            batch = self.db.batch()
+            for log in chunk:
+                doc_ref = self.collection_ref.document(log.id)
+                batch.set(doc_ref, log.to_dict())
+            batch.commit()
 
     def prune_older_than(self, cutoff: datetime.datetime) -> int:
         query = self.collection_ref.where("processedAt", "<", cutoff)
