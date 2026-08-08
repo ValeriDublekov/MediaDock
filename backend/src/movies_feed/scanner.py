@@ -1,5 +1,6 @@
 import datetime
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -122,9 +123,11 @@ class ScannerService:
         ignore_reason: Optional[str],
         feed_entry_id: Optional[str] = None,
         torrent_url: Optional[str] = None,
+        section_timings: Optional[Dict[str, float]] = None,
     ) -> None:
         if not self.parse_log_repo or self.config.is_dry_run:
             return
+        t0 = time.perf_counter()
         if feed_entry_id or torrent_url:
             log_id = get_occurrence_id(feed_entry_id, torrent_url)
         else:
@@ -143,6 +146,8 @@ class ScannerService:
             processed_at=self.now,
         )
         self.parse_log_repo.add(log)
+        if section_timings is not None:
+            section_timings["parse_log_write"] += (time.perf_counter() - t0)
 
     def run(self, run_id: str) -> ScanRun:
         self._reset_session_caches()
@@ -155,19 +160,40 @@ class ScannerService:
         if not self.config.is_dry_run and not self.config.is_parse_only:
             self.run_repo.upsert(run_id, run)
 
+        section_timings = {
+            "prune_logs": 0.0,
+            "feed_fetch": 0.0,
+            "title_parse": 0.0,
+            "cache_lookup": 0.0,
+            "omdb_api": 0.0,
+            "db_upsert": 0.0,
+            "parse_log_write": 0.0,
+        }
+
         if self.parse_log_repo and not self.config.is_dry_run:
+            t0 = time.perf_counter()
             cutoff = self.now - datetime.timedelta(days=7)
             self.parse_log_repo.prune_older_than(cutoff)
+            t_prune = time.perf_counter() - t0
+            section_timings["prune_logs"] += t_prune
+            logger.info(f"Section [prune_logs]: completed in {t_prune:.4f}s")
 
         try:
             for feed_def in iter_feed_definitions(self.config.rss_feeds):
                 run.feeds_processed += 1
                 try:
+                    t0_feed = time.perf_counter()
                     feed = feedparser.parse(feed_def["url"])
+                    t_feed = time.perf_counter() - t0_feed
+                    section_timings["feed_fetch"] += t_feed
+                    entries_cnt = len(getattr(feed, "entries", []))
+                    logger.info(
+                        f"Section [feed_fetch]: Feed '{feed_def['name']}' fetched in {t_feed:.4f}s ({entries_cnt} entries)"
+                    )
                     for entry in feed.entries:
                         run.entries_seen += 1
                         try:
-                            self._process_entry(entry, feed_def, run)
+                            self._process_entry(entry, feed_def, run, section_timings)
                         except OmdbLimitReachedError as e:
                             logger.warning(f"OMDb limit reached: {e}")
                             run.error_count += 1
@@ -190,12 +216,33 @@ class ScannerService:
             run.error_summary.append(f"Fatal error: {e}")
         finally:
             run.finished_at = datetime.datetime.now(datetime.timezone.utc)
+            run.section_timings = {k: round(v, 4) for k, v in section_timings.items()}
+            logger.info("Scan Section Timings Summary:")
+            for sec_name, sec_time in run.section_timings.items():
+                logger.info(f"  - Section '{sec_name}': {sec_time:.4f}s")
             if not self.config.is_dry_run and not self.config.is_parse_only:
                 self.run_repo.upsert(run_id, run)
 
         return run
 
-    def _process_entry(self, entry: Any, feed_def: Dict[str, Optional[str]], run: ScanRun) -> None:
+    def _process_entry(
+        self,
+        entry: Any,
+        feed_def: Dict[str, Optional[str]],
+        run: ScanRun,
+        section_timings: Optional[Dict[str, float]] = None,
+    ) -> None:
+        if section_timings is None:
+            section_timings = {
+                "prune_logs": 0.0,
+                "feed_fetch": 0.0,
+                "title_parse": 0.0,
+                "cache_lookup": 0.0,
+                "omdb_api": 0.0,
+                "db_upsert": 0.0,
+                "parse_log_write": 0.0,
+            }
+
         raw_title = getattr(entry, "title", "")
         feed_entry_id = getattr(entry, "id", None)
         torrent_url = getattr(entry, "link", "")
@@ -214,14 +261,17 @@ class ScannerService:
                 ignore_reason="empty_title",
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
+                section_timings=section_timings,
             )
             return
 
+        t0_parse = time.perf_counter()
         parsed = parse_rutracker_title(
             raw_title,
             content_type=feed_def.get("type"),
             video_settings=self.config.video_settings,
         )
+        section_timings["title_parse"] += (time.perf_counter() - t0_parse)
 
         if not parsed.title:
             run.ignored_entries += 1
@@ -236,6 +286,7 @@ class ScannerService:
                 ignore_reason="no_title",
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
+                section_timings=section_timings,
             )
             return
 
@@ -259,11 +310,14 @@ class ScannerService:
                 ignore_reason="parse_only",
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
+                section_timings=section_timings,
             )
             return
 
         cache_key = get_cache_key(parsed.title, lookup_year)
+        t0_cache = time.perf_counter()
         cache_entry = self._get_cache_entry(cache_key)
+        section_timings["cache_lookup"] += (time.perf_counter() - t0_cache)
 
         omdb_payload = None
         omdb_result = None
@@ -283,6 +337,7 @@ class ScannerService:
                     ignore_reason="omdb_not_found",
                     feed_entry_id=feed_entry_id,
                     torrent_url=torrent_url,
+                    section_timings=section_timings,
                 )
                 return
             omdb_payload = cache_entry.payload
@@ -302,12 +357,14 @@ class ScannerService:
                     ignore_reason="omdb_limit_reached",
                     feed_entry_id=feed_entry_id,
                     torrent_url=torrent_url,
+                    section_timings=section_timings,
                 )
                 return
 
             run.omdb_requests += 1
             status = "not_found"
             payload = None
+            t0_omdb = time.perf_counter()
             try:
                 omdb_result = self.omdb_client.get_movie_info(parsed.title, parsed.year)
                 status = "found"
@@ -330,8 +387,11 @@ class ScannerService:
                     ignore_reason="omdb_error",
                     feed_entry_id=feed_entry_id,
                     torrent_url=torrent_url,
+                    section_timings=section_timings,
                 )
                 return
+            finally:
+                section_timings["omdb_api"] += (time.perf_counter() - t0_omdb)
             
             new_cache = OmdbCacheEntry(
                 lookup_title=parsed.title,
@@ -341,7 +401,9 @@ class ScannerService:
                 fetched_at=self.now,
                 expires_at=self.now + datetime.timedelta(days=self.config.cache_ttl_days),
             )
+            t0_cache_write = time.perf_counter()
             self._set_cache_entry(cache_key, new_cache)
+            section_timings["cache_lookup"] += (time.perf_counter() - t0_cache_write)
 
             if status != "found":
                 run.ignored_entries += 1
@@ -356,6 +418,7 @@ class ScannerService:
                     ignore_reason="omdb_not_found",
                     feed_entry_id=feed_entry_id,
                     torrent_url=torrent_url,
+                    section_timings=section_timings,
                 )
                 return
 
@@ -375,6 +438,7 @@ class ScannerService:
                 ignore_reason="excluded_country_or_genre",
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
+                section_timings=section_timings,
             )
             return
 
@@ -390,6 +454,7 @@ class ScannerService:
             ignore_reason=None,
             feed_entry_id=feed_entry_id,
             torrent_url=torrent_url,
+            section_timings=section_timings,
         )
 
         # Prepare records
@@ -436,6 +501,7 @@ class ScannerService:
 
         # Upsert
         if not self.config.is_dry_run:
+            t0_db = time.perf_counter()
             existing_title = self._get_title(title_id)
             if not existing_title:
                 run.titles_created += 1
@@ -445,6 +511,7 @@ class ScannerService:
             if not existing_occ:
                 run.occurrences_created += 1
             self._upsert_occurrence(title_id, occurrence_id, occurrence_record)
+            section_timings["db_upsert"] += (time.perf_counter() - t0_db)
         else:
             # Simulate creation tracking for dry run without storing
             run.titles_created += 1

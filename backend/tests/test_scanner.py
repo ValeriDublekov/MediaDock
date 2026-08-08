@@ -114,6 +114,33 @@ class TestScanner(unittest.TestCase):
         self.assertTrue(sample_log.parsed_successfully)
         self.assertIsNotNone(sample_log.raw_title)
 
+    def test_section_timings_recorded(self):
+        rss_feeds = {
+            "test_feed": {
+                "name": "test_feed",
+                "url": "backend/tests/fixtures/movies_feed.atom",
+                "type": "movie"
+            }
+        }
+        config = ScannerConfig(
+            rss_feeds=rss_feeds,
+            video_settings={},
+            excluded_countries=[],
+            excluded_genres=[],
+            omdb_limit=100
+        )
+        omdb = MockOmdbClient({"four rooms": self.valid_movie})
+        scanner = self.create_scanner(config, omdb)
+        run = scanner.run("run_timing")
+
+        self.assertIn("feed_fetch", run.section_timings)
+        self.assertIn("title_parse", run.section_timings)
+        self.assertIn("cache_lookup", run.section_timings)
+        self.assertIn("omdb_api", run.section_timings)
+        self.assertIn("db_upsert", run.section_timings)
+        self.assertIn("parse_log_write", run.section_timings)
+        self.assertIn("prune_logs", run.section_timings)
+
         # Test log pruning
         old_time = self.now - datetime.timedelta(days=10)
         from movies_feed.models import ParseLog

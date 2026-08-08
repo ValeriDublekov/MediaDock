@@ -124,6 +124,7 @@ def scan_run_from_dict(d: dict) -> ScanRun:
         ignored_entries=d.get("ignoredEntries", 0),
         error_count=d.get("errorCount", 0),
         error_summary=d.get("errorSummary") or [],
+        section_timings=d.get("sectionTimings") or {},
     )
 
 

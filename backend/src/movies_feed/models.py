@@ -131,10 +131,11 @@ class ScanRun:
     ignored_entries: int = 0
     error_count: int = 0
     error_summary: List[str] = field(default_factory=list)
+    section_timings: Dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the ScanRun model to a camelCase Firestore dictionary."""
-        return {
+        res = {
             "startedAt": self.started_at,
             "finishedAt": self.finished_at,
             "status": self.status,
@@ -149,6 +150,9 @@ class ScanRun:
             "errorCount": self.error_count,
             "errorSummary": self.error_summary,
         }
+        if self.section_timings:
+            res["sectionTimings"] = self.section_timings
+        return res
 
 
 @dataclass

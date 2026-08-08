@@ -114,6 +114,10 @@ def main():
     logger.info(f"Ignored entries: {run.ignored_entries}")
     logger.info(f"Titles created: {run.titles_created}")
     logger.info(f"Occurrences created: {run.occurrences_created}")
+    if run.section_timings:
+        logger.info("Section Timings (seconds):")
+        for sec_name, duration in run.section_timings.items():
+            logger.info(f"  - {sec_name}: {duration:.4f}s")
     if run.error_count > 0:
         logger.warning(f"Errors: {run.error_count}")
         for err in run.error_summary:
