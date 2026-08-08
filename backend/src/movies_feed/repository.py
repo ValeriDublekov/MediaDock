@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import datetime
 from typing import Any, Dict, List, Optional
 
-from .models import OmdbCacheEntry, Occurrence, ScanRun, Title
+from .models import OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
 
 
 def merge_titles(existing: Title, incoming: Title) -> Title:
@@ -131,6 +131,23 @@ class ScanRunRepository(ABC):
         pass
 
 
+class ParseLogRepository(ABC):
+    @abstractmethod
+    def add(self, log: ParseLog) -> None:
+        """Stores a parse log entry."""
+        pass
+
+    @abstractmethod
+    def prune_older_than(self, cutoff: datetime.datetime) -> int:
+        """Deletes parse log entries older than cutoff timestamp."""
+        pass
+
+    @abstractmethod
+    def list_recent(self, limit: int = 100) -> List[ParseLog]:
+        """Lists recent parse log entries."""
+        pass
+
+
 class FakeTitleRepository(TitleRepository):
     def __init__(self) -> None:
         self._store: Dict[str, Title] = {}
@@ -192,3 +209,22 @@ class FakeScanRunRepository(ScanRunRepository):
 
     def list_all(self) -> List[ScanRun]:
         return list(self._store.values())
+
+
+class FakeParseLogRepository(ParseLogRepository):
+    def __init__(self) -> None:
+        self._store: Dict[str, ParseLog] = {}
+
+    def add(self, log: ParseLog) -> None:
+        self._store[log.id] = log
+
+    def prune_older_than(self, cutoff: datetime.datetime) -> int:
+        to_delete = [log_id for log_id, log in self._store.items() if log.processed_at < cutoff]
+        for log_id in to_delete:
+            del self._store[log_id]
+        return len(to_delete)
+
+    def list_recent(self, limit: int = 100) -> List[ParseLog]:
+        sorted_logs = sorted(self._store.values(), key=lambda l: l.processed_at, reverse=True)
+        return sorted_logs[:limit]
+

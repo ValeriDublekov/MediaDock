@@ -4,10 +4,11 @@ from typing import Any, Dict, List, Optional
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-from .models import OmdbCacheEntry, Occurrence, ScanRun, Title
+from .models import OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
 from .repository import (
     OmdbCacheRepository,
     OccurrenceRepository,
+    ParseLogRepository,
     ScanRunRepository,
     TitleRepository,
     merge_occurrences,
@@ -126,6 +127,23 @@ def scan_run_from_dict(d: dict) -> ScanRun:
     )
 
 
+def parse_log_from_dict(d: dict) -> ParseLog:
+    """Reconstructs a ParseLog model from a camelCase dictionary retrieved from Firestore."""
+    return ParseLog(
+        id=d["id"],
+        raw_title=d["rawTitle"],
+        feed_name=d["feedName"],
+        parsed_successfully=d["parsedSuccessfully"],
+        parsed_title=d.get("parsedTitle"),
+        parsed_year=d.get("parsedYear"),
+        omdb_status=d["omdbStatus"],
+        ignored=d["ignored"],
+        ignore_reason=d.get("ignoreReason"),
+        processed_at=d["processedAt"],
+    )
+
+
+
 class FirestoreTitleRepository(TitleRepository):
     def __init__(self, db: Optional[firestore.firestore.Client] = None) -> None:
         self.db = db if db is not None else get_firestore_client()
@@ -231,3 +249,28 @@ class FirestoreScanRunRepository(ScanRunRepository):
     def list_all(self) -> List[ScanRun]:
         docs = self.collection_ref.stream()
         return [scan_run_from_dict(doc.to_dict()) for doc in docs]
+
+
+class FirestoreParseLogRepository(ParseLogRepository):
+    def __init__(self, db: Optional[firestore.firestore.Client] = None) -> None:
+        self.db = db if db is not None else get_firestore_client()
+        self.collection_ref = self.db.collection("parseLogs")
+
+    def add(self, log: ParseLog) -> None:
+        doc_ref = self.collection_ref.document(log.id)
+        doc_ref.set(log.to_dict())
+
+    def prune_older_than(self, cutoff: datetime.datetime) -> int:
+        query = self.collection_ref.where("processedAt", "<", cutoff)
+        docs = list(query.stream())
+        deleted_count = 0
+        for doc in docs:
+            doc.reference.delete()
+            deleted_count += 1
+        return deleted_count
+
+    def list_recent(self, limit: int = 100) -> List[ParseLog]:
+        query = self.collection_ref.order_by("processedAt", direction=firestore.Query.DESCENDING).limit(limit)
+        docs = query.stream()
+        return [parse_log_from_dict(doc.to_dict()) for doc in docs]
+

@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 import feedparser
 
 from .ids import get_cache_key, get_occurrence_id, get_title_id, normalize_title
-from .models import Occurrence, OmdbCacheEntry, ScanRun, Title
+from .models import Occurrence, OmdbCacheEntry, ParseLog, ScanRun, Title
 from .omdb_client import (
     OmdbClient,
     OmdbLimitReachedError,
@@ -16,6 +16,7 @@ from .omdb_client import (
 from .repository import (
     OccurrenceRepository,
     OmdbCacheRepository,
+    ParseLogRepository,
     ScanRunRepository,
     TitleRepository,
 )
@@ -44,6 +45,7 @@ class ScannerService:
         occurrence_repo: OccurrenceRepository,
         cache_repo: OmdbCacheRepository,
         run_repo: ScanRunRepository,
+        parse_log_repo: Optional[ParseLogRepository] = None,
         now: Optional[datetime.datetime] = None,
     ):
         self.config = config
@@ -52,6 +54,7 @@ class ScannerService:
         self.occurrence_repo = occurrence_repo
         self.cache_repo = cache_repo
         self.run_repo = run_repo
+        self.parse_log_repo = parse_log_repo
         self.now = now or datetime.datetime.now(datetime.timezone.utc)
 
     def is_excluded(self, countries: List[str], genres: List[str]) -> bool:
@@ -63,6 +66,40 @@ class ScannerService:
             return True
         return False
 
+    def _log_parse_entry(
+        self,
+        raw_title: str,
+        feed_name: str,
+        parsed_successfully: bool,
+        parsed_title: Optional[str],
+        parsed_year: Optional[int],
+        omdb_status: str,
+        ignored: bool,
+        ignore_reason: Optional[str],
+        feed_entry_id: Optional[str] = None,
+        torrent_url: Optional[str] = None,
+    ) -> None:
+        if not self.parse_log_repo or self.config.is_dry_run:
+            return
+        if feed_entry_id or torrent_url:
+            log_id = get_occurrence_id(feed_entry_id, torrent_url)
+        else:
+            log_id = get_occurrence_id(None, raw_title + str(self.now.timestamp()))
+
+        log = ParseLog(
+            id=log_id,
+            raw_title=raw_title,
+            feed_name=feed_name,
+            parsed_successfully=parsed_successfully,
+            parsed_title=parsed_title,
+            parsed_year=parsed_year,
+            omdb_status=omdb_status,
+            ignored=ignored,
+            ignore_reason=ignore_reason,
+            processed_at=self.now,
+        )
+        self.parse_log_repo.add(log)
+
     def run(self, run_id: str) -> ScanRun:
         run = ScanRun(
             started_at=self.now,
@@ -72,6 +109,10 @@ class ScannerService:
         )
         if not self.config.is_dry_run and not self.config.is_parse_only:
             self.run_repo.upsert(run_id, run)
+
+        if self.parse_log_repo and not self.config.is_dry_run:
+            cutoff = self.now - datetime.timedelta(days=7)
+            self.parse_log_repo.prune_older_than(cutoff)
 
         try:
             for feed_def in iter_feed_definitions(self.config.rss_feeds):
@@ -111,8 +152,24 @@ class ScannerService:
 
     def _process_entry(self, entry: Any, feed_def: Dict[str, Optional[str]], run: ScanRun) -> None:
         raw_title = getattr(entry, "title", "")
+        feed_entry_id = getattr(entry, "id", None)
+        torrent_url = getattr(entry, "link", "")
+        feed_name = feed_def.get("name", "")
+
         if not raw_title:
             run.ignored_entries += 1
+            self._log_parse_entry(
+                raw_title="",
+                feed_name=feed_name,
+                parsed_successfully=False,
+                parsed_title=None,
+                parsed_year=None,
+                omdb_status="not_parsed",
+                ignored=True,
+                ignore_reason="empty_title",
+                feed_entry_id=feed_entry_id,
+                torrent_url=torrent_url,
+            )
             return
 
         parsed = parse_rutracker_title(
@@ -123,9 +180,18 @@ class ScannerService:
 
         if not parsed.title:
             run.ignored_entries += 1
-            return
-
-        if self.config.is_parse_only:
+            self._log_parse_entry(
+                raw_title=raw_title,
+                feed_name=feed_name,
+                parsed_successfully=False,
+                parsed_title=None,
+                parsed_year=None,
+                omdb_status="not_parsed",
+                ignored=True,
+                ignore_reason="no_title",
+                feed_entry_id=feed_entry_id,
+                torrent_url=torrent_url,
+            )
             return
 
         norm_lookup_title = normalize_title(parsed.title)
@@ -135,6 +201,21 @@ class ScannerService:
                 lookup_year = int(parsed.year)
             except ValueError:
                 pass
+
+        if self.config.is_parse_only:
+            self._log_parse_entry(
+                raw_title=raw_title,
+                feed_name=feed_name,
+                parsed_successfully=True,
+                parsed_title=parsed.title,
+                parsed_year=lookup_year,
+                omdb_status="skipped",
+                ignored=True,
+                ignore_reason="parse_only",
+                feed_entry_id=feed_entry_id,
+                torrent_url=torrent_url,
+            )
+            return
 
         cache_key = get_cache_key(parsed.title, lookup_year)
         cache_entry = self.cache_repo.get(cache_key)
@@ -146,6 +227,18 @@ class ScannerService:
             run.cache_hits += 1
             if cache_entry.status != "found" or not cache_entry.payload:
                 run.ignored_entries += 1
+                self._log_parse_entry(
+                    raw_title=raw_title,
+                    feed_name=feed_name,
+                    parsed_successfully=True,
+                    parsed_title=parsed.title,
+                    parsed_year=lookup_year,
+                    omdb_status="not_found",
+                    ignored=True,
+                    ignore_reason="omdb_not_found",
+                    feed_entry_id=feed_entry_id,
+                    torrent_url=torrent_url,
+                )
                 return
             omdb_payload = cache_entry.payload
             omdb_result = self.omdb_client._normalize_payload(omdb_payload)
@@ -153,6 +246,18 @@ class ScannerService:
             if run.omdb_requests >= self.config.omdb_limit:
                 logger.info("Soft limit reached for OMDb requests in this run.")
                 run.ignored_entries += 1
+                self._log_parse_entry(
+                    raw_title=raw_title,
+                    feed_name=feed_name,
+                    parsed_successfully=True,
+                    parsed_title=parsed.title,
+                    parsed_year=lookup_year,
+                    omdb_status="skipped",
+                    ignored=True,
+                    ignore_reason="omdb_limit_reached",
+                    feed_entry_id=feed_entry_id,
+                    torrent_url=torrent_url,
+                )
                 return
 
             run.omdb_requests += 1
@@ -169,6 +274,18 @@ class ScannerService:
             except OmdbTransportError as e:
                 run.error_count += 1
                 run.error_summary.append(f"OMDb Transport Error: {str(e)}")
+                self._log_parse_entry(
+                    raw_title=raw_title,
+                    feed_name=feed_name,
+                    parsed_successfully=True,
+                    parsed_title=parsed.title,
+                    parsed_year=lookup_year,
+                    omdb_status="error",
+                    ignored=True,
+                    ignore_reason="omdb_error",
+                    feed_entry_id=feed_entry_id,
+                    torrent_url=torrent_url,
+                )
                 return
             
             new_cache = OmdbCacheEntry(
@@ -184,6 +301,18 @@ class ScannerService:
 
             if status != "found":
                 run.ignored_entries += 1
+                self._log_parse_entry(
+                    raw_title=raw_title,
+                    feed_name=feed_name,
+                    parsed_successfully=True,
+                    parsed_title=parsed.title,
+                    parsed_year=lookup_year,
+                    omdb_status="not_found",
+                    ignored=True,
+                    ignore_reason="omdb_not_found",
+                    feed_entry_id=feed_entry_id,
+                    torrent_url=torrent_url,
+                )
                 return
 
         if not omdb_result:
@@ -191,7 +320,33 @@ class ScannerService:
 
         if self.is_excluded(omdb_result.countries, omdb_result.genres):
             run.ignored_entries += 1
+            self._log_parse_entry(
+                raw_title=raw_title,
+                feed_name=feed_name,
+                parsed_successfully=True,
+                parsed_title=parsed.title,
+                parsed_year=lookup_year,
+                omdb_status="found",
+                ignored=True,
+                ignore_reason="excluded_country_or_genre",
+                feed_entry_id=feed_entry_id,
+                torrent_url=torrent_url,
+            )
             return
+
+        # Record success log entry
+        self._log_parse_entry(
+            raw_title=raw_title,
+            feed_name=feed_name,
+            parsed_successfully=True,
+            parsed_title=parsed.title,
+            parsed_year=lookup_year,
+            omdb_status="found",
+            ignored=False,
+            ignore_reason=None,
+            feed_entry_id=feed_entry_id,
+            torrent_url=torrent_url,
+        )
 
         # Prepare records
         media_type = omdb_result.media_type
@@ -221,8 +376,6 @@ class ScannerService:
             ratings=omdb_result.ratings,
         )
 
-        feed_entry_id = getattr(entry, "id", None)
-        torrent_url = getattr(entry, "link", "")
         occurrence_id = get_occurrence_id(feed_entry_id, torrent_url)
 
         occurrence_record = Occurrence(

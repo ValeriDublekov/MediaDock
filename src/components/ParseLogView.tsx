@@ -1,0 +1,463 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { ParseLog, ParseLogRepository } from '../domain/parseLog';
+import { firestoreParseLogAdapter } from '../adapters/firestoreParseLogAdapter';
+import {
+  FileText,
+  Search,
+  RefreshCw,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Filter,
+  Film,
+  Loader2,
+  Clock,
+  Globe,
+  Tag,
+} from 'lucide-react';
+
+interface ParseLogViewProps {
+  repository?: ParseLogRepository;
+}
+
+type FilterTab = 'all' | 'successful' | 'omdb_found' | 'ignored' | 'failed_parse';
+
+export const ParseLogView: React.FC<ParseLogViewProps> = ({
+  repository = firestoreParseLogAdapter,
+}) => {
+  const [logs, setLogs] = useState<ParseLog[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<Error | null>(null);
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
+
+  const fetchLogs = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const data = await repository.getRecentParseLogs(150);
+      setLogs(data);
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error('Failed to fetch parse logs'));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [repository]);
+
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
+
+  const metrics = useMemo(() => {
+    const total = logs.length;
+    const parsedSuccess = logs.filter((l) => l.parsedSuccessfully).length;
+    const omdbFound = logs.filter((l) => l.omdbStatus === 'found').length;
+    const ignoredCount = logs.filter((l) => l.ignored).length;
+    return { total, parsedSuccess, omdbFound, ignoredCount };
+  }, [logs]);
+
+  const filteredLogs = useMemo(() => {
+    return logs.filter((log) => {
+      // Filter tab
+      if (activeFilter === 'successful' && (log.ignored || !log.parsedSuccessfully)) {
+        return false;
+      }
+      if (activeFilter === 'omdb_found' && log.omdbStatus !== 'found') {
+        return false;
+      }
+      if (activeFilter === 'ignored' && !log.ignored) {
+        return false;
+      }
+      if (activeFilter === 'failed_parse' && log.parsedSuccessfully) {
+        return false;
+      }
+
+      // Search term
+      if (searchTerm.trim()) {
+        const query = searchTerm.toLowerCase();
+        const matchesRaw = log.rawTitle.toLowerCase().includes(query);
+        const matchesParsed = log.parsedTitle ? log.parsedTitle.toLowerCase().includes(query) : false;
+        const matchesFeed = log.feedName.toLowerCase().includes(query);
+        const matchesReason = log.ignoreReason ? log.ignoreReason.toLowerCase().includes(query) : false;
+        return matchesRaw || matchesParsed || matchesFeed || matchesReason;
+      }
+
+      return true;
+    });
+  }, [logs, activeFilter, searchTerm]);
+
+  const formatIgnoreReason = (reason: string | null): { text: string; bg: string; border: string; color: string } => {
+    if (!reason) return { text: 'N/A', bg: 'bg-neutral-800', border: 'border-neutral-700', color: 'text-neutral-400' };
+    switch (reason) {
+      case 'excluded_country_or_genre':
+        return {
+          text: 'Филтрирана страна/жанр (Excluded Country/Genre)',
+          bg: 'bg-amber-950/40',
+          border: 'border-amber-800/60',
+          color: 'text-amber-300',
+        };
+      case 'omdb_not_found':
+        return {
+          text: 'Няма намерено в OMDb (OMDb Match Not Found)',
+          bg: 'bg-orange-950/40',
+          border: 'border-orange-800/60',
+          color: 'text-orange-300',
+        };
+      case 'no_title':
+        return {
+          text: 'Неразпознато заглавие (Title Parse Failed)',
+          bg: 'bg-red-950/40',
+          border: 'border-red-800/60',
+          color: 'text-red-300',
+        };
+      case 'omdb_limit_reached':
+        return {
+          text: 'Достигнат OMDb лимит (API Rate Limit)',
+          bg: 'bg-purple-950/40',
+          border: 'border-purple-800/60',
+          color: 'text-purple-300',
+        };
+      case 'empty_title':
+        return {
+          text: 'Празно RSS заглавие (Empty Feed Item)',
+          bg: 'bg-neutral-800',
+          border: 'border-neutral-700',
+          color: 'text-neutral-400',
+        };
+      case 'parse_only':
+        return {
+          text: 'Режим само парсване (Parse Only Mode)',
+          bg: 'bg-blue-950/40',
+          border: 'border-blue-800/60',
+          color: 'text-blue-300',
+        };
+      default:
+        return {
+          text: reason,
+          bg: 'bg-neutral-800',
+          border: 'border-neutral-700',
+          color: 'text-neutral-300',
+        };
+    }
+  };
+
+  const formatDate = (date: Date): string => {
+    if (!date || isNaN(date.getTime()) || date.getTime() === 0) return 'Няма дата';
+    return date.toLocaleString('bg-BG', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* View Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-neutral-900 border border-neutral-800 p-6 rounded-xl">
+        <div>
+          <div className="flex items-center gap-2 text-amber-400 mb-1">
+            <FileText className="w-5 h-5" />
+            <h2 className="text-lg font-bold text-neutral-100">Лог от парсването (Parse Results Log)</h2>
+          </div>
+          <p className="text-sm text-neutral-400">
+            История на обработените RSS заглавия от последните 7 дни, статус на парсване, OMDb метаданни и филтрация.
+          </p>
+        </div>
+
+        <button
+          onClick={fetchLogs}
+          disabled={isLoading}
+          data-testid="refresh-parse-logs-button"
+          className="inline-flex items-center justify-center gap-2 min-h-[44px] px-4 py-2 text-sm font-medium text-neutral-200 bg-neutral-800 border border-neutral-700 rounded-lg hover:bg-neutral-700 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer disabled:opacity-50"
+        >
+          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-amber-400' : ''}`} />
+          {isLoading ? 'Зареждане...' : 'Обнови (Refresh)'}
+        </button>
+      </div>
+
+      {/* Metric Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-neutral-900 border border-neutral-800 p-4 rounded-xl flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-neutral-800 text-neutral-300 flex items-center justify-center shrink-0">
+            <Clock className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-xs text-neutral-400">Общо обработени (7 дни)</div>
+            <div className="text-xl font-bold text-neutral-100" data-testid="metric-total">{metrics.total}</div>
+          </div>
+        </div>
+
+        <div className="bg-neutral-900 border border-neutral-800 p-4 rounded-xl flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-emerald-950 text-emerald-400 flex items-center justify-center shrink-0">
+            <CheckCircle2 className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-xs text-neutral-400">Успешно парснати</div>
+            <div className="text-xl font-bold text-emerald-400" data-testid="metric-parsed">{metrics.parsedSuccess}</div>
+          </div>
+        </div>
+
+        <div className="bg-neutral-900 border border-neutral-800 p-4 rounded-xl flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-blue-950 text-blue-400 flex items-center justify-center shrink-0">
+            <Film className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-xs text-neutral-400">Намерени в OMDb</div>
+            <div className="text-xl font-bold text-blue-400" data-testid="metric-omdb">{metrics.omdbFound}</div>
+          </div>
+        </div>
+
+        <div className="bg-neutral-900 border border-neutral-800 p-4 rounded-xl flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-amber-950 text-amber-400 flex items-center justify-center shrink-0">
+            <Filter className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-xs text-neutral-400">Филтрирани / Игнорирани</div>
+            <div className="text-xl font-bold text-amber-400" data-testid="metric-ignored">{metrics.ignoredCount}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Filter and Search Bar */}
+      <div className="bg-neutral-900 border border-neutral-800 p-4 rounded-xl space-y-4">
+        <div className="flex flex-col sm:flex-row gap-3">
+          {/* Search Input */}
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Търси по RSS име, заглавие или причина..."
+              data-testid="parse-log-search-input"
+              className="w-full pl-10 pr-4 py-2.5 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+            />
+          </div>
+        </div>
+
+        {/* Filter Tabs */}
+        <div className="flex flex-wrap gap-2 pt-1 border-t border-neutral-800/80">
+          <button
+            onClick={() => setActiveFilter('all')}
+            data-testid="filter-tab-all"
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+              activeFilter === 'all'
+                ? 'bg-amber-500 text-neutral-950 font-semibold'
+                : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+            }`}
+          >
+            Всички ({logs.length})
+          </button>
+          <button
+            onClick={() => setActiveFilter('successful')}
+            data-testid="filter-tab-successful"
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+              activeFilter === 'successful'
+                ? 'bg-emerald-500 text-neutral-950 font-semibold'
+                : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+            }`}
+          >
+            Добавени в каталога ({logs.filter((l) => !l.ignored && l.parsedSuccessfully).length})
+          </button>
+          <button
+            onClick={() => setActiveFilter('omdb_found')}
+            data-testid="filter-tab-omdb"
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+              activeFilter === 'omdb_found'
+                ? 'bg-blue-500 text-neutral-950 font-semibold'
+                : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+            }`}
+          >
+            OMDb Намерени ({metrics.omdbFound})
+          </button>
+          <button
+            onClick={() => setActiveFilter('ignored')}
+            data-testid="filter-tab-ignored"
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+              activeFilter === 'ignored'
+                ? 'bg-amber-500 text-neutral-950 font-semibold'
+                : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+            }`}
+          >
+            Филтрирани / Игнорирани ({metrics.ignoredCount})
+          </button>
+          <button
+            onClick={() => setActiveFilter('failed_parse')}
+            data-testid="filter-tab-failed"
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+              activeFilter === 'failed_parse'
+                ? 'bg-red-500 text-neutral-950 font-semibold'
+                : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+            }`}
+          >
+            Грешка при парсване ({logs.filter((l) => !l.parsedSuccessfully).length})
+          </button>
+        </div>
+      </div>
+
+      {/* Loading State */}
+      {isLoading && (
+        <div className="flex flex-col items-center justify-center py-16 bg-neutral-900 border border-neutral-800 rounded-xl">
+          <Loader2 className="w-8 h-8 text-amber-400 animate-spin mb-3" />
+          <p className="text-sm text-neutral-400">Зареждане на лога от парсването...</p>
+        </div>
+      )}
+
+      {/* Error State */}
+      {error && !isLoading && (
+        <div className="flex items-center gap-3 p-4 bg-red-950/60 border border-red-800 rounded-xl text-sm text-red-200">
+          <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
+          <span>Грешка при зареждане: {error.message}</span>
+          <button
+            onClick={fetchLogs}
+            className="ml-auto min-h-[36px] px-3 py-1.5 text-xs font-medium bg-red-900/50 border border-red-700 rounded-lg hover:bg-red-800 transition-colors cursor-pointer"
+          >
+            Опитай отново
+          </button>
+        </div>
+      )}
+
+      {/* Empty Logs State */}
+      {!isLoading && !error && logs.length === 0 && (
+        <div
+          data-testid="parse-logs-empty"
+          className="flex flex-col items-center justify-center py-16 text-center px-4 bg-neutral-900 border border-neutral-800 rounded-xl"
+        >
+          <FileText className="w-12 h-12 text-neutral-600 mb-3" />
+          <h3 className="text-base font-semibold text-neutral-200 mb-1">Няма намерени записи в лога</h3>
+          <p className="text-sm text-neutral-400 max-w-md">
+            Все още няма регистрирани парснати RSS заглавия от последните 7 дни.
+          </p>
+        </div>
+      )}
+
+      {/* Empty Search Result State */}
+      {!isLoading && !error && logs.length > 0 && filteredLogs.length === 0 && (
+        <div
+          data-testid="parse-logs-filtered-empty"
+          className="flex flex-col items-center justify-center py-12 text-center px-4 bg-neutral-900 border border-neutral-800 rounded-xl"
+        >
+          <Search className="w-10 h-10 text-neutral-600 mb-3" />
+          <h3 className="text-base font-semibold text-neutral-200 mb-1">Няма резултати за избрания филтър</h3>
+          <p className="text-sm text-neutral-400">Опитайте с друг критерий за търсене или нулирайте филтрите.</p>
+        </div>
+      )}
+
+      {/* Logs Table / List */}
+      {!isLoading && !error && filteredLogs.length > 0 && (
+        <div className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm" data-testid="parse-logs-table">
+              <thead className="bg-neutral-950/80 border-b border-neutral-800 text-xs text-neutral-400 font-semibold uppercase tracking-wider">
+                <tr>
+                  <th className="px-4 py-3.5">Дата & Време</th>
+                  <th className="px-4 py-3.5">RSS Канал & Име</th>
+                  <th className="px-4 py-3.5">Резултат от Парсване</th>
+                  <th className="px-4 py-3.5">OMDb Данни</th>
+                  <th className="px-4 py-3.5">Статус / Причина за филтрация</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-800/60">
+                {filteredLogs.map((log) => {
+                  const reasonInfo = formatIgnoreReason(log.ignoreReason);
+                  return (
+                    <tr key={log.id} className="hover:bg-neutral-800/40 transition-colors" data-testid={`log-row-${log.id}`}>
+                      {/* Date & Time */}
+                      <td className="px-4 py-3.5 text-xs text-neutral-400 whitespace-nowrap font-mono">
+                        {formatDate(log.processedAt)}
+                      </td>
+
+                      {/* RSS Title & Feed */}
+                      <td className="px-4 py-3.5 max-w-xs md:max-w-md">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-neutral-800 text-neutral-300 border border-neutral-700">
+                            <Tag className="w-3 h-3 text-amber-400" />
+                            {log.feedName || 'RSS'}
+                          </span>
+                        </div>
+                        <div className="text-xs text-neutral-200 font-medium break-words" title={log.rawTitle}>
+                          {log.rawTitle}
+                        </div>
+                      </td>
+
+                      {/* Parsed Result */}
+                      <td className="px-4 py-3.5">
+                        {log.parsedSuccessfully ? (
+                          <div>
+                            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-emerald-950/60 text-emerald-300 border border-emerald-800/60 mb-1">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Парснато
+                            </div>
+                            <div className="text-xs font-semibold text-neutral-100">
+                              {log.parsedTitle} {log.parsedYear ? `(${log.parsedYear})` : ''}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-950/60 text-red-300 border border-red-800/60">
+                            <XCircle className="w-3.5 h-3.5" />
+                            Грешка при парсване
+                          </div>
+                        )}
+                      </td>
+
+                      {/* OMDb Status */}
+                      <td className="px-4 py-3.5 whitespace-nowrap">
+                        {log.omdbStatus === 'found' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-950/60 text-blue-300 border border-blue-800/60">
+                            <Globe className="w-3.5 h-3.5" />
+                            Намерено
+                          </span>
+                        )}
+                        {log.omdbStatus === 'not_found' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-orange-950/60 text-orange-300 border border-orange-800/60">
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                            Няма съвпадение
+                          </span>
+                        )}
+                        {log.omdbStatus === 'skipped' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-neutral-800 text-neutral-400 border border-neutral-700">
+                            Пропуснато
+                          </span>
+                        )}
+                        {log.omdbStatus === 'error' && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-950/60 text-red-300 border border-red-800/60">
+                            Грешка API
+                          </span>
+                        )}
+                        {log.omdbStatus === 'not_parsed' && (
+                          <span className="text-xs text-neutral-500">-</span>
+                        )}
+                      </td>
+
+                      {/* Final Status & Ignore Reason */}
+                      <td className="px-4 py-3.5">
+                        {!log.ignored ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Добавено в каталога
+                          </span>
+                        ) : (
+                          <div className="space-y-1">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-950/60 text-amber-300 border border-amber-800/60">
+                              <Filter className="w-3.5 h-3.5" />
+                              Игнорирано
+                            </span>
+                            <div className={`text-[11px] px-2 py-1 rounded border ${reasonInfo.bg} ${reasonInfo.border} ${reasonInfo.color}`}>
+                              {reasonInfo.text}
+                            </div>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

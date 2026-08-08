@@ -149,3 +149,33 @@ class ScanRun:
             "errorCount": self.error_count,
             "errorSummary": self.error_summary,
         }
+
+
+@dataclass
+class ParseLog:
+    id: str
+    raw_title: str
+    feed_name: str
+    parsed_successfully: bool
+    parsed_title: Optional[str]
+    parsed_year: Optional[int]
+    omdb_status: str  # 'found', 'not_found', 'skipped', 'error', 'not_parsed'
+    ignored: bool
+    ignore_reason: Optional[str]  # 'no_title', 'omdb_not_found', 'excluded_country_or_genre', 'omdb_limit_reached', 'omdb_error', 'empty_title', 'parse_only', None
+    processed_at: datetime.datetime
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Converts the ParseLog model to a camelCase Firestore dictionary."""
+        return {
+            "id": self.id,
+            "rawTitle": self.raw_title,
+            "feedName": self.feed_name,
+            "parsedSuccessfully": self.parsed_successfully,
+            "parsedTitle": self.parsed_title,
+            "parsedYear": self.parsed_year,
+            "omdbStatus": self.omdb_status,
+            "ignored": self.ignored,
+            "ignoreReason": self.ignore_reason,
+            "processedAt": self.processed_at,
+        }
+

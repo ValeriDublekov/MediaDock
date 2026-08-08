@@ -34,6 +34,11 @@ service cloud.firestore {
     match /scanRuns/{runId} {
       allow read, write: if false;
     }
+
+    match /parseLogs/{logId} {
+      allow read: if isAllowlisted();
+      allow write: if false;
+    }
     
     match /allowlist/{userId} {
       // Allowlist writes are server-only. Read is own access check only.

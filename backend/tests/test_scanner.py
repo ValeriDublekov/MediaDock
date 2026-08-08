@@ -4,7 +4,13 @@ from typing import Any, Dict
 
 from movies_feed.models import OmdbCacheEntry, Title, Occurrence, ScanRun
 from movies_feed.omdb_client import OmdbMovieResult, OmdbLimitReachedError, OmdbTransportError, OmdbNoMatchError, OmdbClient, HttpTransport
-from movies_feed.repository import FakeTitleRepository, FakeOccurrenceRepository, FakeOmdbCacheRepository, FakeScanRunRepository
+from movies_feed.repository import (
+    FakeTitleRepository,
+    FakeOccurrenceRepository,
+    FakeOmdbCacheRepository,
+    FakeScanRunRepository,
+    FakeParseLogRepository,
+)
 from movies_feed.scanner import ScannerConfig, ScannerService
 
 class MockOmdbClient(OmdbClient):
@@ -47,6 +53,7 @@ class TestScanner(unittest.TestCase):
         self.occ_repo = FakeOccurrenceRepository()
         self.cache_repo = FakeOmdbCacheRepository()
         self.run_repo = FakeScanRunRepository()
+        self.parse_log_repo = FakeParseLogRepository()
 
         self.valid_movie = OmdbMovieResult(
             title="The Matrix", year=1999, imdb_id="tt0133093",
@@ -78,8 +85,57 @@ class TestScanner(unittest.TestCase):
             occurrence_repo=self.occ_repo,
             cache_repo=self.cache_repo,
             run_repo=self.run_repo,
+            parse_log_repo=self.parse_log_repo,
             now=self.now
         )
+
+    def test_parse_logs_creation_and_pruning(self):
+        rss_feeds = {
+            "test_feed": {
+                "name": "test_feed",
+                "url": "backend/tests/fixtures/movies_feed.atom",
+                "type": "movie"
+            }
+        }
+        config = ScannerConfig(
+            rss_feeds=rss_feeds,
+            video_settings={},
+            excluded_countries=[],
+            excluded_genres=[],
+            omdb_limit=100
+        )
+        omdb = MockOmdbClient({"four rooms": self.valid_movie})
+        scanner = self.create_scanner(config, omdb)
+        scanner.run("run_logs")
+
+        logs = self.parse_log_repo.list_recent()
+        self.assertGreater(len(logs), 0)
+        sample_log = logs[0]
+        self.assertTrue(sample_log.parsed_successfully)
+        self.assertIsNotNone(sample_log.raw_title)
+
+        # Test log pruning
+        old_time = self.now - datetime.timedelta(days=10)
+        from movies_feed.models import ParseLog
+        old_log = ParseLog(
+            id="old_log_1",
+            raw_title="Old Movie",
+            feed_name="test_feed",
+            parsed_successfully=True,
+            parsed_title="Old Movie",
+            parsed_year=2010,
+            omdb_status="found",
+            ignored=False,
+            ignore_reason=None,
+            processed_at=old_time
+        )
+        self.parse_log_repo.add(old_log)
+        self.assertIsNotNone(self.parse_log_repo._store.get("old_log_1"))
+
+        # Running scanner again should prune the 10-day-old log
+        scanner.run("run_logs_2")
+        self.assertIsNone(self.parse_log_repo._store.get("old_log_1"))
+
 
     def test_omdb_limit_and_caching(self):
         rss_feeds = {

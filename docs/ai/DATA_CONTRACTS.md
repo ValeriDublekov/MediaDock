@@ -80,6 +80,22 @@ Cache key is deterministic from title and year. Do not cache transport failures.
 
 Run IDs may be generated per execution; idempotency is required for catalog data.
 
+## `parseLogs/{logId}`
+
+One RSS parse result log entry. Retained for 1 week (7 days).
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `rawTitle` | string | Original feed entry name processed |
+| `feedName` | string | Source feed label |
+| `parsedSuccessfully` | boolean | True if title and metadata were parsed from rawTitle |
+| `parsedTitle` | string or null | Extracted title if successful |
+| `parsedYear` | number or null | Extracted year if present |
+| `omdbStatus` | string | `found`, `not_found`, `skipped`, `error`, `not_parsed` |
+| `ignored` | boolean | True if entry was filtered/skipped |
+| `ignoreReason` | string or null | `no_title`, `omdb_not_found`, `excluded_country_or_genre`, `omdb_limit_reached`, `omdb_error`, `empty_title`, `parse_only`, or null |
+| `processedAt` | Timestamp | Time when entry was processed |
+
 ## `allowlist/{uid}`
 
 | Field | Type | Notes |
@@ -139,5 +155,6 @@ this contract when introduced.
 | `titles/**` | Allowlisted | Denied | Allowed |
 | `omdbCache/**` | Denied | Denied | Allowed |
 | `scanRuns/**` | Denied by default | Denied | Allowed |
+| `parseLogs/**` | Allowlisted | Denied | Allowed |
 | `allowlist/**` | Own access check only | Denied | Allowed |
 | `users/{uid}/**` | Own validated paths | Future own validated paths | Optional |
