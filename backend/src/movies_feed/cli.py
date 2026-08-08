@@ -54,6 +54,24 @@ def main():
     excluded_countries = filters.get("excluded_countries", [])
     excluded_genres = filters.get("excluded_genres", [])
 
+    # Override with custom settings from Firestore if available
+    if not args.fake_repos and not args.parse_only:
+        try:
+            db = get_firestore_client()
+            doc_ref = db.collection("titles").document("settings_config")
+            doc_snap = doc_ref.get()
+            if doc_snap.exists:
+                data = doc_snap.to_dict()
+                logger.info("Loaded custom configuration from Firestore 'titles/settings_config'.")
+                if "rssFeeds" in data:
+                    rss_feeds = data["rssFeeds"]
+                if "excludedCountries" in data:
+                    excluded_countries = data["excludedCountries"]
+                if "excludedGenres" in data:
+                    excluded_genres = data["excludedGenres"]
+        except Exception as e:
+            logger.warning(f"Could not load custom settings from Firestore titles/settings_config (falling back to legacy/config.json): {e}")
+
     omdb_api_key = os.environ.get("OMDB_API_KEY", "")
     if not args.parse_only and not omdb_api_key:
         logger.warning("OMDB_API_KEY environment variable is not set. OMDb lookups will fail if attempted.")

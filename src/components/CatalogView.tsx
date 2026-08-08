@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { CatalogRepository, Title } from '../domain/catalog';
 import { useCatalog } from '../application/useCatalog';
 import { firestoreCatalogAdapter } from '../adapters/firestoreCatalogAdapter';
+import { firestoreSettingsAdapter } from '../adapters/firestoreSettingsAdapter';
 import { CatalogFilterBar } from './CatalogFilterBar';
 import { TitleCard } from './TitleCard';
 import { CatalogSkeleton } from './CatalogSkeleton';
@@ -17,7 +18,7 @@ interface CatalogViewProps {
   pageSize?: number;
 }
 
-export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestoreCatalogAdapter, pageSize = 10 }) => {
+export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestoreCatalogAdapter, pageSize = 16 }) => {
   const {
     titles,
     isLoading,
@@ -30,6 +31,23 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
   } = useCatalog({ repository, pageSize });
 
   const [filterState, setFilterState] = useState<CatalogFilterState>(DEFAULT_FILTER_STATE);
+
+  useEffect(() => {
+    async function applySavedSettings() {
+      try {
+        const settings = await firestoreSettingsAdapter.getSettings();
+        setFilterState((prev) => ({
+          ...prev,
+          minMovieRating: settings.minMovieRating !== undefined ? settings.minMovieRating : prev.minMovieRating,
+          minSeriesRating: settings.minSeriesRating !== undefined ? settings.minSeriesRating : prev.minSeriesRating,
+          minVotes: settings.minImdbVotes !== undefined ? settings.minImdbVotes : prev.minVotes,
+        }));
+      } catch (err) {
+        console.warn('Failed to apply custom filter defaults from Firestore settings:', err);
+      }
+    }
+    applySavedSettings();
+  }, []);
 
   const filteredTitles = useMemo(() => {
     return filterAndSortTitles(titles, filterState);

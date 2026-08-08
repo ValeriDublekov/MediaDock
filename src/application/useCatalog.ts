@@ -24,7 +24,7 @@ export interface UseCatalogReturn {
 export function useCatalog(options: UseCatalogOptions = {}): UseCatalogReturn {
   const {
     repository = firestoreCatalogAdapter,
-    pageSize = 10,
+    pageSize = 16,
     autoFetch = true,
   } = options;
 

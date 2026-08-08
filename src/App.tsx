@@ -10,10 +10,11 @@ import { AuthGate } from './components/AuthGate';
 import { CatalogView } from './components/CatalogView';
 import { ParseLogView } from './components/ParseLogView';
 import { TriggerScannerModal } from './components/TriggerScannerModal';
-import { Film, FileText } from 'lucide-react';
+import { SettingsView } from './components/SettingsView';
+import { Film, FileText, Settings } from 'lucide-react';
 
 function AppContent() {
-  const [activeTab, setActiveTab] = useState<'catalog' | 'parseLogs'>('catalog');
+  const [activeTab, setActiveTab] = useState<'catalog' | 'parseLogs' | 'settings'>('catalog');
   const { user } = useAuth();
 
   return (
@@ -59,13 +60,31 @@ function AppContent() {
               <FileText className="w-4 h-4" />
               Лог от парсването
             </button>
+            <button
+              onClick={() => setActiveTab('settings')}
+              data-testid="nav-tab-settings"
+              className={`inline-flex items-center gap-2 min-h-[40px] px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
+                activeTab === 'settings'
+                  ? 'bg-amber-500 text-neutral-950 shadow-sm'
+                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
+              }`}
+            >
+              <Settings className="w-4 h-4" />
+              Настройки
+            </button>
           </nav>
         </div>
       </header>
 
       {/* Main View Area */}
       <main>
-        {activeTab === 'catalog' ? <CatalogView /> : <ParseLogView currentUserUid={user?.uid} />}
+        {activeTab === 'catalog' ? (
+          <CatalogView />
+        ) : activeTab === 'parseLogs' ? (
+          <ParseLogView currentUserUid={user?.uid} />
+        ) : (
+          <SettingsView />
+        )}
       </main>
     </div>
   );

@@ -13,6 +13,7 @@ vi.mock('firebase/firestore', () => {
     limit: vi.fn((count) => ({ type: 'limit', count })),
     startAfter: vi.fn((...args) => ({ type: 'startAfter', args })),
     documentId: vi.fn(() => '__name__'),
+    where: vi.fn((field, op, value) => ({ type: 'where', field, op, value })),
     Timestamp: {
       fromDate: vi.fn((date: Date) => ({
         toDate: () => date,
@@ -52,9 +53,9 @@ describe('FirestoreCatalogAdapter', () => {
       },
     ];
 
-    vi.mocked(firestoreModule.getDocs).mockResolvedValueOnce({
-      docs: mockDocs,
-    } as any);
+    vi.mocked(firestoreModule.getDocs)
+      .mockResolvedValueOnce({ docs: [] } as any)
+      .mockResolvedValueOnce({ docs: mockDocs } as any);
 
     const result = await adapter.getCatalogPage({ pageSize: 10 });
 
@@ -90,6 +91,42 @@ describe('FirestoreCatalogAdapter', () => {
     expect(result.nextCursor).toBeNull();
   });
 
+  it('getCatalogPage queries titles in the last 5 days when no cursor is provided and items exist', async () => {
+    const mockDate = new Date('2026-08-07T10:00:00Z');
+    const mockDocs = [
+      {
+        id: 'tt002',
+        data: () => ({
+          title: 'Recent Movie',
+          normalizedTitle: 'recent movie',
+          year: 2026,
+          mediaType: 'movie',
+          firstSeenAt: { toDate: () => mockDate },
+          lastSeenAt: { toDate: () => mockDate },
+          updatedAt: { toDate: () => mockDate },
+        }),
+      },
+    ];
+
+    vi.mocked(firestoreModule.getDocs).mockResolvedValueOnce({
+      docs: mockDocs,
+    } as any);
+
+    const result = await adapter.getCatalogPage({ pageSize: 10 });
+
+    expect(firestoreModule.collection).toHaveBeenCalledWith(mockDb, 'titles');
+    expect(firestoreModule.where).toHaveBeenCalledWith('lastSeenAt', '>=', expect.any(Object));
+    expect(firestoreModule.orderBy).toHaveBeenCalledWith('lastSeenAt', 'desc');
+    expect(firestoreModule.orderBy).toHaveBeenCalledWith('__name__', 'desc');
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].title).toBe('Recent Movie');
+    expect(result.hasMore).toBe(true);
+    expect(result.nextCursor).toEqual({
+      lastSeenAt: mockDate,
+      id: 'tt002',
+    });
+  });
+
   it('getCatalogPage passes cursor and computes nextCursor when page is full', async () => {
     const mockDate1 = new Date('2026-08-01T10:00:00Z');
     const mockDate2 = new Date('2026-07-31T10:00:00Z');
@@ -99,6 +136,7 @@ describe('FirestoreCatalogAdapter', () => {
         data: () => ({
           title: 'Movie 1',
           lastSeenAt: { toDate: () => mockDate1 },
+          firstSeenAt: { toDate: () => mockDate1 },
         }),
       },
       {
@@ -106,6 +144,7 @@ describe('FirestoreCatalogAdapter', () => {
         data: () => ({
           title: 'Movie 2',
           lastSeenAt: { toDate: () => mockDate2 },
+          firstSeenAt: { toDate: () => mockDate2 },
         }),
       },
     ];

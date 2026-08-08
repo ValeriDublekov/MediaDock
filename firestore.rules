@@ -18,17 +18,16 @@ service cloud.firestore {
     }
 
     match /titles/{titleId} {
-      allow read: if isAllowlisted();
-      allow write: if false;
+      allow read, write: if isAllowlisted();
       
       match /occurrences/{occurrenceId} {
         allow read: if isAllowlisted();
-        allow write: if false;
+        allow write: if isAllowlisted();
       }
     }
     
     match /omdbCache/{cacheId} {
-      allow read, write: if false;
+      allow read, write: if isAllowlisted();
     }
     
     match /scanRuns/{runId} {

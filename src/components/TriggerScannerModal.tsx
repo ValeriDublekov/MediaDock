@@ -13,6 +13,7 @@ const STORAGE_KEYS = {
   WORKFLOW: 'movies_feed_gh_workflow',
   REF: 'movies_feed_gh_ref',
   FORCE_DAYS: 'movies_feed_gh_force_days',
+  OMDB_API_KEY: 'movies_feed_omdb_api_key',
 };
 
 export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
@@ -27,6 +28,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
   const [ref, setRef] = useState<string>('main');
   const [dryRun, setDryRun] = useState<boolean>(false);
   const [forceDays, setForceDays] = useState<string>('0');
+  const [omdbApiKey, setOmdbApiKey] = useState<string>('');
 
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<{
@@ -54,6 +56,11 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     const savedRef = localStorage.getItem(STORAGE_KEYS.REF) || 'main';
     const savedForceDays =
       localStorage.getItem(STORAGE_KEYS.FORCE_DAYS) || '0';
+    const savedOmdbApiKey =
+      localStorage.getItem(STORAGE_KEYS.OMDB_API_KEY) ||
+      import.meta.env.VITE_OMDB_API_KEY ||
+      import.meta.env.OMDB_API_KEY ||
+      '';
 
     setOwner(savedOwner);
     setRepo(savedRepo);
@@ -61,6 +68,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     setWorkflow(savedWorkflow);
     setRef(savedRef);
     setForceDays(savedForceDays);
+    setOmdbApiKey(savedOmdbApiKey);
   }, []);
 
   const handleSaveSettings = () => {
@@ -70,6 +78,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     localStorage.setItem(STORAGE_KEYS.WORKFLOW, workflow.trim());
     localStorage.setItem(STORAGE_KEYS.REF, ref.trim());
     localStorage.setItem(STORAGE_KEYS.FORCE_DAYS, forceDays.trim());
+    localStorage.setItem(STORAGE_KEYS.OMDB_API_KEY, omdbApiKey.trim());
   };
 
   const executeDispatch = async (
@@ -442,6 +451,21 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
                     className="w-full px-3 py-1.5 bg-neutral-950 border border-neutral-800 rounded-lg text-xs text-neutral-300 font-mono focus:outline-none focus:border-amber-500"
                   />
                 </div>
+              </div>
+
+              {/* OMDb API Key */}
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                  OMDb API Key (за ръчен рефреш)
+                </label>
+                <input
+                  type="password"
+                  value={omdbApiKey}
+                  onChange={(e) => setOmdbApiKey(e.target.value)}
+                  placeholder="напр. xxxxxxxx"
+                  data-testid="input-omdb-api-key"
+                  className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500 font-mono"
+                />
               </div>
 
               {/* Force Scan Days Selector */}
