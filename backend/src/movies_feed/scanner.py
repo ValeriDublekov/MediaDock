@@ -56,6 +56,50 @@ class ScannerService:
         self.run_repo = run_repo
         self.parse_log_repo = parse_log_repo
         self.now = now or datetime.datetime.now(datetime.timezone.utc)
+        self._reset_session_caches()
+
+    def _reset_session_caches(self) -> None:
+        self._session_cache_entries: Dict[str, Optional[OmdbCacheEntry]] = {}
+        self._session_titles: Dict[str, Optional[Title]] = {}
+        self._session_occurrences: Dict[tuple, Optional[Occurrence]] = {}
+
+    def _get_cache_entry(self, cache_key: str) -> Optional[OmdbCacheEntry]:
+        if cache_key in self._session_cache_entries:
+            return self._session_cache_entries[cache_key]
+        entry = self.cache_repo.get(cache_key)
+        self._session_cache_entries[cache_key] = entry
+        return entry
+
+    def _set_cache_entry(self, cache_key: str, entry: OmdbCacheEntry) -> None:
+        self._session_cache_entries[cache_key] = entry
+        if not self.config.is_dry_run:
+            self.cache_repo.set(cache_key, entry)
+
+    def _get_title(self, title_id: str) -> Optional[Title]:
+        if title_id in self._session_titles:
+            return self._session_titles[title_id]
+        title = self.title_repo.get(title_id)
+        self._session_titles[title_id] = title
+        return title
+
+    def _upsert_title(self, title_id: str, title: Title) -> None:
+        self._session_titles[title_id] = title
+        if not self.config.is_dry_run:
+            self.title_repo.upsert(title_id, title)
+
+    def _get_occurrence(self, title_id: str, occurrence_id: str) -> Optional[Occurrence]:
+        key = (title_id, occurrence_id)
+        if key in self._session_occurrences:
+            return self._session_occurrences[key]
+        occ = self.occurrence_repo.get(title_id, occurrence_id)
+        self._session_occurrences[key] = occ
+        return occ
+
+    def _upsert_occurrence(self, title_id: str, occurrence_id: str, occ: Occurrence) -> None:
+        key = (title_id, occurrence_id)
+        self._session_occurrences[key] = occ
+        if not self.config.is_dry_run:
+            self.occurrence_repo.upsert(title_id, occurrence_id, occ)
 
     def is_excluded(self, countries: List[str], genres: List[str]) -> bool:
         excluded_country_set = {c.lower() for c in self.config.excluded_countries}
@@ -101,6 +145,7 @@ class ScannerService:
         self.parse_log_repo.add(log)
 
     def run(self, run_id: str) -> ScanRun:
+        self._reset_session_caches()
         run = ScanRun(
             started_at=self.now,
             finished_at=None,
@@ -218,7 +263,7 @@ class ScannerService:
             return
 
         cache_key = get_cache_key(parsed.title, lookup_year)
-        cache_entry = self.cache_repo.get(cache_key)
+        cache_entry = self._get_cache_entry(cache_key)
 
         omdb_payload = None
         omdb_result = None
@@ -296,8 +341,7 @@ class ScannerService:
                 fetched_at=self.now,
                 expires_at=self.now + datetime.timedelta(days=self.config.cache_ttl_days),
             )
-            if not self.config.is_dry_run:
-                self.cache_repo.set(cache_key, new_cache)
+            self._set_cache_entry(cache_key, new_cache)
 
             if status != "found":
                 run.ignored_entries += 1
@@ -392,15 +436,15 @@ class ScannerService:
 
         # Upsert
         if not self.config.is_dry_run:
-            existing_title = self.title_repo.get(title_id)
+            existing_title = self._get_title(title_id)
             if not existing_title:
                 run.titles_created += 1
-            self.title_repo.upsert(title_id, title_record)
+            self._upsert_title(title_id, title_record)
 
-            existing_occ = self.occurrence_repo.get(title_id, occurrence_id)
+            existing_occ = self._get_occurrence(title_id, occurrence_id)
             if not existing_occ:
                 run.occurrences_created += 1
-            self.occurrence_repo.upsert(title_id, occurrence_id, occurrence_record)
+            self._upsert_occurrence(title_id, occurrence_id, occurrence_record)
         else:
             # Simulate creation tracking for dry run without storing
             run.titles_created += 1

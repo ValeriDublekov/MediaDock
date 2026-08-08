@@ -228,3 +228,42 @@ class TestScanner(unittest.TestCase):
         self.assertEqual(occ1, occ2)
         self.assertEqual(run2.titles_created, 0)
         self.assertEqual(run2.occurrences_created, 0)
+
+    def test_session_caching_reduces_repository_get_calls(self):
+        rss_feeds = {
+            "test_feed": {
+                "name": "test_feed",
+                "url": "backend/tests/fixtures/movies_feed.atom",
+                "type": "movie"
+            }
+        }
+        config = ScannerConfig(
+            rss_feeds=rss_feeds,
+            video_settings={},
+            excluded_countries=[],
+            excluded_genres=[],
+            omdb_limit=100
+        )
+        omdb = MockOmdbClient({"four rooms": self.valid_movie})
+
+        # Track get calls
+        cache_get_count = 0
+        original_cache_get = self.cache_repo.get
+
+        def counting_cache_get(key: str):
+            nonlocal cache_get_count
+            cache_get_count += 1
+            return original_cache_get(key)
+
+        self.cache_repo.get = counting_cache_get
+
+        scanner = self.create_scanner(config, omdb)
+        run1 = scanner.run("run1")
+
+        entries_count = run1.entries_seen
+        self.assertGreater(entries_count, 1)
+
+        # Without session caching, cache_repo.get would be called once per entry.
+        # With session caching, unique keys are cached in memory during run, so calls to repository are <= unique keys.
+        self.assertLess(cache_get_count, entries_count)
+
