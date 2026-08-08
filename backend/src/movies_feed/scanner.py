@@ -20,6 +20,8 @@ from .repository import (
     ParseLogRepository,
     ScanRunRepository,
     TitleRepository,
+    merge_occurrences,
+    merge_titles,
 )
 from .rutracker_parser import iter_feed_definitions, parse_rutracker_title
 
