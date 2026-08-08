@@ -325,7 +325,7 @@ class TestScanner(unittest.TestCase):
                 <rss version="2.0">
                     <channel>
                         <item>
-                            <title>Unfound Title (2020) WEB-DL 1080p</title>
+                            <title>Unfound Title (2020) [1080p]</title>
                             <link>https://example.com/torrent/1</link>
                             <guid>guid1</guid>
                         </item>

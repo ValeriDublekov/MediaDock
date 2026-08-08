@@ -4,3 +4,5 @@ Version: 0.1.0
 Summary: MediaDock backend scanner and title parser
 Requires-Python: >=3.10
 Requires-Dist: feedparser>=6.0.0
+Requires-Dist: requests>=2.25.0
+Requires-Dist: firebase-admin>=6.0.0
