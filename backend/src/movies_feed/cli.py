@@ -12,6 +12,7 @@ from .firestore_repository import (
     FirestoreParseLogRepository,
     FirestoreScanRunRepository,
     FirestoreTitleRepository,
+    FirestoreManualMappingRepository,
     get_firestore_client,
 )
 from .omdb_client import OmdbClient
@@ -22,6 +23,7 @@ from .repository import (
     FakeParseLogRepository,
     FakeScanRunRepository,
     FakeTitleRepository,
+    FakeManualMappingRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,6 +87,7 @@ def main():
         cache_repo = FakeOmdbCacheRepository()
         run_repo = FakeScanRunRepository()
         parse_log_repo = FakeParseLogRepository()
+        manual_mapping_repo = FakeManualMappingRepository()
     else:
         db = get_firestore_client()
         title_repo = FirestoreTitleRepository(db)
@@ -92,6 +95,7 @@ def main():
         cache_repo = FirestoreOmdbCacheRepository(db)
         run_repo = FirestoreScanRunRepository(db)
         parse_log_repo = FirestoreParseLogRepository(db)
+        manual_mapping_repo = FirestoreManualMappingRepository(db)
 
     scanner = ScannerService(
         config=config,
@@ -101,6 +105,7 @@ def main():
         cache_repo=cache_repo,
         run_repo=run_repo,
         parse_log_repo=parse_log_repo,
+        manual_mapping_repo=manual_mapping_repo,
     )
 
     run_id = str(uuid.uuid4())
