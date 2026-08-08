@@ -112,6 +112,24 @@ def _parse_year(year_str: Optional[str]) -> Optional[int]:
     return None
 
 
+def is_year_in_series_period(raw_year_str: Optional[str], target_year: int) -> bool:
+    if not raw_year_str or raw_year_str == "N/A":
+        return True
+    normalized = raw_year_str.replace("–", "-").replace("—", "-").strip()
+    years = [int(y) for y in re.findall(r"\b\d{4}\b", normalized)]
+    if not years:
+        return True
+    start_year = years[0]
+    if "-" in normalized:
+        if len(years) >= 2:
+            end_year = years[1]
+        else:
+            end_year = 9999
+    else:
+        end_year = start_year
+    return start_year <= target_year <= end_year
+
+
 def _parse_float(val: Optional[str]) -> Optional[float]:
     if not val or val == "N/A":
         return None
@@ -213,45 +231,71 @@ class OmdbClient:
 
         payload = None
 
-        # 1. Primary lookup: Title + Year + Media Type (if year is specified)
-        if year:
-            try:
-                data = self._make_request(title, year, media_type)
-                if data.get("Response") == "True":
-                    resp_type = data.get("Type", "").lower()
-                    if not media_type or media_type.lower() not in ("movie", "series") or resp_type == media_type.lower():
-                        payload = data
-                else:
-                    err_msg = data.get("Error", "")
-                    if "limit reached" in err_msg.lower():
-                        raise OmdbLimitReachedError("Daily API limit reached")
-            except OmdbTransportError:
-                raise
-
-        # 2. Fallback lookup: Title + Media Type (without year, if media_type is specified)
-        if payload is None and media_type and media_type.lower() in ("movie", "series"):
-            data = self._make_request(title, media_type=media_type)
+        # Special handling for series:
+        # OMDb 'y' param filters series by start year. Multi-season torrent titles often use a season release year
+        # (e.g. 2012 for Mad Men Season 5, which started in 2007). Querying OMDb with y=2012 either fails or returns
+        # an incorrect single-year title (e.g., "Modern Mad Men").
+        # Algorithm:
+        # 1. Search OMDb by title and type="series" without 'y'.
+        # 2. Check if the returned series broadcasting period (Year) covers the requested year.
+        if media_type and media_type.lower() == "series":
+            data = self._make_request(title, media_type="series")
             if data.get("Response") == "True":
                 resp_type = data.get("Type", "").lower()
-                if resp_type == media_type.lower():
-                    payload = data
-            else:
-                err_msg = data.get("Error", "")
-                if "limit reached" in err_msg.lower():
-                    raise OmdbLimitReachedError("Daily API limit reached")
-
-        # 3. Fallback lookup: Title only (without year or media_type filter)
-        if payload is None:
-            data = self._make_request(title)
-            if data.get("Response") == "True":
-                payload = data
+                if resp_type == "series":
+                    req_year = _parse_year(year) if year else None
+                    if req_year is None or is_year_in_series_period(data.get("Year"), req_year):
+                        payload = data
+                    else:
+                        raise OmdbNoMatchError(
+                            f"OMDb lookup failed: series broadcasting period '{data.get('Year')}' does not match requested year '{year}'"
+                        )
             else:
                 err_msg = data.get("Error", "")
                 if "limit reached" in err_msg.lower():
                     raise OmdbLimitReachedError("Daily API limit reached")
                 raise OmdbNoMatchError(f"OMDb lookup failed: {err_msg}")
 
-        # 4. Return typed normalized result
+        if payload is None and (not media_type or media_type.lower() != "series"):
+            # 1. Primary lookup: Title + Year + Media Type (if year is specified)
+            if year:
+                try:
+                    data = self._make_request(title, year, media_type)
+                    if data.get("Response") == "True":
+                        resp_type = data.get("Type", "").lower()
+                        if not media_type or media_type.lower() not in ("movie", "series") or resp_type == media_type.lower():
+                            payload = data
+                    else:
+                        err_msg = data.get("Error", "")
+                        if "limit reached" in err_msg.lower():
+                            raise OmdbLimitReachedError("Daily API limit reached")
+                except OmdbTransportError:
+                    raise
+
+            # 2. Fallback lookup: Title + Media Type (without year, if media_type is specified)
+            if payload is None and media_type and media_type.lower() in ("movie", "series"):
+                data = self._make_request(title, media_type=media_type)
+                if data.get("Response") == "True":
+                    resp_type = data.get("Type", "").lower()
+                    if resp_type == media_type.lower():
+                        payload = data
+                else:
+                    err_msg = data.get("Error", "")
+                    if "limit reached" in err_msg.lower():
+                        raise OmdbLimitReachedError("Daily API limit reached")
+
+            # 3. Fallback lookup: Title only (without year or media_type filter)
+            if payload is None:
+                data = self._make_request(title)
+                if data.get("Response") == "True":
+                    payload = data
+                else:
+                    err_msg = data.get("Error", "")
+                    if "limit reached" in err_msg.lower():
+                        raise OmdbLimitReachedError("Daily API limit reached")
+                    raise OmdbNoMatchError(f"OMDb lookup failed: {err_msg}")
+
+        # Return typed normalized result
         return self._normalize_payload(payload)
 
     def _normalize_payload(self, data: Dict[str, Any]) -> OmdbMovieResult:

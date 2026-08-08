@@ -16,6 +16,7 @@ from movies_feed.omdb_client import (
     _parse_year,
     _parse_float,
     _parse_int_with_commas,
+    is_year_in_series_period,
 )
 
 
@@ -241,39 +242,69 @@ class OmdbClientTests(unittest.TestCase):
         self.assertIsNone(_parse_int_with_commas("N/A"))
         self.assertEqual(_parse_int_with_commas("1,234,567"), 1234567)
 
-    def test_series_season_year_fallback_finds_series(self):
-        # 1st request with season year 2026 fails, 2nd request with type=series and no year succeeds
-        responses = [
-            {"Response": "False", "Error": "Series not found!"},
-            {
-                "Response": "True",
-                "Title": "Silo",
-                "Year": "2023–",
-                "imdbID": "tt14688458",
-                "Type": "series",
-                "Genre": "Drama, Sci-Fi"
-            }
-        ]
-        transport = MockHttpTransport(responses)
+    def test_is_year_in_series_period(self):
+        # Range 2007-2015
+        self.assertTrue(is_year_in_series_period("2007–2015", 2012))
+        self.assertTrue(is_year_in_series_period("2007-2015", 2007))
+        self.assertTrue(is_year_in_series_period("2007–2015", 2015))
+        self.assertFalse(is_year_in_series_period("2007–2015", 2005))
+        self.assertFalse(is_year_in_series_period("2007–2015", 2018))
+
+        # Ongoing series 2019–
+        self.assertTrue(is_year_in_series_period("2019–", 2026))
+        self.assertFalse(is_year_in_series_period("2019–", 2015))
+
+        # Single year 2012
+        self.assertTrue(is_year_in_series_period("2012", 2012))
+        self.assertFalse(is_year_in_series_period("2012", 2014))
+
+        # N/A or empty
+        self.assertTrue(is_year_in_series_period("N/A", 2012))
+        self.assertTrue(is_year_in_series_period("", 2012))
+
+    def test_series_matching_mad_men_season_year(self):
+        # For series, search is done without 'y' param first to avoid OMDb matching single-year wrong shows like "Modern Mad Men".
+        # Mad Men broadcasting period (2007–2015) covers requested season year 2012.
+        response = {
+            "Response": "True",
+            "Title": "Mad Men",
+            "Year": "2007–2015",
+            "imdbID": "tt0804497",
+            "Type": "series",
+            "Genre": "Drama"
+        }
+        transport = MockHttpTransport([response])
         client = OmdbClient("secret_key_12345", transport=transport)
 
-        result = client.get_movie_info("Silo", "2026", media_type="series")
+        result = client.get_movie_info("Mad Men", "2012", media_type="series")
 
-        self.assertEqual(result.title, "Silo")
-        self.assertEqual(result.year, 2023)
+        self.assertEqual(result.title, "Mad Men")
+        self.assertEqual(result.year, 2007)
         self.assertEqual(result.media_type, "series")
-        self.assertEqual(result.imdb_id, "tt14688458")
+        self.assertEqual(result.imdb_id, "tt0804497")
 
-        # Verify transport requests
-        self.assertEqual(len(transport.requests), 2)
-        # 1st request: title + year + type=series
-        self.assertEqual(transport.requests[0][1]["t"], "Silo")
-        self.assertEqual(transport.requests[0][1]["y"], "2026")
-        self.assertEqual(transport.requests[0][1]["type"], "series")
-        # 2nd request: title + type=series (without year)
-        self.assertEqual(transport.requests[1][1]["t"], "Silo")
-        self.assertNotIn("y", transport.requests[1][1])
-        self.assertEqual(transport.requests[1][1]["type"], "series")
+        # Verify only 1 request was made and it did NOT pass y=2012
+        self.assertEqual(len(transport.requests), 1)
+        url, params, timeout = transport.requests[0]
+        self.assertEqual(params["t"], "Mad Men")
+        self.assertEqual(params["type"], "series")
+        self.assertNotIn("y", params)
+
+    def test_series_year_out_of_range_raises_no_match(self):
+        # Searching for Mad Men with year 1990 (outside 2007-2015) raises OmdbNoMatchError
+        response = {
+            "Response": "True",
+            "Title": "Mad Men",
+            "Year": "2007–2015",
+            "imdbID": "tt0804497",
+            "Type": "series",
+            "Genre": "Drama"
+        }
+        transport = MockHttpTransport([response])
+        client = OmdbClient("secret_key_12345", transport=transport)
+
+        with self.assertRaises(OmdbNoMatchError):
+            client.get_movie_info("Mad Men", "1990", media_type="series")
 
 
 if __name__ == "__main__":
