@@ -11,6 +11,11 @@ on:
         type: boolean
         required: false
         default: false
+      force_days:
+        description: "Force scan entries N days back (0 = disabled)"
+        type: string
+        required: false
+        default: "0"
 
 permissions:
   contents: read
@@ -55,6 +60,9 @@ jobs:
         run: |
           EXTRA_ARGS=""
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            EXTRA_ARGS="--dry-run"
+            EXTRA_ARGS="$EXTRA_ARGS --dry-run"
+          fi
+          if [ -n "${{ github.event.inputs.force_days }}" ] && [ "${{ github.event.inputs.force_days }}" != "0" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --force-days ${{ github.event.inputs.force_days }}"
           fi
           python -m movies_feed.cli $EXTRA_ARGS

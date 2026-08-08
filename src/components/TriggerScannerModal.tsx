@@ -12,6 +12,7 @@ const STORAGE_KEYS = {
   PAT: 'movies_feed_gh_pat',
   WORKFLOW: 'movies_feed_gh_workflow',
   REF: 'movies_feed_gh_ref',
+  FORCE_DAYS: 'movies_feed_gh_force_days',
 };
 
 export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
@@ -25,6 +26,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
   const [workflow, setWorkflow] = useState<string>('scanner.yml');
   const [ref, setRef] = useState<string>('main');
   const [dryRun, setDryRun] = useState<boolean>(false);
+  const [forceDays, setForceDays] = useState<string>('0');
 
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<{
@@ -50,12 +52,15 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     const savedWorkflow =
       localStorage.getItem(STORAGE_KEYS.WORKFLOW) || 'scanner.yml';
     const savedRef = localStorage.getItem(STORAGE_KEYS.REF) || 'main';
+    const savedForceDays =
+      localStorage.getItem(STORAGE_KEYS.FORCE_DAYS) || '0';
 
     setOwner(savedOwner);
     setRepo(savedRepo);
     setPat(savedPat);
     setWorkflow(savedWorkflow);
     setRef(savedRef);
+    setForceDays(savedForceDays);
   }, []);
 
   const handleSaveSettings = () => {
@@ -64,6 +69,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     localStorage.setItem(STORAGE_KEYS.PAT, pat.trim());
     localStorage.setItem(STORAGE_KEYS.WORKFLOW, workflow.trim());
     localStorage.setItem(STORAGE_KEYS.REF, ref.trim());
+    localStorage.setItem(STORAGE_KEYS.FORCE_DAYS, forceDays.trim());
   };
 
   const executeDispatch = async (
@@ -72,7 +78,8 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     targetPat: string,
     targetWorkflow: string,
     targetRef: string,
-    isDryRun: boolean
+    isDryRun: boolean,
+    targetForceDays: string
   ) => {
     setIsSubmitting(true);
     setToastMessage({ type: null, text: '' });
@@ -91,6 +98,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
           ref: targetRef,
           inputs: {
             dry_run: isDryRun,
+            force_days: targetForceDays,
           },
         }),
       });
@@ -151,7 +159,8 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
       trimmedPat,
       workflow.trim() || 'scanner.yml',
       ref.trim() || 'main',
-      dryRun
+      dryRun,
+      forceDays
     );
   };
 
@@ -185,7 +194,8 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
       trimmedPat,
       workflow.trim() || 'scanner.yml',
       ref.trim() || 'main',
-      dryRun
+      dryRun,
+      forceDays
     );
   };
 
@@ -432,6 +442,28 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
                     className="w-full px-3 py-1.5 bg-neutral-950 border border-neutral-800 rounded-lg text-xs text-neutral-300 font-mono focus:outline-none focus:border-amber-500"
                   />
                 </div>
+              </div>
+
+              {/* Force Scan Days Selector */}
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                  Форсирано сканиране (дни назад)
+                </label>
+                <select
+                  value={forceDays}
+                  onChange={(e) => setForceDays(e.target.value)}
+                  data-testid="select-force-days"
+                  className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
+                >
+                  <option value="0">0 (Стандартно - нови записи)</option>
+                  <option value="1">1 ден назад (презаписва & парсва наново)</option>
+                  <option value="2">2 дни назад (презаписва & парсва наново)</option>
+                  <option value="3">3 дни назад</option>
+                  <option value="7">7 дни назад</option>
+                </select>
+                <p className="text-[11px] text-neutral-400 mt-1">
+                  Преразглежда и парсва филмите публикувани през последните N дни (ползва OMDb кеш при възможност).
+                </p>
               </div>
 
               {/* Dry Run Checkbox */}

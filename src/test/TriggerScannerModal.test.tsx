@@ -35,6 +35,7 @@ describe('TriggerScannerModal', () => {
     localStorage.setItem('movies_feed_gh_owner', 'testowner');
     localStorage.setItem('movies_feed_gh_repo', 'testrepo');
     localStorage.setItem('movies_feed_gh_pat', 'ghp_savedtoken');
+    localStorage.setItem('movies_feed_gh_force_days', '2');
 
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       status: 204,
@@ -55,6 +56,13 @@ describe('TriggerScannerModal', () => {
           headers: expect.objectContaining({
             Authorization: 'Bearer ghp_savedtoken',
           }),
+          body: JSON.stringify({
+            ref: 'main',
+            inputs: {
+              dry_run: false,
+              force_days: '2',
+            },
+          }),
         })
       );
     });
@@ -65,6 +73,19 @@ describe('TriggerScannerModal', () => {
         'Сканирането е стартирано успешно в GitHub Actions!'
       );
     });
+  });
+
+  it('allows selecting force_days in settings modal', () => {
+    render(<TriggerScannerModal />);
+
+    fireEvent.click(screen.getByTestId('scanner-settings-button'));
+
+    const select = screen.getByTestId('select-force-days') as HTMLSelectElement;
+    expect(select).toBeInTheDocument();
+    expect(select.value).toBe('0');
+
+    fireEvent.change(select, { target: { value: '2' } });
+    expect(select.value).toBe('2');
   });
 
   it('opens modal if credentials are missing on 1-click trigger', async () => {

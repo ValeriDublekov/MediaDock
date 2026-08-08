@@ -38,6 +38,16 @@ class ScannerConfig:
     omdb_limit: int = 50
     cache_ttl_days: int = 30
     trigger: str = "manual"
+    force_days: int = 0
+
+def _get_entry_datetime(entry: Any) -> Optional[datetime.datetime]:
+    parsed_time = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+    if parsed_time:
+        try:
+            return datetime.datetime(*parsed_time[:6], tzinfo=datetime.timezone.utc)
+        except Exception:
+            return None
+    return None
 
 class ScannerService:
     def __init__(
@@ -340,6 +350,14 @@ class ScannerService:
         feed_entry_id = getattr(entry, "id", None)
         torrent_url = getattr(entry, "link", "")
         feed_name = feed_def.get("name", "")
+
+        if self.config.force_days > 0:
+            entry_dt = _get_entry_datetime(entry)
+            if entry_dt is not None:
+                cutoff = self.now - datetime.timedelta(days=self.config.force_days)
+                if entry_dt < cutoff:
+                    run.ignored_entries += 1
+                    return
 
         if not raw_title:
             run.ignored_entries += 1
