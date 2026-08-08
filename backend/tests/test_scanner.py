@@ -2,7 +2,7 @@ import datetime
 import unittest
 from typing import Any, Dict
 
-from movies_feed.models import OmdbCacheEntry, Title, Occurrence, ScanRun
+from movies_feed.models import ManualMapping, OmdbCacheEntry, Title, Occurrence, ScanRun
 from movies_feed.omdb_client import OmdbMovieResult, OmdbLimitReachedError, OmdbTransportError, OmdbNoMatchError, OmdbClient, HttpTransport
 from movies_feed.repository import (
     FakeTitleRepository,
@@ -10,6 +10,7 @@ from movies_feed.repository import (
     FakeOmdbCacheRepository,
     FakeScanRunRepository,
     FakeParseLogRepository,
+    FakeManualMappingRepository,
 )
 from movies_feed.scanner import ScannerConfig, ScannerService
 
@@ -33,6 +34,15 @@ class MockOmdbClient(OmdbClient):
         
         raise OmdbNoMatchError("Not found")
 
+    def get_by_imdb_id(self, imdb_id: str) -> OmdbMovieResult:
+        self.request_count += 1
+        for k, v in self.responses.items():
+            if k.lower() == imdb_id.lower():
+                if isinstance(v, Exception):
+                    raise v
+                return v
+        raise OmdbNoMatchError(f"IMDb ID {imdb_id} not found")
+
     def _normalize_payload(self, payload: Dict[str, Any]) -> OmdbMovieResult:
         return OmdbMovieResult(
             title=payload.get("Title", ""),
@@ -54,6 +64,7 @@ class TestScanner(unittest.TestCase):
         self.cache_repo = FakeOmdbCacheRepository()
         self.run_repo = FakeScanRunRepository()
         self.parse_log_repo = FakeParseLogRepository()
+        self.manual_mapping_repo = FakeManualMappingRepository()
 
         self.valid_movie = OmdbMovieResult(
             title="The Matrix", year=1999, imdb_id="tt0133093",
@@ -86,6 +97,7 @@ class TestScanner(unittest.TestCase):
             cache_repo=self.cache_repo,
             run_repo=self.run_repo,
             parse_log_repo=self.parse_log_repo,
+            manual_mapping_repo=self.manual_mapping_repo,
             now=self.now
         )
 
@@ -293,4 +305,52 @@ class TestScanner(unittest.TestCase):
         # Without session caching, cache_repo.get would be called once per entry.
         # With session caching, unique keys are cached in memory during run, so calls to repository are <= unique keys.
         self.assertLess(cache_get_count, entries_count)
+
+    def test_manual_mapping_processed_and_deleted(self):
+        # Pre-seed manual mapping
+        mapping = ManualMapping(
+            id="manual_1",
+            raw_title="Unfound Title (2020)",
+            imdb_id="tt0133093",
+            created_at=self.now,
+            parsed_title="Unfound Title",
+            parsed_year=2020
+        )
+        self.manual_mapping_repo.set(mapping)
+
+        rss_feeds = {
+            "test_feed": {
+                "name": "test_feed",
+                "feed_url": "mock://feed",
+                "content": """<?xml version="1.0" encoding="UTF-8"?>
+                <rss version="2.0">
+                    <channel>
+                        <item>
+                            <title>Unfound Title (2020) WEB-DL 1080p</title>
+                            <link>https://example.com/torrent/1</link>
+                            <guid>guid1</guid>
+                        </item>
+                    </channel>
+                </rss>"""
+            }
+        }
+        config = ScannerConfig(
+            trigger="manual",
+            is_dry_run=False,
+            rss_feeds=rss_feeds,
+            video_settings={},
+            excluded_countries=[],
+            excluded_genres=[],
+            omdb_limit=100
+        )
+        omdb = MockOmdbClient({"tt0133093": self.valid_movie})
+        scanner = self.create_scanner(config, omdb)
+        
+        run = scanner.run("run_manual_mapping")
+
+        self.assertEqual(run.entries_seen, 1)
+        self.assertEqual(run.titles_created, 1)
+        # Verify manual mapping was deleted from repository after processing
+        remaining_mappings = self.manual_mapping_repo.get_all()
+        self.assertEqual(len(remaining_mappings), 0)
 

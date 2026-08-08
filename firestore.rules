@@ -39,6 +39,10 @@ service cloud.firestore {
       allow read: if isAllowlisted();
       allow write: if false;
     }
+
+    match /manualMappings/{mappingId} {
+      allow read, write: if isAllowlisted();
+    }
     
     match /allowlist/{userId} {
       // Allowlist writes are server-only. Read is own access check only.

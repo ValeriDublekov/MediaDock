@@ -220,6 +220,27 @@ class OmdbClient:
             sanitized_msg = _sanitize_string(str(e), self._api_key)
             raise OmdbTransportError(f"HTTP transport failed: {sanitized_msg}") from e
 
+    def get_by_imdb_id(self, imdb_id: str) -> OmdbMovieResult:
+        if not imdb_id:
+            raise ValueError("IMDb ID must not be empty")
+        params = {
+            "apikey": self._api_key,
+            "i": imdb_id.strip(),
+        }
+        try:
+            data = self._transport.get(self._base_url, params, timeout=self._timeout)
+        except Exception as e:
+            sanitized_msg = _sanitize_string(str(e), self._api_key)
+            raise OmdbTransportError(f"HTTP transport failed: {sanitized_msg}") from e
+
+        if data.get("Response") == "True":
+            return self._normalize_payload(data)
+        else:
+            err_msg = data.get("Error", "")
+            if "limit reached" in err_msg.lower():
+                raise OmdbLimitReachedError("Daily API limit reached")
+            raise OmdbNoMatchError(f"OMDb lookup failed for IMDb ID {imdb_id}: {err_msg}")
+
     def get_movie_info(
         self,
         title: str,

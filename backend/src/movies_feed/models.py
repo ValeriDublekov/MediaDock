@@ -183,3 +183,30 @@ class ParseLog:
             "processedAt": self.processed_at,
         }
 
+
+@dataclass
+class ManualMapping:
+    id: str
+    raw_title: str
+    imdb_id: str
+    created_at: datetime.datetime
+    parsed_title: Optional[str] = None
+    parsed_year: Optional[int] = None
+    created_by: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Converts the ManualMapping model to a camelCase Firestore dictionary."""
+        res = {
+            "id": self.id,
+            "rawTitle": self.raw_title,
+            "imdbId": self.imdb_id,
+            "createdAt": self.created_at,
+        }
+        if self.parsed_title is not None:
+            res["parsedTitle"] = self.parsed_title
+        if self.parsed_year is not None:
+            res["parsedYear"] = self.parsed_year
+        if self.created_by is not None:
+            res["createdBy"] = self.created_by
+        return res
+

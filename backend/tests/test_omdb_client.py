@@ -306,6 +306,34 @@ class OmdbClientTests(unittest.TestCase):
         with self.assertRaises(OmdbNoMatchError):
             client.get_movie_info("Mad Men", "1990", media_type="series")
 
+    def test_get_by_imdb_id_success(self):
+        response = {
+            "Response": "True",
+            "Title": "Interstellar",
+            "Year": "2014",
+            "imdbID": "tt0816692",
+            "Type": "movie",
+            "Genre": "Adventure, Drama, Sci-Fi"
+        }
+        transport = MockHttpTransport([response])
+        client = OmdbClient("secret_key_12345", transport=transport)
+
+        result = client.get_by_imdb_id("tt0816692")
+
+        self.assertEqual(result.title, "Interstellar")
+        self.assertEqual(result.year, 2014)
+        self.assertEqual(result.imdb_id, "tt0816692")
+        self.assertEqual(len(transport.requests), 1)
+        self.assertEqual(transport.requests[0][1]["i"], "tt0816692")
+
+    def test_get_by_imdb_id_not_found(self):
+        response = {"Response": "False", "Error": "Incorrect IMDb ID."}
+        transport = MockHttpTransport([response])
+        client = OmdbClient("secret_key_12345", transport=transport)
+
+        with self.assertRaises(OmdbNoMatchError):
+            client.get_by_imdb_id("tt0000000")
+
 
 if __name__ == "__main__":
     unittest.main()

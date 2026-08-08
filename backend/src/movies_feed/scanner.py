@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import feedparser
 
 from .ids import get_cache_key, get_occurrence_id, get_title_id, normalize_title
-from .models import Occurrence, OmdbCacheEntry, ParseLog, ScanRun, Title
+from .models import ManualMapping, Occurrence, OmdbCacheEntry, ParseLog, ScanRun, Title
 from .omdb_client import (
     OmdbClient,
     OmdbLimitReachedError,
@@ -15,6 +15,7 @@ from .omdb_client import (
     OmdbTransportError,
 )
 from .repository import (
+    ManualMappingRepository,
     OccurrenceRepository,
     OmdbCacheRepository,
     ParseLogRepository,
@@ -59,6 +60,7 @@ class ScannerService:
         cache_repo: OmdbCacheRepository,
         run_repo: ScanRunRepository,
         parse_log_repo: Optional[ParseLogRepository] = None,
+        manual_mapping_repo: Optional[ManualMappingRepository] = None,
         now: Optional[datetime.datetime] = None,
     ):
         self.config = config
@@ -68,6 +70,7 @@ class ScannerService:
         self.cache_repo = cache_repo
         self.run_repo = run_repo
         self.parse_log_repo = parse_log_repo
+        self.manual_mapping_repo = manual_mapping_repo
         self.now = now or datetime.datetime.now(datetime.timezone.utc)
         self._reset_session_caches()
 
@@ -78,6 +81,20 @@ class ScannerService:
         self._pending_parse_logs: List[ParseLog] = []
         self._pending_titles: Dict[str, Title] = {}
         self._pending_occurrences: Dict[tuple[str, str], Occurrence] = {}
+        self._manual_mappings_by_id: Dict[str, ManualMapping] = {}
+        self._manual_mappings_by_raw_title: Dict[str, ManualMapping] = {}
+        self._manual_mappings_by_parsed_title: Dict[str, ManualMapping] = {}
+
+    def _load_manual_mappings(self) -> None:
+        if not self.manual_mapping_repo:
+            return
+        mappings = self.manual_mapping_repo.get_all()
+        for m in mappings:
+            self._manual_mappings_by_id[m.id] = m
+            if m.raw_title:
+                self._manual_mappings_by_raw_title[m.raw_title.strip().lower()] = m
+            if m.parsed_title:
+                self._manual_mappings_by_parsed_title[normalize_title(m.parsed_title)] = m
 
     def _get_cache_entry(self, cache_key: str) -> Optional[OmdbCacheEntry]:
         if cache_key in self._session_cache_entries:
@@ -223,6 +240,7 @@ class ScannerService:
 
     def run(self, run_id: str) -> ScanRun:
         self._reset_session_caches()
+        self._load_manual_mappings()
         run = ScanRun(
             started_at=self.now,
             finished_at=None,
@@ -433,7 +451,68 @@ class ScannerService:
         omdb_payload = None
         omdb_result = None
 
-        if cache_entry and cache_entry.expires_at > self.now:
+        # Check if there is a manual IMDb mapping provided for this title
+        entry_log_id = get_occurrence_id(feed_entry_id, torrent_url)
+        manual_mapping = (
+            self._manual_mappings_by_id.get(entry_log_id)
+            or self._manual_mappings_by_raw_title.get(raw_title.strip().lower())
+            or (self._manual_mappings_by_parsed_title.get(normalize_title(parsed.title)) if parsed.title else None)
+        )
+
+        if manual_mapping and manual_mapping.imdb_id:
+            run.omdb_requests += 1
+            status = "not_found"
+            payload = None
+            t0_omdb = time.perf_counter()
+            try:
+                omdb_result = self.omdb_client.get_by_imdb_id(manual_mapping.imdb_id)
+                status = "found"
+                payload = omdb_result.raw_payload
+                
+                # If successfully retrieved by IMDb ID, delete manual mapping so it isn't reprocessed
+                if not self.config.is_dry_run and self.manual_mapping_repo:
+                    self.manual_mapping_repo.delete(manual_mapping.id)
+                self._manual_mappings_by_id.pop(manual_mapping.id, None)
+                if manual_mapping.raw_title:
+                    self._manual_mappings_by_raw_title.pop(manual_mapping.raw_title.strip().lower(), None)
+                if manual_mapping.parsed_title:
+                    self._manual_mappings_by_parsed_title.pop(normalize_title(manual_mapping.parsed_title), None)
+            except OmdbNoMatchError:
+                pass
+            except OmdbLimitReachedError:
+                raise
+            except OmdbTransportError as e:
+                run.error_count += 1
+                run.error_summary.append(f"OMDb Transport Error for IMDb ID {manual_mapping.imdb_id}: {str(e)}")
+                self._log_parse_entry(
+                    raw_title=raw_title,
+                    feed_name=feed_name,
+                    parsed_successfully=True,
+                    parsed_title=parsed.title,
+                    parsed_year=lookup_year,
+                    omdb_status="error",
+                    ignored=True,
+                    ignore_reason="omdb_error",
+                    feed_entry_id=feed_entry_id,
+                    torrent_url=torrent_url,
+                    section_timings=section_timings,
+                )
+                return
+            finally:
+                section_timings["omdb_api"] += (time.perf_counter() - t0_omdb)
+
+            if status == "found" and omdb_result:
+                new_cache = OmdbCacheEntry(
+                    lookup_title=parsed.title,
+                    lookup_year=lookup_year,
+                    status="found",
+                    payload=payload,
+                    fetched_at=self.now,
+                    expires_at=self.now + datetime.timedelta(days=self.config.cache_ttl_days),
+                )
+                self._set_cache_entry(cache_key, new_cache)
+
+        if omdb_result is None and cache_entry and cache_entry.expires_at > self.now:
             run.cache_hits += 1
             if cache_entry.status != "found" or not cache_entry.payload:
                 run.ignored_entries += 1

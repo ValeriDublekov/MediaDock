@@ -96,6 +96,19 @@ One RSS parse result log entry. Retained for 1 week (7 days).
 | `ignoreReason` | string or null | `no_title`, `omdb_not_found`, `excluded_country_or_genre`, `omdb_limit_reached`, `omdb_error`, `empty_title`, `parse_only`, or null |
 | `processedAt` | Timestamp | Time when entry was processed |
 
+## `manualMappings/{mappingId}`
+
+Manual IMDb ID override mappings provided by allowlisted users for unfound titles. Deleted by scanner once successfully queried and stored.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `rawTitle` | string | Original feed entry name |
+| `imdbId` | string | Valid IMDb ID (e.g., `tt0133093`) |
+| `createdAt` | Timestamp | Creation timestamp |
+| `parsedTitle` | string or null | Parsed title if available |
+| `parsedYear` | number or null | Parsed year if available |
+| `createdBy` | string or null | UID or email of creator |
+
 ## `allowlist/{uid}`
 
 | Field | Type | Notes |
@@ -156,5 +169,6 @@ this contract when introduced.
 | `omdbCache/**` | Denied | Denied | Allowed |
 | `scanRuns/**` | Denied by default | Denied | Allowed |
 | `parseLogs/**` | Allowlisted | Denied | Allowed |
+| `manualMappings/**` | Allowlisted | Allowlisted | Allowed |
 | `allowlist/**` | Own access check only | Denied | Allowed |
 | `users/{uid}/**` | Own validated paths | Future own validated paths | Optional |

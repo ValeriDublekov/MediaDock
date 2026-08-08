@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { ParseLogView } from '../components/ParseLogView';
 import { ParseLog, ParseLogRepository } from '../domain/parseLog';
+import { ManualMapping, ManualMappingRepository } from '../domain/manualMapping';
 
 const mockLogs: ParseLog[] = [
   {
@@ -60,6 +61,25 @@ class MockParseLogRepo implements ParseLogRepository {
   }
 }
 
+class MockManualMappingRepo implements ManualMappingRepository {
+  mappings: ManualMapping[] = [];
+
+  async getManualMappings(): Promise<ManualMapping[]> {
+    return this.mappings;
+  }
+
+  async saveManualMapping(mapping: Omit<ManualMapping, 'createdAt'>): Promise<void> {
+    this.mappings.push({
+      ...mapping,
+      createdAt: new Date(),
+    });
+  }
+
+  async deleteManualMapping(mappingId: string): Promise<void> {
+    this.mappings = this.mappings.filter((m) => m.id !== mappingId);
+  }
+}
+
 describe('ParseLogView', () => {
   it('renders metrics and parse log rows correctly', async () => {
     const repo = new MockParseLogRepo();
@@ -73,7 +93,7 @@ describe('ParseLogView', () => {
     });
 
     expect(screen.getByText('The Matrix 1999 1080p BluRay')).toBeInTheDocument();
-    expect(screen.getByText('Some Obscure Film 2022 HDTV')).toBeInTheDocument();
+    expect(screen.getAllByText('Some Obscure Film 2022 HDTV').length).toBeGreaterThan(0);
   });
 
   it('filters logs by search input', async () => {
@@ -106,5 +126,28 @@ describe('ParseLogView', () => {
     expect(screen.queryByText('The Matrix 1999 1080p BluRay')).not.toBeInTheDocument();
     expect(screen.getByText('Some Obscure Film 2022 HDTV')).toBeInTheDocument();
     expect(screen.getByText('Excluded Movie 2021 BDRip')).toBeInTheDocument();
+  });
+
+  it('allows user to enter and save an IMDb ID for unfound titles', async () => {
+    const parseRepo = new MockParseLogRepo();
+    const mappingRepo = new MockManualMappingRepo();
+
+    render(<ParseLogView repository={parseRepo} manualMappingRepository={mappingRepo} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('metric-unfound')).toHaveTextContent('1');
+      expect(screen.getByTestId('unfound-titles-section')).toBeInTheDocument();
+    });
+
+    const imdbInput = screen.getByTestId('imdb-input-log-2');
+    const saveButton = screen.getByTestId('save-mapping-button-log-2');
+
+    fireEvent.change(imdbInput, { target: { value: 'tt0133093' } });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(mappingRepo.mappings.length).toBe(1);
+      expect(mappingRepo.mappings[0].imdbId).toBe('tt0133093');
+    });
   });
 });

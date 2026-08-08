@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { ParseLog, ParseLogRepository } from '../domain/parseLog';
+import { ManualMapping, ManualMappingRepository } from '../domain/manualMapping';
 import { firestoreParseLogAdapter } from '../adapters/firestoreParseLogAdapter';
+import { firestoreManualMappingAdapter } from '../adapters/firestoreManualMappingAdapter';
 import {
   FileText,
   Search,
@@ -14,51 +16,154 @@ import {
   Clock,
   Globe,
   Tag,
+  Link,
+  Plus,
+  Trash2,
+  Check,
 } from 'lucide-react';
 
 interface ParseLogViewProps {
   repository?: ParseLogRepository;
+  manualMappingRepository?: ManualMappingRepository;
+  currentUserUid?: string;
 }
 
-type FilterTab = 'all' | 'successful' | 'omdb_found' | 'ignored' | 'failed_parse';
+type FilterTab = 'all' | 'unfound' | 'successful' | 'omdb_found' | 'ignored' | 'failed_parse';
 
 export const ParseLogView: React.FC<ParseLogViewProps> = ({
   repository = firestoreParseLogAdapter,
+  manualMappingRepository = firestoreManualMappingAdapter,
+  currentUserUid,
 }) => {
   const [logs, setLogs] = useState<ParseLog[]>([]);
+  const [manualMappings, setManualMappings] = useState<ManualMapping[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<Error | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
 
-  const fetchLogs = useCallback(async () => {
+  // Local state for IMDb input values keyed by log ID
+  const [imdbInputs, setImdbInputs] = useState<Record<string, string>>({});
+  const [savingMappingId, setSavingMappingId] = useState<string | null>(null);
+  const [mappingError, setMappingError] = useState<string | null>(null);
+  const [mappingSuccess, setMappingSuccess] = useState<string | null>(null);
+
+  const fetchLogsAndMappings = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await repository.getRecentParseLogs(150);
-      setLogs(data);
+      const [logsData, mappingsData] = await Promise.all([
+        repository.getRecentParseLogs(150),
+        manualMappingRepository.getManualMappings().catch(() => []),
+      ]);
+      setLogs(logsData);
+      setManualMappings(mappingsData);
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Failed to fetch parse logs'));
     } finally {
       setIsLoading(false);
     }
-  }, [repository]);
+  }, [repository, manualMappingRepository]);
 
   useEffect(() => {
-    fetchLogs();
-  }, [fetchLogs]);
+    fetchLogsAndMappings();
+  }, [fetchLogsAndMappings]);
+
+  // Map of log ID -> ManualMapping if mapping already exists
+  const activeMappingsMap = useMemo(() => {
+    const map = new Map<string, ManualMapping>();
+    manualMappings.forEach((m) => {
+      map.set(m.id, m);
+    });
+    return map;
+  }, [manualMappings]);
 
   const metrics = useMemo(() => {
     const total = logs.length;
     const parsedSuccess = logs.filter((l) => l.parsedSuccessfully).length;
     const omdbFound = logs.filter((l) => l.omdbStatus === 'found').length;
+    const unfoundCount = logs.filter(
+      (l) => l.omdbStatus === 'not_found' || l.ignoreReason === 'omdb_not_found'
+    ).length;
     const ignoredCount = logs.filter((l) => l.ignored).length;
-    return { total, parsedSuccess, omdbFound, ignoredCount };
+    return { total, parsedSuccess, omdbFound, unfoundCount, ignoredCount };
   }, [logs]);
+
+  const unfoundLogs = useMemo(() => {
+    let result = logs.filter(
+      (l) => l.omdbStatus === 'not_found' || l.ignoreReason === 'omdb_not_found'
+    );
+    if (searchTerm) {
+      const lowerSearch = searchTerm.toLowerCase();
+      result = result.filter(
+        (log) =>
+          log.rawTitle.toLowerCase().includes(lowerSearch) ||
+          (log.parsedTitle && log.parsedTitle.toLowerCase().includes(lowerSearch)) ||
+          (log.feedName && log.feedName.toLowerCase().includes(lowerSearch))
+      );
+    }
+    return result;
+  }, [logs, searchTerm]);
+
+  const handleSaveImdbId = async (log: ParseLog) => {
+    const rawInput = imdbInputs[log.id] || '';
+    const cleanedId = rawInput.trim();
+    if (!cleanedId) {
+      setMappingError('Моля, въведете валиден IMDb ID (напр. tt0133093)');
+      return;
+    }
+    // Basic regex check for tt1234567 format
+    if (!/^tt\d{6,10}$/i.test(cleanedId)) {
+      setMappingError('Форматът трябва да бъде "tt" последван от цифри (напр. tt0133093)');
+      return;
+    }
+
+    setSavingMappingId(log.id);
+    setMappingError(null);
+    setMappingSuccess(null);
+
+    try {
+      await manualMappingRepository.saveManualMapping({
+        id: log.id,
+        rawTitle: log.rawTitle,
+        imdbId: cleanedId,
+        parsedTitle: log.parsedTitle,
+        parsedYear: log.parsedYear,
+        createdBy: currentUserUid || null,
+      });
+
+      setMappingSuccess(`Запазен IMDb ID ${cleanedId} за "${log.parsedTitle || log.rawTitle}". Очаква следващо сканиране.`);
+      await fetchLogsAndMappings();
+    } catch (err) {
+      setMappingError(err instanceof Error ? err.message : 'Грешка при запис на IMDb ID');
+    } finally {
+      setSavingMappingId(null);
+    }
+  };
+
+  const handleDeleteMapping = async (mappingId: string) => {
+    setSavingMappingId(mappingId);
+    setMappingError(null);
+    setMappingSuccess(null);
+    try {
+      await manualMappingRepository.deleteManualMapping(mappingId);
+      setMappingSuccess('Мапингът бе изтрит успешно.');
+      await fetchLogsAndMappings();
+    } catch (err) {
+      setMappingError(err instanceof Error ? err.message : 'Грешка при изтриване на мапинга');
+    } finally {
+      setSavingMappingId(null);
+    }
+  };
 
   const filteredLogs = useMemo(() => {
     return logs.filter((log) => {
       // Filter tab
+      if (activeFilter === 'unfound') {
+        if (log.omdbStatus !== 'not_found' && log.ignoreReason !== 'omdb_not_found') {
+          return false;
+        }
+      }
       if (activeFilter === 'successful' && (log.ignored || !log.parsedSuccessfully)) {
         return false;
       }
@@ -167,7 +272,7 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
         </div>
 
         <button
-          onClick={fetchLogs}
+          onClick={fetchLogsAndMappings}
           disabled={isLoading}
           data-testid="refresh-parse-logs-button"
           className="inline-flex items-center justify-center gap-2 min-h-[44px] px-4 py-2 text-sm font-medium text-neutral-200 bg-neutral-800 border border-neutral-700 rounded-lg hover:bg-neutral-700 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer disabled:opacity-50"
@@ -178,7 +283,7 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
       </div>
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <div className="bg-neutral-900 border border-neutral-800 p-4 rounded-xl flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-neutral-800 text-neutral-300 flex items-center justify-center shrink-0">
             <Clock className="w-5 h-5" />
@@ -209,6 +314,19 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
           </div>
         </div>
 
+        <div
+          onClick={() => setActiveFilter('unfound')}
+          className="bg-neutral-900 border border-orange-900/60 p-4 rounded-xl flex items-center gap-3 cursor-pointer hover:bg-neutral-800/80 transition-colors"
+        >
+          <div className="w-10 h-10 rounded-lg bg-orange-950 text-orange-400 flex items-center justify-center shrink-0">
+            <AlertTriangle className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-xs text-orange-300 font-medium">Ненамерени заглавия</div>
+            <div className="text-xl font-bold text-orange-400" data-testid="metric-unfound">{metrics.unfoundCount}</div>
+          </div>
+        </div>
+
         <div className="bg-neutral-900 border border-neutral-800 p-4 rounded-xl flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-amber-950 text-amber-400 flex items-center justify-center shrink-0">
             <Filter className="w-5 h-5" />
@@ -219,6 +337,26 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Mapping Feedback Alerts */}
+      {mappingSuccess && (
+        <div className="flex items-center gap-3 p-4 bg-emerald-950/80 border border-emerald-800 rounded-xl text-sm text-emerald-200">
+          <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+          <span>{mappingSuccess}</span>
+          <button onClick={() => setMappingSuccess(null)} className="ml-auto text-emerald-400 hover:text-emerald-200 text-xs font-semibold">
+            Затвори
+          </button>
+        </div>
+      )}
+      {mappingError && (
+        <div className="flex items-center gap-3 p-4 bg-red-950/80 border border-red-800 rounded-xl text-sm text-red-200">
+          <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
+          <span>{mappingError}</span>
+          <button onClick={() => setMappingError(null)} className="ml-auto text-red-400 hover:text-red-200 text-xs font-semibold">
+            Затвори
+          </button>
+        </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="bg-neutral-900 border border-neutral-800 p-4 rounded-xl space-y-4">
@@ -249,6 +387,18 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
             }`}
           >
             Всички ({logs.length})
+          </button>
+          <button
+            onClick={() => setActiveFilter('unfound')}
+            data-testid="filter-tab-unfound"
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+              activeFilter === 'unfound'
+                ? 'bg-orange-500 text-neutral-950 font-semibold'
+                : 'bg-orange-950/40 text-orange-300 border border-orange-800/60 hover:bg-orange-900/50'
+            }`}
+          >
+            <AlertTriangle className="w-3.5 h-3.5" />
+            Ненамерени заглавия ({metrics.unfoundCount})
           </button>
           <button
             onClick={() => setActiveFilter('successful')}
@@ -296,6 +446,107 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Unfound Titles Dedicated Section */}
+      {unfoundLogs.length > 0 && (activeFilter === 'all' || activeFilter === 'unfound') && (
+        <div className="bg-neutral-900 border border-orange-900/60 rounded-xl p-6 space-y-4" data-testid="unfound-titles-section">
+          <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+            <div className="flex items-center gap-2 text-orange-400">
+              <AlertTriangle className="w-5 h-5 shrink-0" />
+              <h3 className="text-base font-bold text-neutral-100">
+                Секция за ненамерени заглавия (Unfound Titles - Manual IMDb Mapping)
+              </h3>
+            </div>
+            <span className="text-xs px-2.5 py-1 rounded bg-orange-950/80 text-orange-300 border border-orange-800/80 font-medium">
+              {unfoundLogs.length} заглавие(я)
+            </span>
+          </div>
+
+          <p className="text-xs text-neutral-400">
+            Заглавията по-долу не са намерени автоматично в OMDb. Въведете техния IMDb ID (напр. <code className="text-amber-300 font-mono">tt0133093</code>), за да се запишат в Firestore таблицата <code className="text-amber-300 font-mono">manualMappings</code>. При следващото сканиране скенерът ще ги потърси директно по ID и ще ги добави в каталога.
+          </p>
+
+          <div className="space-y-3">
+            {unfoundLogs.map((log) => {
+              const existingMapping = activeMappingsMap.get(log.id);
+              const isSavingThis = savingMappingId === log.id;
+              const currentInputValue = imdbInputs[log.id] !== undefined ? imdbInputs[log.id] : (existingMapping?.imdbId || '');
+
+              return (
+                <div
+                  key={`unfound-${log.id}`}
+                  className="p-4 bg-neutral-950 border border-neutral-800 rounded-lg flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-neutral-700 transition-colors"
+                  data-testid={`unfound-card-${log.id}`}
+                >
+                  <div className="space-y-1 max-w-xl">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-neutral-100">
+                        {log.parsedTitle ? `${log.parsedTitle} ${log.parsedYear ? `(${log.parsedYear})` : ''}` : log.rawTitle}
+                      </span>
+                      <span className="text-[11px] px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 border border-neutral-700">
+                        {log.feedName}
+                      </span>
+                    </div>
+                    <div className="text-xs text-neutral-400 font-mono break-all">
+                      {log.rawTitle}
+                    </div>
+                  </div>
+
+                  {/* Manual Mapping Input or Status */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {existingMapping ? (
+                      <div className="flex items-center gap-2 bg-emerald-950/50 border border-emerald-800/60 p-2 rounded-lg">
+                        <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <div className="text-xs">
+                          <span className="text-neutral-300 font-medium">IMDb ID: </span>
+                          <span className="font-mono text-emerald-300 font-bold">{existingMapping.imdbId}</span>
+                          <span className="text-[11px] text-neutral-400 block">(Чака сканиране)</span>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteMapping(existingMapping.id)}
+                          disabled={isSavingThis}
+                          title="Премахни мапинга"
+                          data-testid={`delete-mapping-button-${log.id}`}
+                          className="p-1.5 text-neutral-400 hover:text-red-400 rounded hover:bg-neutral-800 transition-colors cursor-pointer ml-2"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 w-full md:w-auto">
+                        <div className="relative">
+                          <Link className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500 pointer-events-none" />
+                          <input
+                            type="text"
+                            value={currentInputValue}
+                            onChange={(e) => setImdbInputs((prev) => ({ ...prev, [log.id]: e.target.value }))}
+                            placeholder="tt0133093"
+                            data-testid={`imdb-input-${log.id}`}
+                            className="w-32 md:w-36 pl-8 pr-3 py-1.5 bg-neutral-900 border border-neutral-700 rounded text-xs text-neutral-100 font-mono placeholder-neutral-500 focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+                        <button
+                          onClick={() => handleSaveImdbId(log)}
+                          disabled={isSavingThis || !currentInputValue.trim()}
+                          data-testid={`save-mapping-button-${log.id}`}
+                          className="inline-flex items-center gap-1.5 min-h-[34px] px-3 py-1.5 text-xs font-semibold text-neutral-950 bg-amber-500 hover:bg-amber-400 rounded transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          {isSavingThis ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Plus className="w-3.5 h-3.5" />
+                          )}
+                          Запази IMDb ID
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Loading State */}
       {isLoading && (

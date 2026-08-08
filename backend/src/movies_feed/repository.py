@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import datetime
 from typing import Any, Dict, List, Optional
 
-from .models import OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
+from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
 
 
 def merge_titles(existing: Title, incoming: Title) -> Title:
@@ -269,4 +269,36 @@ class FakeParseLogRepository(ParseLogRepository):
     def list_recent(self, limit: int = 100) -> List[ParseLog]:
         sorted_logs = sorted(self._store.values(), key=lambda l: l.processed_at, reverse=True)
         return sorted_logs[:limit]
+
+
+class ManualMappingRepository(ABC):
+    @abstractmethod
+    def get_all(self) -> List[ManualMapping]:
+        """Lists all active manual mappings."""
+        pass
+
+    @abstractmethod
+    def set(self, mapping: ManualMapping) -> None:
+        """Stores or replaces a manual mapping."""
+        pass
+
+    @abstractmethod
+    def delete(self, mapping_id: str) -> None:
+        """Deletes a manual mapping by ID."""
+        pass
+
+
+class FakeManualMappingRepository(ManualMappingRepository):
+    def __init__(self) -> None:
+        self._store: Dict[str, ManualMapping] = {}
+
+    def get_all(self) -> List[ManualMapping]:
+        return list(self._store.values())
+
+    def set(self, mapping: ManualMapping) -> None:
+        self._store[mapping.id] = mapping
+
+    def delete(self, mapping_id: str) -> None:
+        if mapping_id in self._store:
+            del self._store[mapping_id]
 

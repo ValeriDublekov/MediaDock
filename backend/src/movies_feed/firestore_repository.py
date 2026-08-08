@@ -4,8 +4,9 @@ from typing import Any, Dict, List, Optional
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-from .models import OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
+from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
 from .repository import (
+    ManualMappingRepository,
     OmdbCacheRepository,
     OccurrenceRepository,
     ParseLogRepository,
@@ -141,6 +142,19 @@ def parse_log_from_dict(d: dict) -> ParseLog:
         ignored=d["ignored"],
         ignore_reason=d.get("ignoreReason"),
         processed_at=d["processedAt"],
+    )
+
+
+def manual_mapping_from_dict(d: dict) -> ManualMapping:
+    """Reconstructs a ManualMapping model from a camelCase dictionary retrieved from Firestore."""
+    return ManualMapping(
+        id=d["id"],
+        raw_title=d["rawTitle"],
+        imdb_id=d["imdbId"],
+        created_at=d["createdAt"],
+        parsed_title=d.get("parsedTitle"),
+        parsed_year=d.get("parsedYear"),
+        created_by=d.get("createdBy"),
     )
 
 
@@ -357,4 +371,22 @@ class FirestoreParseLogRepository(ParseLogRepository):
         query = self.collection_ref.order_by("processedAt", direction=firestore.Query.DESCENDING).limit(limit)
         docs = query.stream()
         return [parse_log_from_dict(doc.to_dict()) for doc in docs]
+
+
+class FirestoreManualMappingRepository(ManualMappingRepository):
+    def __init__(self, db: Optional[firestore.firestore.Client] = None) -> None:
+        self.db = db if db is not None else get_firestore_client()
+        self.collection_ref = self.db.collection("manualMappings")
+
+    def get_all(self) -> List[ManualMapping]:
+        docs = self.collection_ref.stream()
+        return [manual_mapping_from_dict(doc.to_dict()) for doc in docs]
+
+    def set(self, mapping: ManualMapping) -> None:
+        doc_ref = self.collection_ref.document(mapping.id)
+        doc_ref.set(mapping.to_dict())
+
+    def delete(self, mapping_id: str) -> None:
+        doc_ref = self.collection_ref.document(mapping_id)
+        doc_ref.delete()
 
