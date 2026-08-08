@@ -321,8 +321,7 @@ class TestScanner(unittest.TestCase):
         rss_feeds = {
             "test_feed": {
                 "name": "test_feed",
-                "feed_url": "mock://feed",
-                "content": """<?xml version="1.0" encoding="UTF-8"?>
+                "url": """<?xml version="1.0" encoding="UTF-8"?>
                 <rss version="2.0">
                     <channel>
                         <item>
@@ -331,7 +330,8 @@ class TestScanner(unittest.TestCase):
                             <guid>guid1</guid>
                         </item>
                     </channel>
-                </rss>"""
+                </rss>""",
+                "type": "movie"
             }
         }
         config = ScannerConfig(

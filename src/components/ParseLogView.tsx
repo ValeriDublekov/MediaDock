@@ -562,7 +562,7 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
           <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
           <span>Грешка при зареждане: {error.message}</span>
           <button
-            onClick={fetchLogs}
+            onClick={fetchLogsAndMappings}
             className="ml-auto min-h-[36px] px-3 py-1.5 text-xs font-medium bg-red-900/50 border border-red-700 rounded-lg hover:bg-red-800 transition-colors cursor-pointer"
           >
             Опитай отново
