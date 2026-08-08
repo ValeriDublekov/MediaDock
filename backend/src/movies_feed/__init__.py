@@ -7,14 +7,16 @@ from .ids import (
     get_title_id,
     normalize_title,
 )
-from .models import OmdbCacheEntry, Occurrence, ScanRun, Title
+from .models import OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
 from .repository import (
     FakeOmdbCacheRepository,
     FakeOccurrenceRepository,
+    FakeParseLogRepository,
     FakeScanRunRepository,
     FakeTitleRepository,
     OmdbCacheRepository,
     OccurrenceRepository,
+    ParseLogRepository,
     ScanRunRepository,
     TitleRepository,
     merge_occurrences,
@@ -24,6 +26,7 @@ from .firestore_repository import (
     FirestoreTitleRepository,
     FirestoreOccurrenceRepository,
     FirestoreOmdbCacheRepository,
+    FirestoreParseLogRepository,
     FirestoreScanRunRepository,
     get_firestore_client,
 )

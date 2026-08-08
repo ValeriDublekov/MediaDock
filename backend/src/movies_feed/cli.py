@@ -9,6 +9,7 @@ from typing import Any, Dict
 from .firestore_repository import (
     FirestoreOccurrenceRepository,
     FirestoreOmdbCacheRepository,
+    FirestoreParseLogRepository,
     FirestoreScanRunRepository,
     FirestoreTitleRepository,
     get_firestore_client,
@@ -18,6 +19,7 @@ from .scanner import ScannerConfig, ScannerService
 from .repository import (
     FakeOccurrenceRepository,
     FakeOmdbCacheRepository,
+    FakeParseLogRepository,
     FakeScanRunRepository,
     FakeTitleRepository,
 )
@@ -37,6 +39,8 @@ def main():
     parser.add_argument("--parse-only", action="store_true", help="Only parse RSS and titles, no OMDb requests or Firestore writes")
     parser.add_argument("--fake-repos", action="store_true", help="Use in-memory repositories instead of Firestore")
     
+    parser.add_argument("--trigger", type=str, default=None, choices=["schedule", "manual", "local"], help="Trigger type (schedule, manual, local)")
+    
     args = parser.parse_args()
 
     config_data = load_config(args.config)
@@ -53,6 +57,14 @@ def main():
 
     omdb_client = OmdbClient(api_key=omdb_api_key if omdb_api_key else "dummy")
 
+    trigger = args.trigger or os.environ.get("SCANNER_TRIGGER")
+    if not trigger:
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+            trigger = "schedule" if event_name == "schedule" else "manual"
+        else:
+            trigger = "local"
+
     config = ScannerConfig(
         rss_feeds=rss_feeds,
         video_settings=video_settings,
@@ -62,7 +74,7 @@ def main():
         is_parse_only=args.parse_only,
         omdb_limit=50,  # can be configurable
         cache_ttl_days=30,
-        trigger="local",
+        trigger=trigger,
     )
 
     if args.fake_repos or args.parse_only:
@@ -70,12 +82,14 @@ def main():
         occ_repo = FakeOccurrenceRepository()
         cache_repo = FakeOmdbCacheRepository()
         run_repo = FakeScanRunRepository()
+        parse_log_repo = FakeParseLogRepository()
     else:
         db = get_firestore_client()
         title_repo = FirestoreTitleRepository(db)
         occ_repo = FirestoreOccurrenceRepository(db)
         cache_repo = FirestoreOmdbCacheRepository(db)
         run_repo = FirestoreScanRunRepository(db)
+        parse_log_repo = FirestoreParseLogRepository(db)
 
     scanner = ScannerService(
         config=config,
@@ -84,6 +98,7 @@ def main():
         occurrence_repo=occ_repo,
         cache_repo=cache_repo,
         run_repo=run_repo,
+        parse_log_repo=parse_log_repo,
     )
 
     run_id = str(uuid.uuid4())

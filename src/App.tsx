@@ -9,6 +9,7 @@ import { firebaseAuthAdapter } from './adapters/firebaseAuthAdapter';
 import { AuthGate } from './components/AuthGate';
 import { CatalogView } from './components/CatalogView';
 import { ParseLogView } from './components/ParseLogView';
+import { TriggerScannerModal } from './components/TriggerScannerModal';
 import { Film, FileText } from 'lucide-react';
 
 export default function App() {
@@ -30,33 +31,37 @@ export default function App() {
               </div>
             </div>
 
-            {/* Menu Tabs */}
-            <nav className="flex items-center gap-2 bg-neutral-900 border border-neutral-800 p-1.5 rounded-xl self-start sm:self-auto" aria-label="Main Navigation">
-              <button
-                onClick={() => setActiveTab('catalog')}
-                data-testid="nav-tab-catalog"
-                className={`inline-flex items-center gap-2 min-h-[40px] px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
-                  activeTab === 'catalog'
-                    ? 'bg-amber-500 text-neutral-950 shadow-sm'
-                    : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
-                }`}
-              >
-                <Film className="w-4 h-4" />
-                Каталог
-              </button>
-              <button
-                onClick={() => setActiveTab('parseLogs')}
-                data-testid="nav-tab-parse-logs"
-                className={`inline-flex items-center gap-2 min-h-[40px] px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
-                  activeTab === 'parseLogs'
-                    ? 'bg-amber-500 text-neutral-950 shadow-sm'
-                    : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
-                }`}
-              >
-                <FileText className="w-4 h-4" />
-                Лог от парсването
-              </button>
-            </nav>
+            {/* Actions & Menu Tabs */}
+            <div className="flex flex-wrap items-center gap-3">
+              <TriggerScannerModal />
+
+              <nav className="flex items-center gap-2 bg-neutral-900 border border-neutral-800 p-1.5 rounded-xl self-start sm:self-auto" aria-label="Main Navigation">
+                <button
+                  onClick={() => setActiveTab('catalog')}
+                  data-testid="nav-tab-catalog"
+                  className={`inline-flex items-center gap-2 min-h-[40px] px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
+                    activeTab === 'catalog'
+                      ? 'bg-amber-500 text-neutral-950 shadow-sm'
+                      : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
+                  }`}
+                >
+                  <Film className="w-4 h-4" />
+                  Каталог
+                </button>
+                <button
+                  onClick={() => setActiveTab('parseLogs')}
+                  data-testid="nav-tab-parse-logs"
+                  className={`inline-flex items-center gap-2 min-h-[40px] px-4 py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
+                    activeTab === 'parseLogs'
+                      ? 'bg-amber-500 text-neutral-950 shadow-sm'
+                      : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
+                  }`}
+                >
+                  <FileText className="w-4 h-4" />
+                  Лог от парсването
+                </button>
+              </nav>
+            </div>
           </header>
 
           {/* Main View Area */}

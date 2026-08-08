@@ -11,11 +11,13 @@ from movies_feed import (
     FirestoreOccurrenceRepository,
     FirestoreOmdbCacheRepository,
     FirestoreScanRunRepository,
+    FirestoreParseLogRepository,
     get_firestore_client,
     Title,
     Occurrence,
     OmdbCacheEntry,
     ScanRun,
+    ParseLog,
     get_title_id,
     get_occurrence_id,
     get_cache_key,
@@ -38,6 +40,7 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
         self._clear_collection("titles")
         self._clear_collection("omdbCache")
         self._clear_collection("scanRuns")
+        self._clear_collection("parseLogs")
 
         self.base_time = datetime.datetime(2026, 8, 7, 10, 0, 0, tzinfo=self.utc)
         self.earlier_time = datetime.datetime(2026, 8, 7, 9, 0, 0, tzinfo=self.utc)
@@ -225,3 +228,34 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
         self.assertEqual(fetched_updated.status, "succeeded")
         self.assertEqual(fetched_updated.titles_created, 3)
         self.assertEqual(fetched_updated.finished_at.replace(tzinfo=self.utc), self.later_time)
+
+    def test_parse_log_repository_persistence_and_pruning(self) -> None:
+        repo = FirestoreParseLogRepository(self.db)
+        log_id = "log-123"
+
+        log = ParseLog(
+            id=log_id,
+            raw_title="The Matrix 1999 1080p BDRip",
+            feed_name="Movies Feed",
+            parsed_successfully=True,
+            parsed_title="The Matrix",
+            parsed_year=1999,
+            omdb_status="found",
+            ignored=False,
+            ignore_reason=None,
+            processed_at=self.base_time,
+        )
+
+        repo.add(log)
+        recent = repo.list_recent()
+        self.assertEqual(len(recent), 1)
+        self.assertEqual(recent[0].raw_title, "The Matrix 1999 1080p BDRip")
+
+        # Test pruning
+        cutoff = self.base_time + datetime.timedelta(hours=1)
+        deleted = repo.prune_older_than(cutoff)
+        self.assertEqual(deleted, 1)
+
+        remaining = repo.list_recent()
+        self.assertEqual(len(remaining), 0)
+
