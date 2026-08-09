@@ -7,13 +7,15 @@ from .ids import (
     get_title_id,
     normalize_title,
 )
-from .models import OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
+from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
 from .repository import (
+    FakeManualMappingRepository,
     FakeOmdbCacheRepository,
     FakeOccurrenceRepository,
     FakeParseLogRepository,
     FakeScanRunRepository,
     FakeTitleRepository,
+    ManualMappingRepository,
     OmdbCacheRepository,
     OccurrenceRepository,
     ParseLogRepository,
@@ -29,6 +31,7 @@ try:
         FirestoreOmdbCacheRepository,
         FirestoreParseLogRepository,
         FirestoreScanRunRepository,
+        FirestoreManualMappingRepository,
         get_firestore_client,
     )
 except ImportError:
