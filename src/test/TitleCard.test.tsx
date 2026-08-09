@@ -125,6 +125,49 @@ describe('Catalog Presentation Components', () => {
     expect(torrentLink).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
+  it('opens full movie detail modal on card click and shows complete information', async () => {
+    const user = userEvent.setup();
+    const mockRepo: CatalogRepository = {
+      getCatalogPage: vi.fn(),
+      getTitleById: vi.fn(),
+      getOccurrences: vi.fn().mockResolvedValue(sampleOccurrences),
+    };
+
+    render(<TitleCard title={sampleMovie} repository={mockRepo} />);
+
+    // Initially detail modal is not open
+    expect(screen.queryByTestId('title-detail-modal')).not.toBeInTheDocument();
+
+    // Click on the title card click area
+    const cardClickArea = screen.getByTestId('title-card-click-area');
+    await user.click(cardClickArea);
+
+    // Modal should now be open
+    await waitFor(() => {
+      expect(screen.getByTestId('title-detail-modal')).toBeInTheDocument();
+      expect(screen.getByTestId('detail-modal-title')).toHaveTextContent('Inception');
+      expect(screen.getByTestId('detail-modal-director')).toHaveTextContent('Christopher Nolan');
+      expect(screen.getByTestId('detail-modal-runtime')).toHaveTextContent('148 min');
+      expect(screen.getByTestId('detail-modal-countries')).toHaveTextContent('USA, UK');
+      expect(screen.getByTestId('detail-modal-plot')).toHaveTextContent(
+        'A thief who steals corporate secrets through dream-sharing technology.'
+      );
+      expect(screen.getByTestId('detail-modal-awards')).toHaveTextContent('Won 4 Oscars');
+      expect(screen.getByTestId('detail-modal-imdb-link')).toHaveAttribute(
+        'href',
+        'https://www.imdb.com/title/tt1234567/'
+      );
+    });
+
+    // Close the modal
+    const closeBtn = screen.getByTestId('close-detail-modal-button');
+    await user.click(closeBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('title-detail-modal')).not.toBeInTheDocument();
+    });
+  });
+
   it('renders CatalogSkeleton loading placeholders', () => {
     render(<CatalogSkeleton count={4} />);
 
