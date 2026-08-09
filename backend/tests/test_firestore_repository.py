@@ -12,12 +12,14 @@ from movies_feed import (
     FirestoreOmdbCacheRepository,
     FirestoreScanRunRepository,
     FirestoreParseLogRepository,
+    FirestoreManualMappingRepository,
     get_firestore_client,
     Title,
     Occurrence,
     OmdbCacheEntry,
     ScanRun,
     ParseLog,
+    ManualMapping,
     get_title_id,
     get_occurrence_id,
     get_cache_key,
@@ -41,6 +43,7 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
         self._clear_collection("omdbCache")
         self._clear_collection("scanRuns")
         self._clear_collection("parseLogs")
+        self._clear_collection("manualMappings")
 
         self.base_time = datetime.datetime(2026, 8, 7, 10, 0, 0, tzinfo=self.utc)
         self.earlier_time = datetime.datetime(2026, 8, 7, 9, 0, 0, tzinfo=self.utc)
@@ -258,4 +261,40 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
 
         remaining = repo.list_recent()
         self.assertEqual(len(remaining), 0)
+
+    def test_manual_mapping_repository_persistence(self) -> None:
+        repo = FirestoreManualMappingRepository(self.db)
+        mapping_id = "mapping-123"
+
+        # 1. Test set & get_all with standard model
+        mapping = ManualMapping(
+            id=mapping_id,
+            raw_title="Some Movie 2024",
+            imdb_id="tt1234567",
+            created_at=self.base_time,
+            parsed_title="Some Movie",
+            parsed_year=2024,
+        )
+        repo.set(mapping)
+
+        # 2. Test reading a document created without explicit 'id' inside doc.to_dict() (e.g. from web frontend)
+        self.db.collection("manualMappings").document("web-doc-456").set({
+            "rawTitle": "Web Created Title",
+            "imdbId": "tt7654321",
+            "createdAt": self.base_time,
+        })
+
+        all_mappings = repo.get_all()
+        self.assertEqual(len(all_mappings), 2)
+        by_id = {m.id: m for m in all_mappings}
+        self.assertIn("mapping-123", by_id)
+        self.assertIn("web-doc-456", by_id)
+        self.assertEqual(by_id["web-doc-456"].raw_title, "Web Created Title")
+        self.assertEqual(by_id["web-doc-456"].imdb_id, "tt7654321")
+
+        # 3. Test delete
+        repo.delete(mapping_id)
+        remaining = repo.get_all()
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0].id, "web-doc-456")
 

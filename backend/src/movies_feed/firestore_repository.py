@@ -129,29 +129,31 @@ def scan_run_from_dict(d: dict) -> ScanRun:
     )
 
 
-def parse_log_from_dict(d: dict) -> ParseLog:
+def parse_log_from_dict(d: dict, doc_id: Optional[str] = None) -> ParseLog:
     """Reconstructs a ParseLog model from a camelCase dictionary retrieved from Firestore."""
+    log_id = d.get("id") or doc_id or ""
     return ParseLog(
-        id=d["id"],
-        raw_title=d["rawTitle"],
-        feed_name=d["feedName"],
-        parsed_successfully=d["parsedSuccessfully"],
+        id=log_id,
+        raw_title=d.get("rawTitle", ""),
+        feed_name=d.get("feedName", ""),
+        parsed_successfully=d.get("parsedSuccessfully", False),
         parsed_title=d.get("parsedTitle"),
         parsed_year=d.get("parsedYear"),
-        omdb_status=d["omdbStatus"],
-        ignored=d["ignored"],
+        omdb_status=d.get("omdbStatus", "not_parsed"),
+        ignored=d.get("ignored", False),
         ignore_reason=d.get("ignoreReason"),
-        processed_at=d["processedAt"],
+        processed_at=d.get("processedAt") or datetime.datetime.now(datetime.timezone.utc),
     )
 
 
-def manual_mapping_from_dict(d: dict) -> ManualMapping:
+def manual_mapping_from_dict(d: dict, doc_id: Optional[str] = None) -> ManualMapping:
     """Reconstructs a ManualMapping model from a camelCase dictionary retrieved from Firestore."""
+    mapping_id = d.get("id") or doc_id or ""
     return ManualMapping(
-        id=d["id"],
-        raw_title=d["rawTitle"],
-        imdb_id=d["imdbId"],
-        created_at=d["createdAt"],
+        id=mapping_id,
+        raw_title=d.get("rawTitle", ""),
+        imdb_id=d.get("imdbId", ""),
+        created_at=d.get("createdAt") or datetime.datetime.now(datetime.timezone.utc),
         parsed_title=d.get("parsedTitle"),
         parsed_year=d.get("parsedYear"),
         created_by=d.get("createdBy"),
@@ -370,7 +372,7 @@ class FirestoreParseLogRepository(ParseLogRepository):
     def list_recent(self, limit: int = 100) -> List[ParseLog]:
         query = self.collection_ref.order_by("processedAt", direction=firestore.Query.DESCENDING).limit(limit)
         docs = query.stream()
-        return [parse_log_from_dict(doc.to_dict()) for doc in docs]
+        return [parse_log_from_dict(doc.to_dict(), doc_id=doc.id) for doc in docs]
 
 
 class FirestoreManualMappingRepository(ManualMappingRepository):
@@ -380,7 +382,7 @@ class FirestoreManualMappingRepository(ManualMappingRepository):
 
     def get_all(self) -> List[ManualMapping]:
         docs = self.collection_ref.stream()
-        return [manual_mapping_from_dict(doc.to_dict()) for doc in docs]
+        return [manual_mapping_from_dict(doc.to_dict(), doc_id=doc.id) for doc in docs]
 
     def set(self, mapping: ManualMapping) -> None:
         doc_ref = self.collection_ref.document(mapping.id)
