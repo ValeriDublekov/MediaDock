@@ -24,6 +24,39 @@ from movies_feed import (
     get_occurrence_id,
     get_cache_key,
 )
+from movies_feed.firestore_repository import (
+    manual_mapping_from_dict,
+    parse_log_from_dict,
+)
+
+
+class DictDeserializationTests(unittest.TestCase):
+    def test_manual_mapping_deserialization_with_and_without_id_key(self) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        
+        # Document with 'id' inside dictionary
+        d1 = {"id": "map-1", "rawTitle": "Movie 2024", "imdbId": "tt1234567", "createdAt": now}
+        m1 = manual_mapping_from_dict(d1, doc_id="doc-fallback-1")
+        self.assertEqual(m1.id, "map-1")
+        self.assertEqual(m1.raw_title, "Movie 2024")
+        self.assertEqual(m1.imdb_id, "tt1234567")
+
+        # Document without 'id' key (e.g., created directly in Firestore / Web Frontend)
+        d2 = {"rawTitle": "Web Movie 2024", "imdbId": "tt7654321", "createdAt": now}
+        m2 = manual_mapping_from_dict(d2, doc_id="doc-web-456")
+        self.assertEqual(m2.id, "doc-web-456")
+        self.assertEqual(m2.raw_title, "Web Movie 2024")
+
+    def test_parse_log_deserialization_with_and_without_id_key(self) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        # Document without 'id' key
+        d = {"rawTitle": "Raw 1", "feedName": "Feed 1", "parsedSuccessfully": True}
+        p = parse_log_from_dict(d, doc_id="log-doc-123")
+        self.assertEqual(p.id, "log-doc-123")
+        self.assertEqual(p.raw_title, "Raw 1")
+        self.assertEqual(p.feed_name, "Feed 1")
+        self.assertTrue(p.parsed_successfully)
 
 
 @unittest.skipIf(
