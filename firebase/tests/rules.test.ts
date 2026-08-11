@@ -117,15 +117,54 @@ describe("MoviesFeed Firestore Rules", () => {
     });
   });
 
-  describe("Reserved users/{uid} namespace", () => {
-    it("denies read and write for now", async () => {
+  describe("Owner-scoped users/{uid}/userTitles namespace", () => {
+    it("allows allowlisted owner to write and read valid userTitles doc", async () => {
       const db = await setupAllowlistedUser("user-456", "admin@example.com");
-      // Even the owner is denied until concrete schema is added
-      await assertFails(db.collection("users").doc("user-456").collection("watchlist").doc("tt123").set({ added: true }));
-      await assertFails(db.collection("users").doc("user-456").collection("watchlist").doc("tt123").get());
-      
-      // Other users
-      await assertFails(db.collection("users").doc("user-other").collection("watchlist").doc("tt123").get());
+      await assertSucceeds(
+        db.collection("users").doc("user-456").collection("userTitles").doc("tt123").set({
+          status: "favorite",
+          userId: "user-456",
+          updatedAt: new Date(),
+        })
+      );
+      await assertSucceeds(
+        db.collection("users").doc("user-456").collection("userTitles").doc("tt123").get()
+      );
+      await assertSucceeds(
+        db.collection("users").doc("user-456").collection("userTitles").doc("tt123").delete()
+      );
+    });
+
+    it("denies access to userTitles for other users or unallowed fields", async () => {
+      const db = await setupAllowlistedUser("user-456", "admin@example.com");
+      // Other user's path
+      await assertFails(
+        db.collection("users").doc("user-other").collection("userTitles").doc("tt123").get()
+      );
+      await assertFails(
+        db.collection("users").doc("user-other").collection("userTitles").doc("tt123").set({
+          status: "favorite",
+          userId: "user-other",
+          updatedAt: new Date(),
+        })
+      );
+      // Invalid status
+      await assertFails(
+        db.collection("users").doc("user-456").collection("userTitles").doc("tt123").set({
+          status: "invalid_status",
+          userId: "user-456",
+          updatedAt: new Date(),
+        })
+      );
+      // Unallowed extra fields
+      await assertFails(
+        db.collection("users").doc("user-456").collection("userTitles").doc("tt123").set({
+          status: "favorite",
+          userId: "user-456",
+          updatedAt: new Date(),
+          extraField: "hacked",
+        })
+      );
     });
   });
 });

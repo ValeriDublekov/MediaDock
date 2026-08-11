@@ -1,9 +1,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { CatalogRepository, Title } from '../domain/catalog';
 import { useCatalog } from '../application/useCatalog';
+import { useUserTitles } from '../application/useUserTitles';
 import { firestoreCatalogAdapter } from '../adapters/firestoreCatalogAdapter';
 import { firestoreSettingsAdapter } from '../adapters/firestoreSettingsAdapter';
-import { CatalogFilterBar } from './CatalogFilterBar';
+import { CatalogFilterBar, CatalogViewMode } from './CatalogFilterBar';
 import { TitleCard } from './TitleCard';
 import { CatalogSkeleton } from './CatalogSkeleton';
 import {
@@ -11,7 +12,7 @@ import {
   DEFAULT_FILTER_STATE,
   filterAndSortTitles,
 } from '../domain/catalogFilter';
-import { AlertCircle, RefreshCw, Film, Loader2, FilterX, RotateCcw } from 'lucide-react';
+import { AlertCircle, RefreshCw, Film, Loader2, FilterX, RotateCcw, Star, EyeOff } from 'lucide-react';
 
 interface CatalogViewProps {
   repository?: CatalogRepository;
@@ -30,7 +31,18 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
     retry,
   } = useCatalog({ repository, pageSize });
 
+  const {
+    isFavorite,
+    isIgnored,
+    toggleFavorite,
+    toggleIgnored,
+    favoriteTitleIds,
+    ignoredTitleIds,
+  } = useUserTitles();
+
   const [filterState, setFilterState] = useState<CatalogFilterState>(DEFAULT_FILTER_STATE);
+  const [viewMode, setViewMode] = useState<CatalogViewMode>('all');
+  const [extraTitles, setExtraTitles] = useState<Title[]>([]);
 
   useEffect(() => {
     async function applySavedSettings() {
@@ -49,9 +61,50 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
     applySavedSettings();
   }, []);
 
+  // Fetch missing titles for favorites/ignored if they are not loaded in the standard pagination pool yet
+  useEffect(() => {
+    async function fetchMissingUserTitles() {
+      if (!repository.getTitlesByIds) return;
+      const targetIds = viewMode === 'favorites' ? favoriteTitleIds : viewMode === 'ignored' ? ignoredTitleIds : [];
+      if (targetIds.length === 0) return;
+
+      const loadedIds = new Set([...titles.map((t) => t.id), ...extraTitles.map((t) => t.id)]);
+      const missingIds = targetIds.filter((id) => !loadedIds.has(id));
+
+      if (missingIds.length > 0) {
+        try {
+          const fetched = await repository.getTitlesByIds(missingIds);
+          setExtraTitles((prev) => [...prev, ...fetched]);
+        } catch (err) {
+          console.error('Failed to fetch user titles by ID:', err);
+        }
+      }
+    }
+    fetchMissingUserTitles();
+  }, [viewMode, favoriteTitleIds, ignoredTitleIds, titles, repository, extraTitles]);
+
+  // Combine loaded pagination titles and extra user titles
+  const combinedTitles = useMemo(() => {
+    const map = new Map<string, Title>();
+    titles.forEach((t) => map.set(t.id, t));
+    extraTitles.forEach((t) => map.set(t.id, t));
+    return Array.from(map.values());
+  }, [titles, extraTitles]);
+
   const filteredTitles = useMemo(() => {
-    return filterAndSortTitles(titles, filterState);
-  }, [titles, filterState]);
+    let baseList = combinedTitles;
+
+    if (viewMode === 'all') {
+      // Ignored titles are strictly hidden in the main list
+      baseList = baseList.filter((t) => !isIgnored(t.id));
+    } else if (viewMode === 'favorites') {
+      baseList = baseList.filter((t) => isFavorite(t.id));
+    } else if (viewMode === 'ignored') {
+      baseList = baseList.filter((t) => isIgnored(t.id));
+    }
+
+    return filterAndSortTitles(baseList, filterState);
+  }, [combinedTitles, viewMode, filterState, isFavorite, isIgnored]);
 
   if (isLoading) {
     return <CatalogSkeleton count={pageSize} />;
@@ -101,9 +154,13 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
       <CatalogFilterBar
         filterState={filterState}
         onFilterChange={setFilterState}
-        titles={titles}
+        titles={combinedTitles}
         filteredCount={filteredTitles.length}
-        totalLoadedCount={titles.length}
+        totalLoadedCount={combinedTitles.length}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        favoritesCount={favoriteTitleIds.length}
+        ignoredCount={ignoredTitleIds.length}
       />
 
       {/* Main Content Area */}
@@ -114,7 +171,15 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
             className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
           >
             {filteredTitles.map((item: Title) => (
-              <TitleCard key={item.id} title={item} repository={repository} />
+              <TitleCard
+                key={item.id}
+                title={item}
+                repository={repository}
+                isFavorite={isFavorite(item.id)}
+                isIgnored={isIgnored(item.id)}
+                onToggleFavorite={toggleFavorite}
+                onToggleIgnored={toggleIgnored}
+              />
             ))}
           </div>
         </section>
@@ -125,30 +190,59 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
           className="flex flex-col items-center justify-center py-16 text-center px-4 bg-neutral-900 border border-neutral-800 rounded-xl"
         >
           <div className="w-12 h-12 rounded-full bg-neutral-800 text-amber-400 flex items-center justify-center mb-4">
-            <FilterX className="w-6 h-6" />
+            {viewMode === 'favorites' ? (
+              <Star className="w-6 h-6 text-amber-400" />
+            ) : viewMode === 'ignored' ? (
+              <EyeOff className="w-6 h-6 text-red-400" />
+            ) : (
+              <FilterX className="w-6 h-6 text-amber-400" />
+            )}
           </div>
-          <h3 className="text-base font-semibold text-neutral-100 mb-1">No matching titles found</h3>
+          <h3 className="text-base font-semibold text-neutral-100 mb-1">
+            {viewMode === 'favorites'
+              ? 'Нямате добавени любими филми'
+              : viewMode === 'ignored'
+              ? 'Нямате скрити филми'
+              : 'No matching titles found'}
+          </h3>
           <p className="text-sm text-neutral-400 max-w-md mb-6">
-            No loaded items match your current filter and search criteria. Try adjusting your filters or loading more items from the catalog.
+            {viewMode === 'favorites'
+              ? 'Маркирайте филми със звезда ⭐ в каталога, за да се показват тук.'
+              : viewMode === 'ignored'
+              ? 'Филмите, които маркирате като скрити, ще се съхраняват тук и няма да се показват в основния каталог.'
+              : 'Няма заредени филми, отговарящи на текущите критерии. Опитайте с нови филтри.'}
           </p>
           <div className="flex flex-wrap gap-3 justify-center">
-            <button
-              onClick={() => setFilterState(DEFAULT_FILTER_STATE)}
-              data-testid="clear-filters-button"
-              className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 text-sm font-medium text-neutral-200 bg-neutral-800 border border-neutral-700 rounded-lg hover:bg-neutral-700 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
-            >
-              <RotateCcw className="w-4 h-4" />
-              Reset Filters
-            </button>
-            {hasMore && (
+            {viewMode !== 'all' ? (
               <button
-                onClick={loadNextPage}
-                disabled={isLoadingMore}
-                data-testid="catalog-load-more-from-empty-button"
-                className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 text-sm font-semibold text-neutral-950 bg-amber-500 rounded-lg hover:bg-amber-400 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer disabled:opacity-50"
+                onClick={() => setViewMode('all')}
+                data-testid="back-to-all-button"
+                className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 text-sm font-semibold text-neutral-950 bg-amber-500 rounded-lg hover:bg-amber-400 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer"
               >
-                {isLoadingMore ? 'Loading...' : 'Load More Items from Server'}
+                <Film className="w-4 h-4" />
+                Към всички филми
               </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => setFilterState(DEFAULT_FILTER_STATE)}
+                  data-testid="clear-filters-button"
+                  className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 text-sm font-medium text-neutral-200 bg-neutral-800 border border-neutral-700 rounded-lg hover:bg-neutral-700 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  Изчисти филтрите
+                </button>
+                {hasMore && (
+                  <button
+                    onClick={loadNextPage}
+                    disabled={isLoadingMore}
+                    data-testid="catalog-load-more-from-empty-button"
+                    className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 text-sm font-semibold text-neutral-950 bg-amber-500 rounded-lg hover:bg-amber-400 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer disabled:opacity-50"
+                  >
+                    {isLoadingMore ? 'Зареждане...' : 'Зареди още от сървъра'}
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>

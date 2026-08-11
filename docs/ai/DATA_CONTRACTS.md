@@ -120,23 +120,20 @@ Manual IMDb ID override mappings provided by allowlisted users for unfound title
 Rules require authentication, matching UID, `enabled == true`, and an email match
 against the authenticated token where available. Allowlist writes are server-only.
 
-## Reserved `users/{uid}` Namespace
+## `users/{userId}/userTitles/{titleId}`
 
-This namespace makes future client writes possible without granting catalog writes.
-MVP does not implement a product feature in it.
+Owner-scoped title preferences (favorites and ignored titles). Keyed by document ID = `titleId`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `status` | string | `'favorite'` or `'ignored'` |
+| `userId` | string | Owner UID matching path |
+| `updatedAt` | Timestamp | Timestamp of state update |
 
 Rules contract:
-
 - Authenticated allowlisted users may access only their own UID path.
-- Creates/updates validate an explicit field allowlist, types, size limits, and
-  immutable ownership fields for each future subcollection.
+- Creates/updates validate explicit field allowlist (`status`, `updatedAt`, `userId`), status enum values (`'favorite'`, `'ignored'`), and immutable `userId`.
 - Users cannot list or read another user's root or descendants.
-- Adding a concrete subcollection requires emulator rules tests first.
-- A generic recursive `allow write` rule is forbidden.
-
-Until a concrete schema exists, rules should deny writes or permit only a tiny
-document explicitly defined for rules-test scaffolding. Do not claim support for
-favorites, notes, or preferences before their contracts are added here.
 
 ## Catalog Query Contract
 

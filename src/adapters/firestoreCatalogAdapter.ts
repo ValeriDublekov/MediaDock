@@ -173,6 +173,27 @@ export class FirestoreCatalogAdapter implements CatalogRepository {
     return mapDocToTitle(docSnap as QueryDocumentSnapshot<DocumentData>);
   }
 
+  async getTitlesByIds(ids: string[]): Promise<Title[]> {
+    if (!ids || ids.length === 0) return [];
+    const db = this.getDbInstance();
+    const titlesRef = collection(db, 'titles');
+    const uniqueIds = Array.from(new Set(ids));
+    const results: Title[] = [];
+
+    // Chunk into batches of 30 for documentId() in [...]
+    const chunkSize = 30;
+    for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+      const chunk = uniqueIds.slice(i, i + chunkSize);
+      const q = query(titlesRef, where(documentId(), 'in', chunk));
+      const snapshot = await getDocs(q);
+      snapshot.docs.forEach((docSnap) => {
+        results.push(mapDocToTitle(docSnap));
+      });
+    }
+
+    return results;
+  }
+
   async getOccurrences(titleId: string): Promise<Occurrence[]> {
     const db = this.getDbInstance();
     const occurrencesRef = collection(db, 'titles', titleId, 'occurrences');

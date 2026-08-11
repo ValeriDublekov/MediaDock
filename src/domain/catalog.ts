@@ -63,5 +63,6 @@ export interface CatalogPage {
 export interface CatalogRepository {
   getCatalogPage(options: CatalogPageOptions): Promise<CatalogPage>;
   getTitleById(id: string): Promise<Title | null>;
+  getTitlesByIds?(ids: string[]): Promise<Title[]>;
   getOccurrences(titleId: string): Promise<Occurrence[]>;
 }

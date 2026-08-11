@@ -4,18 +4,26 @@ import { firestoreCatalogAdapter } from '../adapters/firestoreCatalogAdapter';
 import { updateTitleWithOmdb } from '../adapters/omdbAdapter';
 import { PosterImage } from './PosterImage';
 import { TitleDetailModal } from './TitleDetailModal';
-import { Star, ExternalLink, Download, Film, Layers, Award, Clock, Globe, RefreshCw, Edit2, Check, X, Loader2, Info } from 'lucide-react';
+import { Star, ExternalLink, Download, Film, Layers, Award, Clock, Globe, RefreshCw, Edit2, Check, X, Loader2, Info, EyeOff } from 'lucide-react';
 
 interface TitleCardProps {
   title: Title;
   repository?: CatalogRepository;
   occurrences?: Occurrence[];
+  isFavorite?: boolean;
+  isIgnored?: boolean;
+  onToggleFavorite?: (titleId: string) => void;
+  onToggleIgnored?: (titleId: string) => void;
 }
 
 export const TitleCard: React.FC<TitleCardProps> = ({
   title,
   repository = firestoreCatalogAdapter,
   occurrences: initialOccurrences,
+  isFavorite = false,
+  isIgnored = false,
+  onToggleFavorite,
+  onToggleIgnored,
 }) => {
   const [currentTitle, setCurrentTitle] = useState<Title>(title);
   const [occurrences, setOccurrences] = useState<Occurrence[] | undefined>(initialOccurrences);
@@ -110,7 +118,13 @@ export const TitleCard: React.FC<TitleCardProps> = ({
     <>
       <article
         data-testid="title-card"
-        className="bg-neutral-900 border border-neutral-800 rounded-xl overflow-hidden shadow-sm hover:border-neutral-700 transition-all flex flex-col justify-between group focus-within:ring-2 focus-within:ring-amber-500/50"
+        className={`bg-neutral-900 border rounded-xl overflow-hidden shadow-sm hover:border-neutral-700 transition-all flex flex-col justify-between group focus-within:ring-2 focus-within:ring-amber-500/50 ${
+          isFavorite
+            ? 'border-amber-500/60 shadow-amber-500/10'
+            : isIgnored
+            ? 'border-red-900/60 opacity-85'
+            : 'border-neutral-800'
+        }`}
       >
         <div
           onClick={() => setIsDetailModalOpen(true)}
@@ -126,26 +140,84 @@ export const TitleCard: React.FC<TitleCardProps> = ({
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
             />
 
-            {/* Rating Badge Overlay */}
-            {currentTitle.imdbRating !== null && currentTitle.imdbRating !== undefined && (
-              <div
-                data-testid="rating-badge"
-                className="absolute top-3 right-3 bg-neutral-950/90 backdrop-blur-md border border-amber-500/40 text-amber-400 text-xs font-bold px-2.5 py-1 rounded-md flex items-center gap-1 shadow-md z-10"
-                aria-label={`IMDb Rating: ${currentTitle.imdbRating} out of 10`}
-              >
-                <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" aria-hidden="true" />
-                <span>{currentTitle.imdbRating.toFixed(1)}</span>
-              </div>
-            )}
-
-            {/* Media Type Badge Overlay */}
-            <div className="absolute top-3 left-3 z-10">
+            {/* Top Left Badges Overlay */}
+            <div className="absolute top-3 left-3 z-10 flex flex-wrap items-center gap-1.5">
               <span
                 data-testid="media-type-badge"
                 className={`inline-block text-[11px] font-bold px-2.5 py-0.5 rounded-md border backdrop-blur-md shadow-xs ${mediaTypeInfo.className}`}
               >
                 {mediaTypeInfo.label}
               </span>
+              {isFavorite && (
+                <span
+                  data-testid="favorite-badge"
+                  className="inline-flex items-center gap-1 text-[11px] font-extrabold px-2 py-0.5 rounded-md bg-amber-500 text-neutral-950 border border-amber-400 shadow-md"
+                >
+                  <Star className="w-3 h-3 fill-neutral-950 text-neutral-950" />
+                  Любим
+                </span>
+              )}
+              {isIgnored && (
+                <span
+                  data-testid="ignored-badge"
+                  className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-md bg-red-950/90 text-red-300 border border-red-800 backdrop-blur-md shadow-md"
+                >
+                  <EyeOff className="w-3 h-3" />
+                  Скрит
+                </span>
+              )}
+            </div>
+
+            {/* Top Right Actions & Rating Overlay */}
+            <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5">
+              {onToggleFavorite && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleFavorite(currentTitle.id);
+                  }}
+                  data-testid="favorite-button"
+                  title={isFavorite ? 'Премахни от любими' : 'Маркирай като любим'}
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center border backdrop-blur-md transition-all cursor-pointer ${
+                    isFavorite
+                      ? 'bg-amber-500 text-neutral-950 border-amber-400 shadow-md'
+                      : 'bg-neutral-950/80 hover:bg-neutral-900 text-neutral-400 hover:text-amber-400 border-neutral-800 hover:border-amber-500/50'
+                  }`}
+                >
+                  <Star className={`w-4 h-4 ${isFavorite ? 'fill-neutral-950' : ''}`} />
+                </button>
+              )}
+
+              {onToggleIgnored && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleIgnored(currentTitle.id);
+                  }}
+                  data-testid="ignore-button"
+                  title={isIgnored ? 'Възстанови от скрити' : 'Скрий (Игнорирай)'}
+                  className={`w-8 h-8 rounded-lg flex items-center justify-center border backdrop-blur-md transition-all cursor-pointer ${
+                    isIgnored
+                      ? 'bg-red-900/90 text-red-200 border-red-700 shadow-md'
+                      : 'bg-neutral-950/80 hover:bg-neutral-900 text-neutral-400 hover:text-red-400 border-neutral-800 hover:border-red-500/50'
+                  }`}
+                >
+                  <EyeOff className="w-4 h-4" />
+                </button>
+              )}
+
+              {currentTitle.imdbRating !== null && currentTitle.imdbRating !== undefined && (
+                <div
+                  data-testid="rating-badge"
+                  className="bg-neutral-950/90 backdrop-blur-md border border-amber-500/40 text-amber-400 text-xs font-bold px-2.5 py-1 rounded-md flex items-center gap-1 shadow-md"
+                  aria-label={`IMDb Rating: ${currentTitle.imdbRating} out of 10`}
+                >
+                  <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" aria-hidden="true" />
+                  <span>{currentTitle.imdbRating.toFixed(1)}</span>
+                </div>
+              )}
             </div>
 
             {/* Hover overlay hint */}
@@ -430,6 +502,10 @@ export const TitleCard: React.FC<TitleCardProps> = ({
         onClose={() => setIsDetailModalOpen(false)}
         repository={repository}
         initialOccurrences={occurrences}
+        isFavorite={isFavorite}
+        isIgnored={isIgnored}
+        onToggleFavorite={onToggleFavorite}
+        onToggleIgnored={onToggleIgnored}
       />
     </>
   );

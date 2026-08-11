@@ -50,11 +50,20 @@ service cloud.firestore {
       allow write: if false;
     }
     
-    // Extension point: reserved users namespace
-    // Kept denied until a concrete watchlist or download-queue schema is added
-    // to DATA_CONTRACTS.md with owner-access and field-validation tests.
-    match /users/{userId}/{document=**} {
-      allow read, write: if false;
+    // Owner-scoped user preferences namespace
+    match /users/{userId} {
+      allow read: if isAllowlisted() && request.auth.uid == userId;
+      
+      match /userTitles/{titleId} {
+        allow read: if isAllowlisted() && request.auth.uid == userId;
+        allow create, update: if isAllowlisted() &&
+                                request.auth.uid == userId &&
+                                request.resource.data.keys().hasOnly(['status', 'updatedAt', 'userId']) &&
+                                request.resource.data.status in ['favorite', 'ignored'] &&
+                                request.resource.data.userId == userId &&
+                                request.resource.data.updatedAt is timestamp;
+        allow delete: if isAllowlisted() && request.auth.uid == userId;
+      }
     }
     
     match /{document=**} {

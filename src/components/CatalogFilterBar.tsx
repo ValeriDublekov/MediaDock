@@ -19,7 +19,11 @@ import {
   Info,
   ChevronDown,
   ChevronUp,
+  Star,
+  EyeOff,
 } from 'lucide-react';
+
+export type CatalogViewMode = 'all' | 'favorites' | 'ignored';
 
 interface CatalogFilterBarProps {
   filterState: CatalogFilterState;
@@ -27,6 +31,10 @@ interface CatalogFilterBarProps {
   titles: Title[];
   filteredCount: number;
   totalLoadedCount: number;
+  viewMode?: CatalogViewMode;
+  onViewModeChange?: (mode: CatalogViewMode) => void;
+  favoritesCount?: number;
+  ignoredCount?: number;
 }
 
 export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
@@ -35,6 +43,10 @@ export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
   titles,
   filteredCount,
   totalLoadedCount,
+  viewMode = 'all',
+  onViewModeChange,
+  favoritesCount = 0,
+  ignoredCount = 0,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -133,6 +145,76 @@ export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
       data-testid="catalog-filter-bar"
       className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 sm:p-5 shadow-sm space-y-4"
     >
+      {/* View Mode Navigation Tabs (All, Favorites, Ignored) */}
+      {onViewModeChange && (
+        <div
+          data-testid="view-mode-tabs"
+          className="flex items-center gap-2 p-1 bg-neutral-950 border border-neutral-800/80 rounded-xl overflow-x-auto"
+        >
+          <button
+            type="button"
+            onClick={() => onViewModeChange('all')}
+            data-testid="view-mode-all"
+            className={`min-h-[38px] px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+              viewMode === 'all'
+                ? 'bg-neutral-800 text-amber-400 border border-amber-500/40 shadow-sm'
+                : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900'
+            }`}
+          >
+            <Film className="w-4 h-4" />
+            <span>Всички филми</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onViewModeChange('favorites')}
+            data-testid="view-mode-favorites"
+            className={`min-h-[38px] px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+              viewMode === 'favorites'
+                ? 'bg-amber-500 text-neutral-950 shadow-md font-extrabold'
+                : 'text-neutral-400 hover:text-amber-400 hover:bg-neutral-900'
+            }`}
+          >
+            <Star className={`w-4 h-4 ${viewMode === 'favorites' ? 'fill-neutral-950' : 'text-amber-400'}`} />
+            <span>Любими</span>
+            <span
+              data-testid="favorites-count-badge"
+              className={`text-[11px] px-1.5 py-0.2 rounded-full ${
+                viewMode === 'favorites'
+                  ? 'bg-neutral-950 text-amber-400'
+                  : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+              }`}
+            >
+              {favoritesCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onViewModeChange('ignored')}
+            data-testid="view-mode-ignored"
+            className={`min-h-[38px] px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+              viewMode === 'ignored'
+                ? 'bg-red-950 text-red-200 border border-red-700 shadow-sm'
+                : 'text-neutral-400 hover:text-red-400 hover:bg-neutral-900'
+            }`}
+          >
+            <EyeOff className="w-4 h-4" />
+            <span>Скрити</span>
+            <span
+              data-testid="ignored-count-badge"
+              className={`text-[11px] px-1.5 py-0.2 rounded-full ${
+                viewMode === 'ignored'
+                  ? 'bg-red-900 text-red-100'
+                  : 'bg-red-950/60 text-red-400 border border-red-900'
+              }`}
+            >
+              {ignoredCount}
+            </span>
+          </button>
+        </div>
+      )}
+
       {/* Top Search & Controls Row */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         {/* Search Input Box */}

@@ -21,6 +21,7 @@ import {
   Calendar,
   Layers,
   Sparkles,
+  EyeOff,
 } from 'lucide-react';
 
 interface TitleDetailModalProps {
@@ -29,6 +30,10 @@ interface TitleDetailModalProps {
   onClose: () => void;
   repository?: CatalogRepository;
   initialOccurrences?: Occurrence[];
+  isFavorite?: boolean;
+  isIgnored?: boolean;
+  onToggleFavorite?: (titleId: string) => void;
+  onToggleIgnored?: (titleId: string) => void;
 }
 
 export const TitleDetailModal: React.FC<TitleDetailModalProps> = ({
@@ -37,6 +42,10 @@ export const TitleDetailModal: React.FC<TitleDetailModalProps> = ({
   onClose,
   repository = firestoreCatalogAdapter,
   initialOccurrences,
+  isFavorite = false,
+  isIgnored = false,
+  onToggleFavorite,
+  onToggleIgnored,
 }) => {
   const [currentTitle, setCurrentTitle] = useState<Title>(title);
   const [occurrences, setOccurrences] = useState<Occurrence[] | undefined>(initialOccurrences);
@@ -208,6 +217,41 @@ export const TitleDetailModal: React.FC<TitleDetailModalProps> = ({
 
               {/* Action Buttons below poster */}
               <div className="w-full mt-4 space-y-2">
+                {/* Favorite & Ignored quick buttons */}
+                <div className="flex items-center gap-2">
+                  {onToggleFavorite && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleFavorite(currentTitle.id)}
+                      data-testid="detail-modal-favorite-button"
+                      className={`flex-1 min-h-[40px] px-3 py-2 text-xs font-bold rounded-xl border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                        isFavorite
+                          ? 'bg-amber-500 text-neutral-950 border-amber-400 shadow-sm'
+                          : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border-neutral-700 hover:border-amber-500/50'
+                      }`}
+                    >
+                      <Star className={`w-4 h-4 ${isFavorite ? 'fill-neutral-950' : ''}`} />
+                      <span>{isFavorite ? 'Любим ⭐' : 'Добави в любими'}</span>
+                    </button>
+                  )}
+
+                  {onToggleIgnored && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleIgnored(currentTitle.id)}
+                      data-testid="detail-modal-ignore-button"
+                      className={`flex-1 min-h-[40px] px-3 py-2 text-xs font-bold rounded-xl border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                        isIgnored
+                          ? 'bg-red-900/90 text-red-200 border-red-700 shadow-sm'
+                          : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border-neutral-700 hover:border-red-500/50'
+                      }`}
+                    >
+                      <EyeOff className="w-4 h-4" />
+                      <span>{isIgnored ? 'Скрит 🚫' : 'Скрий'}</span>
+                    </button>
+                  )}
+                </div>
+
                 {currentTitle.imdbId ? (
                   <a
                     href={`https://www.imdb.com/title/${currentTitle.imdbId}/`}
