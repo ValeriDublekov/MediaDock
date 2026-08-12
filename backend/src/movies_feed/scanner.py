@@ -369,8 +369,10 @@ class ScannerService:
         torrent_url = getattr(entry, "link", "")
         feed_name = feed_def.get("name", "")
 
+        entry_dt = _get_entry_datetime(entry)
+        item_time = entry_dt if entry_dt is not None else datetime.datetime.now(datetime.timezone.utc)
+
         if self.config.force_days > 0:
-            entry_dt = _get_entry_datetime(entry)
             if entry_dt is not None:
                 cutoff = self.now - datetime.timedelta(days=self.config.force_days)
                 if entry_dt < cutoff:
@@ -658,8 +660,8 @@ class ScannerService:
             normalized_title=normalize_title(omdb_result.title),
             year=omdb_result.year,
             media_type=media_type,
-            first_seen_at=self.now,
-            last_seen_at=self.now,
+            first_seen_at=item_time,
+            last_seen_at=item_time,
             updated_at=self.now,
             imdb_id=imdb_id,
             imdb_rating=omdb_result.rating,
@@ -686,8 +688,8 @@ class ScannerService:
             raw_title=raw_title,
             quality=parsed.quality,
             rip_type=parsed.rip_type,
-            first_seen_at=self.now,
-            last_seen_at=self.now,
+            first_seen_at=item_time,
+            last_seen_at=item_time,
         )
 
         # Upsert

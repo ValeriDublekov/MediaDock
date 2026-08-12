@@ -82,12 +82,24 @@ export function sortTitles(titles: Title[], sortBy: SortOption): Title[] {
         const timeA = new Date(a.lastSeenAt).getTime();
         const timeB = new Date(b.lastSeenAt).getTime();
         if (timeA !== timeB) return timeB - timeA;
-        return a.id.localeCompare(b.id);
+        
+        // Fallback to year descending if lastSeenAt is identical
+        const yearA = typeof a.year === 'number' ? a.year : -1;
+        const yearB = typeof b.year === 'number' ? b.year : -1;
+        if (yearA !== yearB) return yearB - yearA;
+
+        return b.id.localeCompare(a.id);
       }
       case 'lastSeenAsc': {
         const timeA = new Date(a.lastSeenAt).getTime();
         const timeB = new Date(b.lastSeenAt).getTime();
         if (timeA !== timeB) return timeA - timeB;
+
+        // Fallback to year ascending if lastSeenAt is identical
+        const yearA = typeof a.year === 'number' ? a.year : -1;
+        const yearB = typeof b.year === 'number' ? b.year : -1;
+        if (yearA !== yearB) return yearA - yearB;
+
         return a.id.localeCompare(b.id);
       }
       case 'ratingDesc': {
