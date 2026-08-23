@@ -270,6 +270,9 @@ class FakeParseLogRepository(ParseLogRepository):
         sorted_logs = sorted(self._store.values(), key=lambda l: l.processed_at, reverse=True)
         return sorted_logs[:limit]
 
+    def get_all(self) -> List[ParseLog]:
+        return list(self._store.values())
+
 
 class ManualMappingRepository(ABC):
     @abstractmethod

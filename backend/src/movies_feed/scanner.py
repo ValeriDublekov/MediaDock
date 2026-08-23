@@ -509,6 +509,7 @@ class ScannerService:
 
         omdb_payload = None
         omdb_result = None
+        used_manual_mapping = False
 
         # Check if there is a manual IMDb mapping provided for this title
         entry_log_id = get_occurrence_id(feed_entry_id, torrent_url)
@@ -527,6 +528,7 @@ class ScannerService:
                 omdb_result = self.omdb_client.get_by_imdb_id(manual_mapping.imdb_id)
                 status = "found"
                 payload = omdb_result.raw_payload
+                used_manual_mapping = True
                 
                 # If successfully retrieved by IMDb ID, delete manual mapping so it isn't reprocessed
                 if not self.config.is_dry_run and self.manual_mapping_repo:
@@ -677,81 +679,83 @@ class ScannerService:
         if not omdb_result:
             return
 
-        # Check media type consistency against RSS feed type
-        feed_type = (feed_def.get("type") or "").lower()
-        if feed_type in ("movie", "series"):
-            result_is_series = (omdb_result.media_type == "series")
-            expected_is_series = (feed_type == "series")
-            if result_is_series != expected_is_series:
-                run.ignored_entries += 1
-                self._log_parse_entry(
-                    raw_title=raw_title,
-                    feed_name=feed_name,
-                    parsed_successfully=True,
-                    parsed_title=parsed.title,
-                    parsed_year=lookup_year,
-                    omdb_status="found",
-                    ignored=True,
-                    ignore_reason="media_type_mismatch",
-                    feed_entry_id=feed_entry_id,
-                    torrent_url=torrent_url,
-                    section_timings=section_timings,
-                )
-                return
+        # Automated validation checks (bypassed for explicit manual mappings)
+        if not used_manual_mapping:
+            # Check media type consistency against RSS feed type
+            feed_type = (feed_def.get("type") or "").lower()
+            if feed_type in ("movie", "series"):
+                result_is_series = (omdb_result.media_type == "series")
+                expected_is_series = (feed_type == "series")
+                if result_is_series != expected_is_series:
+                    run.ignored_entries += 1
+                    self._log_parse_entry(
+                        raw_title=raw_title,
+                        feed_name=feed_name,
+                        parsed_successfully=True,
+                        parsed_title=parsed.title,
+                        parsed_year=lookup_year,
+                        omdb_status="found",
+                        ignored=True,
+                        ignore_reason="media_type_mismatch",
+                        feed_entry_id=feed_entry_id,
+                        torrent_url=torrent_url,
+                        section_timings=section_timings,
+                    )
+                    return
 
-        # Validate year tolerance for movies (max ±1 year difference)
-        if omdb_result.media_type in ("movie", "documentary", "short") and lookup_year is not None and omdb_result.year is not None:
-            if abs(omdb_result.year - lookup_year) > 1:
-                run.ignored_entries += 1
-                self._log_parse_entry(
-                    raw_title=raw_title,
-                    feed_name=feed_name,
-                    parsed_successfully=True,
-                    parsed_title=parsed.title,
-                    parsed_year=lookup_year,
-                    omdb_status="found",
-                    ignored=True,
-                    ignore_reason="year_mismatch",
-                    feed_entry_id=feed_entry_id,
-                    torrent_url=torrent_url,
-                    section_timings=section_timings,
-                )
-                return
+            # Validate year tolerance for movies (max ±1 year difference)
+            if omdb_result.media_type in ("movie", "documentary", "short") and lookup_year is not None and omdb_result.year is not None:
+                if abs(omdb_result.year - lookup_year) > 1:
+                    run.ignored_entries += 1
+                    self._log_parse_entry(
+                        raw_title=raw_title,
+                        feed_name=feed_name,
+                        parsed_successfully=True,
+                        parsed_title=parsed.title,
+                        parsed_year=lookup_year,
+                        omdb_status="found",
+                        ignored=True,
+                        ignore_reason="year_mismatch",
+                        feed_entry_id=feed_entry_id,
+                        torrent_url=torrent_url,
+                        section_timings=section_timings,
+                    )
+                    return
 
-        # AI Match Validation if enabled and candidate title differs or requires confidence check
-        if self.ai_matcher and self.ai_matcher.is_available:
-            norm_parsed = normalize_title(parsed.title)
-            norm_omdb = normalize_title(omdb_result.title)
-            if norm_parsed != norm_omdb:
-                try:
-                    validation = self.ai_matcher.batch_validate_omdb_matches([
-                        {
-                            "id": 0,
-                            "raw_title": raw_title,
-                            "feed_type": feed_def.get("type"),
-                            "omdb_title": omdb_result.title,
-                            "omdb_year": omdb_result.year,
-                            "omdb_type": omdb_result.media_type,
-                        }
-                    ]).get(0)
-                    if validation and not validation.get("is_match", True):
-                        run.ignored_entries += 1
-                        self._log_parse_entry(
-                            raw_title=raw_title,
-                            feed_name=feed_name,
-                            parsed_successfully=True,
-                            parsed_title=parsed.title,
-                            parsed_year=lookup_year,
-                            omdb_status="found",
-                            ignored=True,
-                            ignore_reason="ai_rejected",
-                            feed_entry_id=feed_entry_id,
-                            torrent_url=torrent_url,
-                            section_timings=section_timings,
-                        )
-                        return
-                except Exception as e:
-                    logger.warning(f"AI candidate validation check failed: {e}")
+            # AI Match Validation if enabled and candidate title differs or requires confidence check
+            if self.ai_matcher and self.ai_matcher.is_available:
+                norm_parsed = normalize_title(parsed.title)
+                norm_omdb = normalize_title(omdb_result.title)
+                if norm_parsed != norm_omdb:
+                    try:
+                        validation = self.ai_matcher.batch_validate_omdb_matches([
+                            {
+                                "id": 0,
+                                "raw_title": raw_title,
+                                "feed_type": feed_def.get("type"),
+                                "omdb_title": omdb_result.title,
+                                "omdb_year": omdb_result.year,
+                                "omdb_type": omdb_result.media_type,
+                            }
+                        ]).get(0)
+                        if validation and not validation.get("is_match", True):
+                            run.ignored_entries += 1
+                            self._log_parse_entry(
+                                raw_title=raw_title,
+                                feed_name=feed_name,
+                                parsed_successfully=True,
+                                parsed_title=parsed.title,
+                                parsed_year=lookup_year,
+                                omdb_status="found",
+                                ignored=True,
+                                ignore_reason="ai_rejected",
+                                feed_entry_id=feed_entry_id,
+                                torrent_url=torrent_url,
+                                section_timings=section_timings,
+                            )
+                            return
+                    except Exception as e:
+                        logger.warning(f"AI candidate validation check failed: {e}")
 
         if self.is_excluded(omdb_result.countries, omdb_result.genres):
             run.ignored_entries += 1
