@@ -137,6 +137,42 @@ class TestAiMatcher(unittest.TestCase):
         self.assertEqual(res[1]["corrected_year"], 2024)
         self.assertEqual(res[1]["corrected_media_type"], "series")
 
+    @patch("time.sleep", return_value=None)
+    @patch("urllib.request.urlopen")
+    def test_call_gemini_retry_on_429(self, mock_urlopen, mock_sleep):
+        import urllib.error
+        from io import BytesIO
+
+        mock_resp = MagicMock()
+        mock_resp.__enter__.return_value = mock_resp
+        mock_resp.read.return_value = b'{"candidates": [{"content": {"parts": [{"text": "{\\"id\\": 0}"}]}}]}'
+
+        # Raise HTTP 429 once, then succeed
+        error_429 = urllib.error.HTTPError("http://example.com", 429, "Too Many Requests", {}, BytesIO())
+        mock_urlopen.side_effect = [error_429, mock_resp]
+
+        matcher = AiMatcher(api_key="valid_key")
+        res = matcher._call_gemini("test prompt")
+        self.assertEqual(res, {"id": 0})
+        self.assertEqual(mock_urlopen.call_count, 2)
+        mock_sleep.assert_called_once_with(2.0)
+
+    def test_clean_title_for_comparison(self):
+        from movies_feed.ids import clean_title_for_comparison
+
+        self.assertEqual(
+            clean_title_for_comparison("Dune: Part Two"),
+            clean_title_for_comparison("Dune Part Two")
+        )
+        self.assertEqual(
+            clean_title_for_comparison("Deadpool & Wolverine"),
+            clean_title_for_comparison("Deadpool and Wolverine")
+        )
+        self.assertNotEqual(
+            clean_title_for_comparison("Inside Out 2"),
+            clean_title_for_comparison("Inside Out")
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

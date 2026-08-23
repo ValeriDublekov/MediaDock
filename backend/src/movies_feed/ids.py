@@ -1,4 +1,5 @@
 import hashlib
+import re
 from typing import Optional
 
 
@@ -7,6 +8,15 @@ def normalize_title(title: str) -> str:
     if not title:
         return ""
     return " ".join(title.strip().lower().split())
+
+
+def clean_title_for_comparison(title: Optional[str]) -> str:
+    """Normalizes title by lowercasing, replacing '&' with 'and', stripping punctuation and extra spaces."""
+    if not title:
+        return ""
+    cleaned = title.lower().replace("&", "and")
+    cleaned = re.sub(r"[^\w\s]", " ", cleaned)
+    return " ".join(cleaned.split())
 
 
 def get_fallback_title_id(normalized_title: str, year: Optional[int], media_type: str) -> str:

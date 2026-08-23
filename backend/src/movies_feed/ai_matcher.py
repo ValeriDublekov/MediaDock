@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 import urllib.request
 import urllib.error
 from typing import Any, Dict, List, Optional
@@ -53,20 +54,33 @@ class AiMatcher:
             method="POST"
         )
 
-        try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                resp_bytes = resp.read()
-                resp_json = json.loads(resp_bytes.decode("utf-8"))
-                candidates = resp_json.get("candidates", [])
-                if candidates:
-                    first_part = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
-                    return json.loads(first_part)
-        except urllib.error.HTTPError as e:
-            logger.warning(f"Gemini API HTTP error {e.code}: {e.reason}")
-        except urllib.error.URLError as e:
-            logger.warning(f"Gemini API URL error: {e.reason}")
-        except Exception as e:
-            logger.warning(f"Gemini API call failed: {e}")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    resp_bytes = resp.read()
+                    resp_json = json.loads(resp_bytes.decode("utf-8"))
+                    candidates = resp_json.get("candidates", [])
+                    if candidates:
+                        first_part = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
+                        return json.loads(first_part)
+                    return None
+            except urllib.error.HTTPError as e:
+                if e.code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                    sleep_time = (2 ** attempt) * 2.0
+                    logger.warning(
+                        f"Gemini API HTTP error {e.code}: {e.reason}. Retrying in {sleep_time:.1f}s (attempt {attempt + 1}/{max_retries})..."
+                    )
+                    time.sleep(sleep_time)
+                    continue
+                logger.warning(f"Gemini API HTTP error {e.code}: {e.reason}")
+                break
+            except urllib.error.URLError as e:
+                logger.warning(f"Gemini API URL error: {e.reason}")
+                break
+            except Exception as e:
+                logger.warning(f"Gemini API call failed: {e}")
+                break
 
         return None
 

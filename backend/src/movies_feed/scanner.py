@@ -1,12 +1,13 @@
 import datetime
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import feedparser
 
-from .ids import get_cache_key, get_occurrence_id, get_title_id, normalize_title
+from .ids import clean_title_for_comparison, get_cache_key, get_occurrence_id, get_title_id, normalize_title
 from .models import ManualMapping, Occurrence, OmdbCacheEntry, ParseLog, ScanRun, Title
 from .omdb_client import (
     OmdbClient,
@@ -42,6 +43,7 @@ class ScannerConfig:
     trigger: str = "manual"
     force_days: int = 0
     mode: str = "rss"  # "rss", "recheck-existing", "reparse-unfound", "all"
+
 
 def _get_entry_datetime(entry: Any) -> Optional[datetime.datetime]:
     parsed_time = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
@@ -476,19 +478,22 @@ class ScannerService:
                         elif new_omdb_result.media_type in ("movie", "documentary") and corr_year and abs(new_omdb_result.year - corr_year) > 1:
                             is_valid_candidate = False
                         elif self.ai_matcher and self.ai_matcher.is_available:
-                            try:
-                                v_res = self.ai_matcher.batch_validate_omdb_matches([{
-                                    "id": 0,
-                                    "raw_title": raw_title,
-                                    "feed_type": corr_media_type,
-                                    "omdb_title": new_omdb_result.title,
-                                    "omdb_year": new_omdb_result.year,
-                                    "omdb_type": new_omdb_result.media_type,
-                                }]).get(0)
-                                if v_res and not v_res.get("is_match", True):
-                                    is_valid_candidate = False
-                            except Exception as e:
-                                logger.warning(f"AI candidate validation check failed: {e}")
+                            clean_corr = clean_title_for_comparison(corr_title)
+                            clean_cand = clean_title_for_comparison(new_omdb_result.title)
+                            if clean_corr != clean_cand:
+                                try:
+                                    v_res = self.ai_matcher.batch_validate_omdb_matches([{
+                                        "id": 0,
+                                        "raw_title": raw_title,
+                                        "feed_type": corr_media_type,
+                                        "omdb_title": new_omdb_result.title,
+                                        "omdb_year": new_omdb_result.year,
+                                        "omdb_type": new_omdb_result.media_type,
+                                    }]).get(0)
+                                    if v_res and not v_res.get("is_match", True):
+                                        is_valid_candidate = False
+                                except Exception as e:
+                                    logger.warning(f"AI candidate validation check failed: {e}")
 
                     if new_omdb_result and is_valid_candidate:
                         norm_lookup_title = normalize_title(new_omdb_result.title)
@@ -642,19 +647,22 @@ class ScannerService:
                     elif omdb_result.media_type in ("movie", "documentary") and year and abs(omdb_result.year - year) > 1:
                         is_valid = False
                     elif self.ai_matcher and self.ai_matcher.is_available:
-                        try:
-                            v_res = self.ai_matcher.batch_validate_omdb_matches([{
-                                "id": 0,
-                                "raw_title": log.raw_title,
-                                "feed_type": media_type,
-                                "omdb_title": omdb_result.title,
-                                "omdb_year": omdb_result.year,
-                                "omdb_type": omdb_result.media_type,
-                            }]).get(0)
-                            if v_res and not v_res.get("is_match", True):
-                                is_valid = False
-                        except Exception as e:
-                            logger.warning(f"AI candidate validation check failed: {e}")
+                        clean_rep = clean_title_for_comparison(title)
+                        clean_cand = clean_title_for_comparison(omdb_result.title)
+                        if clean_rep != clean_cand:
+                            try:
+                                v_res = self.ai_matcher.batch_validate_omdb_matches([{
+                                    "id": 0,
+                                    "raw_title": log.raw_title,
+                                    "feed_type": media_type,
+                                    "omdb_title": omdb_result.title,
+                                    "omdb_year": omdb_result.year,
+                                    "omdb_type": omdb_result.media_type,
+                                }]).get(0)
+                                if v_res and not v_res.get("is_match", True):
+                                    is_valid = False
+                            except Exception as e:
+                                logger.warning(f"AI candidate validation check failed: {e}")
 
                 if omdb_result and is_valid:
                     norm_lookup_title = normalize_title(omdb_result.title)
@@ -1074,11 +1082,11 @@ class ScannerService:
                     )
                     return
 
-            # AI Match Validation if enabled and candidate title differs or requires confidence check
+            # AI Match Validation if enabled and candidate title substantially differs
             if self.ai_matcher and self.ai_matcher.is_available:
-                norm_parsed = normalize_title(parsed.title)
-                norm_omdb = normalize_title(omdb_result.title)
-                if norm_parsed != norm_omdb:
+                clean_parsed = clean_title_for_comparison(parsed.title)
+                clean_omdb = clean_title_for_comparison(omdb_result.title)
+                if clean_parsed != clean_omdb:
                     try:
                         validation = self.ai_matcher.batch_validate_omdb_matches([
                             {
