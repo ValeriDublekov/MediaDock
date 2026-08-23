@@ -435,18 +435,43 @@ class ScannerService:
             logger.info("No titles found in database to recheck.")
             return stats
 
-        logger.info(f"Starting AI recheck of {len(all_titles)} titles in database...")
+        # Filter out already AI-validated titles
+        unvalidated_titles = [
+            (tid, trec) for (tid, trec) in all_titles if not trec.ai_validated
+        ]
+
+        logger.info(
+            f"AI recheck status: {len(all_titles)} total in DB, "
+            f"{len(all_titles) - len(unvalidated_titles)} already AI-validated. "
+            f"{len(unvalidated_titles)} remaining to audit."
+        )
+
+        if not unvalidated_titles:
+            logger.info("All existing database titles are already AI-validated. Skipping recheck.")
+            return stats
+
+        # Sort newest first by last_seen_at or updated_at or first_seen_at
+        def _get_sort_key(item: tuple[str, Title]) -> datetime.datetime:
+            t = item[1]
+            return t.last_seen_at or t.updated_at or t.first_seen_at or datetime.datetime.min
+
+        unvalidated_titles.sort(key=_get_sort_key, reverse=True)
 
         batch_size = 15
-        total_batches = (len(all_titles) + batch_size - 1) // batch_size
-        for batch_idx, i in enumerate(range(0, len(all_titles), batch_size), start=1):
-            chunk = all_titles[i : i + batch_size]
+        total_batches = (len(unvalidated_titles) + batch_size - 1) // batch_size
+        logger.info(
+            f"Starting AI recheck of {len(unvalidated_titles)} unvalidated titles in database "
+            f"(newest first, {total_batches} batches of up to {batch_size})..."
+        )
+
+        for batch_idx, i in enumerate(range(0, len(unvalidated_titles), batch_size), start=1):
+            chunk = unvalidated_titles[i : i + batch_size]
             items_to_audit = []
             chunk_context = []
 
             logger.info(
                 f"[AI Recheck] Batch {batch_idx}/{total_batches}: auditing {len(chunk)} titles "
-                f"(items {i + 1}-{i + len(chunk)} of {len(all_titles)})..."
+                f"(items {i + 1}-{i + len(chunk)} of {len(unvalidated_titles)})..."
             )
 
             for idx, (title_id, title_record) in enumerate(chunk):
@@ -471,15 +496,25 @@ class ScannerService:
                 try:
                     audit_results = self.ai_matcher.batch_recheck_matches(items_to_audit)
                 except Exception as e:
-                    logger.warning(f"AI batch_recheck_matches failed: {e}")
+                    logger.warning(f"AI batch_recheck_matches exception: {e}")
 
-            # Brief rate-limit pause between AI batches if more remain
-            if batch_idx < total_batches and self.ai_matcher and self.ai_matcher.is_available:
-                time.sleep(1.0)
+            if items_to_audit and not audit_results:
+                logger.error(
+                    f"[AI Recheck] AI matcher failed or returned no results on batch {batch_idx}/{total_batches} "
+                    f"(rate limit or API error). Stopping remaining recheck processing immediately."
+                )
+                break
 
             for idx, (title_id, title_record, occs, raw_title, feed_name) in enumerate(chunk_context):
                 ai_res = audit_results.get(idx, {})
-                if audit_results and not ai_res.get("is_valid_match", True):
+                if ai_res.get("is_valid_match", True):
+                    # Valid match: mark as AI-validated and persist to DB
+                    title_record.ai_validated = True
+                    title_record.ai_checked_at = self.now
+                    if not self.config.is_dry_run:
+                        self.title_repo.upsert(title_id, title_record)
+                else:
+                    # Mismatch detected
                     stats["mismatches_found"] += 1
                     corr_title = ai_res.get("corrected_title")
                     corr_year = ai_res.get("corrected_year")
@@ -551,6 +586,8 @@ class ScannerService:
                             awards=new_omdb_result.awards,
                             box_office=new_omdb_result.box_office,
                             ratings=new_omdb_result.ratings,
+                            ai_validated=True,
+                            ai_checked_at=self.now,
                         )
 
                         if not self.config.is_dry_run:
@@ -596,6 +633,10 @@ class ScannerService:
                         stats["removed"] += 1
 
             self._flush_parse_logs(section_timings)
+
+            # Brief rate-limit pause between AI batches if more remain
+            if batch_idx < total_batches and self.ai_matcher and self.ai_matcher.is_available:
+                time.sleep(2.0)
 
         logger.info(f"AI database recheck completed: {stats}")
         return stats
@@ -654,8 +695,15 @@ class ScannerService:
                 except Exception as e:
                     logger.warning(f"AI batch_extract_titles failed: {e}")
 
+            if items_to_extract and not extracted_results:
+                logger.error(
+                    f"[AI Reparse] AI matcher failed or returned no results on batch {batch_idx}/{total_batches} "
+                    f"(rate limit or API error). Stopping remaining unmapped re-parse batches immediately."
+                )
+                break
+
             if batch_idx < total_batches and self.ai_matcher and self.ai_matcher.is_available:
-                time.sleep(1.0)
+                time.sleep(2.0)
 
             for idx, log in enumerate(chunk):
                 ai_data = extracted_results.get(idx, {})

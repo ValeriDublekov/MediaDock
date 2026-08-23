@@ -432,4 +432,62 @@ class TestScanner(unittest.TestCase):
         self.assertEqual(logs[0].ignore_reason, "parse_error")
         self.assertIn("Syntax parsing crash", logs[0].error_message or "")
 
+    def test_recheck_skips_ai_validated_titles_and_persists_flag(self):
+        t1 = Title(
+            title="Matrix", normalized_title="matrix", year=1999, media_type="movie",
+            first_seen_at=self.now, last_seen_at=self.now, updated_at=self.now,
+            ai_validated=True
+        )
+        t2 = Title(
+            title="Inception", normalized_title="inception", year=2010, media_type="movie",
+            first_seen_at=self.now, last_seen_at=self.now, updated_at=self.now,
+            ai_validated=False
+        )
+        self.title_repo.upsert("t1", t1)
+        self.title_repo.upsert("t2", t2)
+
+        config = ScannerConfig(trigger="manual", mode="recheck-existing")
+        omdb = MockOmdbClient({})
+        scanner = self.create_scanner(config, omdb)
+
+        from unittest.mock import MagicMock
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        mock_ai.batch_recheck_matches.return_value = {0: {"is_valid_match": True}}
+        scanner.ai_matcher = mock_ai
+
+        res = scanner._recheck_existing_titles()
+        # Should only check 1 title (t2), because t1 was already ai_validated=True
+        self.assertEqual(res["titles_checked"], 1)
+        # Verify t2 is now marked ai_validated=True in repository
+        updated_t2 = self.title_repo.get("t2")
+        self.assertTrue(updated_t2.ai_validated)
+
+    def test_recheck_stops_on_first_ai_error(self):
+        t1 = Title(
+            title="Film 1", normalized_title="film 1", year=2020, media_type="movie",
+            first_seen_at=self.now, last_seen_at=self.now, updated_at=self.now,
+        )
+        t2 = Title(
+            title="Film 2", normalized_title="film 2", year=2021, media_type="movie",
+            first_seen_at=self.now, last_seen_at=self.now, updated_at=self.now,
+        )
+        self.title_repo.upsert("t1", t1)
+        self.title_repo.upsert("t2", t2)
+
+        config = ScannerConfig(trigger="manual", mode="recheck-existing")
+        omdb = MockOmdbClient({})
+        scanner = self.create_scanner(config, omdb)
+
+        from unittest.mock import MagicMock
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        # AI returns empty dict (simulating 429 error or failure)
+        mock_ai.batch_recheck_matches.return_value = {}
+        scanner.ai_matcher = mock_ai
+
+        res = scanner._recheck_existing_titles()
+        # On batch 1 failure, it should stop immediately
+        self.assertEqual(mock_ai.batch_recheck_matches.call_count, 1)
+
 

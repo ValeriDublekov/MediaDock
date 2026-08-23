@@ -82,6 +82,8 @@ def title_from_dict(d: dict) -> Title:
         awards=d.get("awards"),
         box_office=d.get("boxOffice"),
         ratings=d.get("ratings") or [],
+        ai_validated=d.get("aiValidated"),
+        ai_checked_at=d.get("aiCheckedAt"),
     )
 
 

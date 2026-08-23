@@ -26,6 +26,8 @@ def merge_titles(existing: Title, incoming: Title) -> Title:
     awards = incoming.awards if incoming.awards is not None else existing.awards
     box_office = incoming.box_office if incoming.box_office is not None else existing.box_office
     ratings = incoming.ratings if incoming.ratings else existing.ratings
+    ai_validated = incoming.ai_validated if incoming.ai_validated is not None else existing.ai_validated
+    ai_checked_at = incoming.ai_checked_at if incoming.ai_checked_at is not None else existing.ai_checked_at
 
     return Title(
         title=incoming.title or existing.title,
@@ -48,6 +50,8 @@ def merge_titles(existing: Title, incoming: Title) -> Title:
         awards=awards,
         box_office=box_office,
         ratings=ratings,
+        ai_validated=ai_validated,
+        ai_checked_at=ai_checked_at,
     )
 
 

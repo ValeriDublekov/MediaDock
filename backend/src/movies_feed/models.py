@@ -27,6 +27,8 @@ class Title:
     awards: Optional[str] = None
     box_office: Optional[str] = None
     ratings: List[Dict[str, str]] = field(default_factory=list)
+    ai_validated: Optional[bool] = None
+    ai_checked_at: Optional[datetime.datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the Title model to a camelCase Firestore dictionary."""
@@ -65,6 +67,10 @@ class Title:
             res["boxOffice"] = self.box_office
         if self.ratings:
             res["ratings"] = self.ratings
+        if self.ai_validated is not None:
+            res["aiValidated"] = self.ai_validated
+        if self.ai_checked_at is not None:
+            res["aiCheckedAt"] = self.ai_checked_at
         return res
 
 
