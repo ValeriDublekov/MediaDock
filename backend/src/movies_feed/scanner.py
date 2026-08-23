@@ -400,6 +400,13 @@ class ScannerService:
             logger.info("Scan Section Timings Summary:")
             for sec_name, sec_time in run.section_timings.items():
                 logger.info(f"  - Section '{sec_name}': {sec_time:.4f}s")
+            if self.ai_matcher and self.ai_matcher.is_available:
+                ai_stats = self.ai_matcher.get_stats()
+                logger.info(
+                    f"AI Matcher Execution Summary: Calls Total={ai_stats['total_calls']} "
+                    f"(Success={ai_stats['successful_calls']}, Failed={ai_stats['failed_calls']}), "
+                    f"Items Processed={ai_stats['total_items_processed']}"
+                )
             if not self.config.is_dry_run and not self.config.is_parse_only:
                 self.run_repo.upsert(run_id, run)
 
@@ -431,10 +438,16 @@ class ScannerService:
         logger.info(f"Starting AI recheck of {len(all_titles)} titles in database...")
 
         batch_size = 15
-        for i in range(0, len(all_titles), batch_size):
+        total_batches = (len(all_titles) + batch_size - 1) // batch_size
+        for batch_idx, i in enumerate(range(0, len(all_titles), batch_size), start=1):
             chunk = all_titles[i : i + batch_size]
             items_to_audit = []
             chunk_context = []
+
+            logger.info(
+                f"[AI Recheck] Batch {batch_idx}/{total_batches}: auditing {len(chunk)} titles "
+                f"(items {i + 1}-{i + len(chunk)} of {len(all_titles)})..."
+            )
 
             for idx, (title_id, title_record) in enumerate(chunk):
                 occs = self.occurrence_repo.list_by_title(title_id)
@@ -459,6 +472,10 @@ class ScannerService:
                     audit_results = self.ai_matcher.batch_recheck_matches(items_to_audit)
                 except Exception as e:
                     logger.warning(f"AI batch_recheck_matches failed: {e}")
+
+            # Brief rate-limit pause between AI batches if more remain
+            if batch_idx < total_batches and self.ai_matcher and self.ai_matcher.is_available:
+                time.sleep(1.0)
 
             for idx, (title_id, title_record, occs, raw_title, feed_name) in enumerate(chunk_context):
                 ai_res = audit_results.get(idx, {})
@@ -617,12 +634,18 @@ class ScannerService:
                 unique_logs.append(log)
 
         batch_size = 15
-        for i in range(0, len(unique_logs), batch_size):
+        total_batches = (len(unique_logs) + batch_size - 1) // batch_size
+        for batch_idx, i in enumerate(range(0, len(unique_logs), batch_size), start=1):
             chunk = unique_logs[i : i + batch_size]
             items_to_extract = [
                 {"id": idx, "raw_title": log.raw_title, "feed_type": "movie"}
                 for idx, log in enumerate(chunk)
             ]
+
+            logger.info(
+                f"[AI Reparse] Batch {batch_idx}/{total_batches}: re-parsing {len(chunk)} unmapped entries "
+                f"(items {i + 1}-{i + len(chunk)} of {len(unique_logs)})..."
+            )
 
             extracted_results = {}
             if self.ai_matcher and self.ai_matcher.is_available:
@@ -630,6 +653,9 @@ class ScannerService:
                     extracted_results = self.ai_matcher.batch_extract_titles(items_to_extract)
                 except Exception as e:
                     logger.warning(f"AI batch_extract_titles failed: {e}")
+
+            if batch_idx < total_batches and self.ai_matcher and self.ai_matcher.is_available:
+                time.sleep(1.0)
 
             for idx, log in enumerate(chunk):
                 ai_data = extracted_results.get(idx, {})

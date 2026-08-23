@@ -18,18 +18,51 @@ class AiMatcher:
     and validate candidate OMDb matches in batches.
     """
 
-    def __init__(self, api_key: Optional[str] = None, model: str = GEMINI_MODEL):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = GEMINI_MODEL,
+        forbidden_cooldown_seconds: float = 300.0,
+    ):
         self.api_key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "")
         self.model = model
         self.endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
+        self.forbidden_cooldown_seconds = forbidden_cooldown_seconds
+        self.total_calls: int = 0
+        self.successful_calls: int = 0
+        self.failed_calls: int = 0
+        self.total_items_processed: int = 0
 
     @property
     def is_available(self) -> bool:
         return bool(self.api_key and len(self.api_key.strip()) > 5)
 
-    def _call_gemini(self, prompt: str, schema: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    def get_stats(self) -> Dict[str, int]:
+        return {
+            "total_calls": self.total_calls,
+            "successful_calls": self.successful_calls,
+            "failed_calls": self.failed_calls,
+            "total_items_processed": self.total_items_processed,
+        }
+
+    def _call_gemini(
+        self,
+        prompt: str,
+        schema: Optional[Dict[str, Any]] = None,
+        action_name: str = "generateContent",
+        item_count: int = 1,
+    ) -> Optional[Dict[str, Any]]:
         if not self.is_available:
             return None
+
+        self.total_calls += 1
+        call_id = self.total_calls
+        t0 = time.perf_counter()
+
+        logger.info(
+            f"[Gemini API #{call_id}] Starting '{action_name}' request "
+            f"(model: {self.model}, items: {item_count}, prompt_len: {len(prompt)} chars)..."
+        )
 
         url = f"{self.endpoint}?key={self.api_key}"
         payload: Dict[str, Any] = {
@@ -63,23 +96,54 @@ class AiMatcher:
                     candidates = resp_json.get("candidates", [])
                     if candidates:
                         first_part = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
-                        return json.loads(first_part)
+                        parsed_res = json.loads(first_part)
+                        elapsed = time.perf_counter() - t0
+                        self.successful_calls += 1
+                        self.total_items_processed += item_count
+                        logger.info(
+                            f"[Gemini API #{call_id}] Request '{action_name}' SUCCEEDED in {elapsed:.2f}s "
+                            f"(processed {item_count} items)."
+                        )
+                        return parsed_res
+                    logger.warning(f"[Gemini API #{call_id}] No candidates returned in response.")
+                    self.failed_calls += 1
                     return None
             except urllib.error.HTTPError as e:
+                if e.code == 403:
+                    if attempt < max_retries - 1:
+                        cooldown_mins = self.forbidden_cooldown_seconds / 60.0
+                        logger.warning(
+                            f"[Gemini API #{call_id}] HTTP 403 Forbidden received. "
+                            f"Pausing execution for {int(self.forbidden_cooldown_seconds)}s ({cooldown_mins:.1f} minutes) "
+                            f"before retry (attempt {attempt + 1}/{max_retries})..."
+                        )
+                        time.sleep(self.forbidden_cooldown_seconds)
+                        continue
+                    else:
+                        logger.error(
+                            f"[Gemini API #{call_id}] HTTP 403 Forbidden: persistent error "
+                            f"after {max_retries} attempts."
+                        )
+                        self.failed_calls += 1
+                        break
                 if e.code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
                     sleep_time = (2 ** attempt) * 2.0
                     logger.warning(
-                        f"Gemini API HTTP error {e.code}: {e.reason}. Retrying in {sleep_time:.1f}s (attempt {attempt + 1}/{max_retries})..."
+                        f"[Gemini API #{call_id}] HTTP {e.code} ({e.reason}). "
+                        f"Retrying in {sleep_time:.1f}s (attempt {attempt + 1}/{max_retries})..."
                     )
                     time.sleep(sleep_time)
                     continue
-                logger.warning(f"Gemini API HTTP error {e.code}: {e.reason}")
+                logger.warning(f"[Gemini API #{call_id}] HTTP error {e.code}: {e.reason}")
+                self.failed_calls += 1
                 break
             except urllib.error.URLError as e:
-                logger.warning(f"Gemini API URL error: {e.reason}")
+                logger.warning(f"[Gemini API #{call_id}] URL error: {e.reason}")
+                self.failed_calls += 1
                 break
             except Exception as e:
-                logger.warning(f"Gemini API call failed: {e}")
+                logger.warning(f"[Gemini API #{call_id}] Call failed: {e}")
+                self.failed_calls += 1
                 break
 
         return None
@@ -125,7 +189,12 @@ class AiMatcher:
             }
         }
 
-        result = self._call_gemini(prompt, schema)
+        result = self._call_gemini(
+            prompt,
+            schema,
+            action_name="batch_extract_titles",
+            item_count=len(items),
+        )
         if not result or not isinstance(result, list):
             return {}
 
@@ -133,6 +202,7 @@ class AiMatcher:
         for entry in result:
             if isinstance(entry, dict) and "id" in entry:
                 out[entry["id"]] = entry
+        logger.info(f"[AiMatcher] Extracted title metadata for {len(out)}/{len(items)} items.")
         return out
 
     def batch_validate_omdb_matches(self, candidates: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
@@ -173,7 +243,12 @@ class AiMatcher:
             }
         }
 
-        result = self._call_gemini(prompt, schema)
+        result = self._call_gemini(
+            prompt,
+            schema,
+            action_name="batch_validate_omdb_matches",
+            item_count=len(candidates),
+        )
         if not result or not isinstance(result, list):
             return {}
 
@@ -181,6 +256,7 @@ class AiMatcher:
         for entry in result:
             if isinstance(entry, dict) and "id" in entry:
                 out[entry["id"]] = entry
+        logger.info(f"[AiMatcher] Validated OMDb matches for {len(out)}/{len(candidates)} candidates.")
         return out
 
     def batch_recheck_matches(self, items: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
@@ -242,7 +318,12 @@ class AiMatcher:
             }
         }
 
-        result = self._call_gemini(prompt, schema)
+        result = self._call_gemini(
+            prompt,
+            schema,
+            action_name="batch_recheck_matches",
+            item_count=len(items),
+        )
         if not result or not isinstance(result, list):
             return {}
 
@@ -250,4 +331,5 @@ class AiMatcher:
         for entry in result:
             if isinstance(entry, dict) and "id" in entry:
                 out[entry["id"]] = entry
+        logger.info(f"[AiMatcher] Audited {len(out)}/{len(items)} database titles.")
         return out

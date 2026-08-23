@@ -156,6 +156,28 @@ class TestAiMatcher(unittest.TestCase):
         self.assertEqual(res, {"id": 0})
         self.assertEqual(mock_urlopen.call_count, 2)
         mock_sleep.assert_called_once_with(2.0)
+        self.assertEqual(matcher.get_stats()["total_calls"], 1)
+        self.assertEqual(matcher.get_stats()["successful_calls"], 1)
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_call_gemini_403_forbidden_retries_and_pauses(self, mock_urlopen, mock_sleep):
+        import urllib.error
+        from io import BytesIO
+
+        error_403 = urllib.error.HTTPError("http://example.com", 403, "Forbidden", {}, BytesIO())
+        mock_urlopen.side_effect = error_403
+
+        matcher = AiMatcher(api_key="valid_key", forbidden_cooldown_seconds=300.0)
+        res = matcher._call_gemini("test prompt")
+        self.assertIsNone(res)
+        # Should attempt 3 times before failing
+        self.assertEqual(mock_urlopen.call_count, 3)
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_sleep.assert_called_with(300.0)
+        stats = matcher.get_stats()
+        self.assertEqual(stats["total_calls"], 1)
+        self.assertEqual(stats["failed_calls"], 1)
 
     def test_clean_title_for_comparison(self):
         from movies_feed.ids import clean_title_for_comparison
