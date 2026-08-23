@@ -61,6 +61,7 @@ describe('TriggerScannerModal', () => {
             inputs: {
               dry_run: false,
               force_days: '2',
+              mode: 'rss',
             },
           }),
         })

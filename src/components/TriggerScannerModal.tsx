@@ -378,173 +378,201 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3">
-                {/* GitHub Owner */}
+              {/* SECTION: Scan Configuration */}
+              <div className="p-3.5 bg-neutral-900/80 border border-neutral-800 rounded-xl space-y-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                  1. Режим на сканиране & Настройки
+                </h4>
+
+                {/* Scan Mode Selector */}
                 <div>
                   <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                    GitHub Owner / Потребител <span className="text-amber-400">*</span>
+                    Изберете какво да изпълни сканерът (Scan Mode)
                   </label>
-                  <input
-                    type="text"
-                    value={owner}
-                    onChange={(e) => setOwner(e.target.value)}
-                    placeholder="напр. vdublikov"
-                    required
-                    data-testid="input-github-owner"
-                    className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-
-                {/* GitHub Repo */}
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                    Репозитория (Repo) <span className="text-amber-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={repo}
-                    onChange={(e) => setRepo(e.target.value)}
-                    placeholder="movies-feed"
-                    required
-                    data-testid="input-github-repo"
-                    className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-              </div>
-
-              {/* GitHub Token */}
-              <div>
-                <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                  GitHub Personal Access Token (PAT) <span className="text-amber-400">*</span>
-                </label>
-                <input
-                  type="password"
-                  value={pat}
-                  onChange={(e) => setPat(e.target.value)}
-                  placeholder="ghp_xxxxxxxxxxxx или github_pat_xxxx"
-                  required
-                  data-testid="input-github-pat"
-                  className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500 font-mono"
-                />
-                <p className="text-[11px] text-neutral-400 mt-1 flex items-center gap-1">
-                  <span>Необходим е token с право <strong>Actions (write)</strong>.</span>
-                  <a
-                    href="https://github.com/settings/tokens?type=beta"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-amber-400 hover:underline inline-flex items-center gap-0.5"
+                  <select
+                    value={mode}
+                    onChange={(e) => setMode(e.target.value)}
+                    data-testid="select-scan-mode"
+                    className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
                   >
-                    Генерирай PAT <ExternalLink className="w-3 h-3" />
-                  </a>
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 pt-1 border-t border-neutral-800/80">
-                {/* Workflow File */}
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Workflow файл
-                  </label>
-                  <input
-                    type="text"
-                    value={workflow}
-                    onChange={(e) => setWorkflow(e.target.value)}
-                    placeholder="scanner.yml"
-                    data-testid="input-github-workflow"
-                    className="w-full px-3 py-1.5 bg-neutral-950 border border-neutral-800 rounded-lg text-xs text-neutral-300 font-mono focus:outline-none focus:border-amber-500"
-                  />
+                    <option value="rss">1. RSS Сканиране — за нови торенти от емисиите</option>
+                    <option value="recheck-existing">2. AI Одит & Поправка — проверка на филмите в базата</option>
+                    <option value="reparse-unfound">3. AI Разпознаване — повторен опит за ненамерени заглавия</option>
+                    <option value="all">4. Пълен цикъл — RSS сканиране + AI одит + AI разпознаване</option>
+                  </select>
+                  <p className="text-[11px] text-neutral-400 mt-1">
+                    {mode === 'rss' && 'Сканира актуалните RSS емисии и добавя новите филми/сериали.'}
+                    {mode === 'recheck-existing' && 'Извлича записаните филми от базата данни и ги проверява с AI за грешни OMDb съвпадения. Поправя ги или премахва невалидните.'}
+                    {mode === 'reparse-unfound' && 'Взима ненамерените торенти от логовете и ги подава на AI за ново разпознаване и търсене в OMDb.'}
+                    {mode === 'all' && 'Пълен процес: първо RSS сканиране, след това AI одит на базата и AI разпознаване на ненамерените заглавия.'}
+                  </p>
                 </div>
 
-                {/* Branch / Ref */}
+                {/* Force Scan Days Selector */}
                 <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Клон (Branch / Ref)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className={`block text-xs font-semibold ${mode === 'rss' || mode === 'all' ? 'text-neutral-300' : 'text-neutral-400'}`}>
+                      Форсирано сканиране на RSS (дни назад)
+                    </label>
+                    {(mode !== 'rss' && mode !== 'all') && (
+                      <span className="text-[10px] bg-neutral-800 text-neutral-400 px-2 py-0.5 rounded font-mono">
+                        Не е приложимо за AI режимите
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    value={forceDays}
+                    onChange={(e) => setForceDays(e.target.value)}
+                    disabled={mode !== 'rss' && mode !== 'all'}
+                    data-testid="select-force-days"
+                    className={`w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm focus:outline-none ${
+                      mode === 'rss' || mode === 'all'
+                        ? 'text-neutral-100 focus:border-amber-500'
+                        : 'text-neutral-400 opacity-50 cursor-not-allowed'
+                    }`}
+                  >
+                    <option value="0">0 (Стандартно — само нови публикувани торенти)</option>
+                    <option value="1">1 ден назад (прераглежда & парсва наново)</option>
+                    <option value="2">2 дни назад (прераглежда & парсва наново)</option>
+                    <option value="3">3 дни назад</option>
+                    <option value="7">7 дни назад</option>
+                  </select>
+                  <p className="text-[11px] text-neutral-400 mt-1">
+                    {mode === 'rss' || mode === 'all'
+                      ? 'Указва колко дни назад от RSS фийда да се преразгледат и обработят наново.'
+                      : 'Опцията важи само при сканиране на RSS емисии. Избраният AI режим работи директно върху филмите в базата данни/логовете.'}
+                  </p>
+                </div>
+
+                {/* Dry Run Checkbox */}
+                <div className="flex items-center gap-2 pt-1 border-t border-neutral-800/60">
                   <input
-                    type="text"
-                    value={ref}
-                    onChange={(e) => setRef(e.target.value)}
-                    placeholder="main"
-                    data-testid="input-github-ref"
-                    className="w-full px-3 py-1.5 bg-neutral-950 border border-neutral-800 rounded-lg text-xs text-neutral-300 font-mono focus:outline-none focus:border-amber-500"
+                    type="checkbox"
+                    id="dry_run_checkbox"
+                    checked={dryRun}
+                    onChange={(e) => setDryRun(e.target.checked)}
+                    data-testid="checkbox-dry-run"
+                    className="w-4 h-4 rounded border-neutral-700 bg-neutral-950 text-amber-500 focus:ring-amber-500 cursor-pointer"
                   />
+                  <label htmlFor="dry_run_checkbox" className="text-xs text-neutral-300 cursor-pointer select-none">
+                    Тестово изпълнение (<code className="text-amber-400">--dry-run</code> — без запис в базата данни)
+                  </label>
                 </div>
               </div>
 
-              {/* OMDb API Key */}
-              <div>
-                <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                  OMDb API Key (за ръчен рефреш)
-                </label>
-                <input
-                  type="password"
-                  value={omdbApiKey}
-                  onChange={(e) => setOmdbApiKey(e.target.value)}
-                  placeholder="напр. xxxxxxxx"
-                  data-testid="input-omdb-api-key"
-                  className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500 font-mono"
-                />
-              </div>
+              {/* SECTION: Credentials & GitHub Settings */}
+              <div className="p-3.5 bg-neutral-900/40 border border-neutral-800/80 rounded-xl space-y-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-400">
+                  2. GitHub Actions Данни & Ключове
+                </h4>
 
-              {/* Scan Mode Selector */}
-              <div>
-                <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                  Режим на сканиране (Scan Mode)
-                </label>
-                <select
-                  value={mode}
-                  onChange={(e) => setMode(e.target.value)}
-                  data-testid="select-scan-mode"
-                  className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
-                >
-                  <option value="rss">1. Стандартно RSS сканиране (нови торенти)</option>
-                  <option value="recheck-existing">2. AI проверка & поправка на съществуващи заглавия в базата</option>
-                  <option value="reparse-unfound">3. AI повторно парсване на ненамерени заглавия</option>
-                  <option value="all">4. Пълен цикъл (RSS сканиране + AI проверка + AI парсване)</option>
-                </select>
-                <p className="text-[11px] text-neutral-400 mt-1">
-                  {mode === 'recheck-existing' && 'Извлича записаните в базата заглавия и ги проверява с AI за грешни OMDb съвпадения. При грешка прави нова OMDb заявка или изтрива невалидния запис.'}
-                  {mode === 'reparse-unfound' && 'Взима ненамерените/неразпознати заглавия от логовете и ги подава на AI за извличане и ново търсене в OMDb.'}
-                  {mode === 'all' && 'Изпълнява пълен процес: ново RSS сканиране, последвано от AI одит на базата и AI опит за парсване на ненамерени заглавия.'}
-                  {mode === 'rss' && 'Сканира актуалните RSS емисии и добавя новите филми/сериали.'}
-                </p>
-              </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {/* GitHub Owner */}
+                  <div>
+                    <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                      GitHub Owner / Потребител <span className="text-amber-400">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={owner}
+                      onChange={(e) => setOwner(e.target.value)}
+                      placeholder="напр. vdublikov"
+                      required
+                      data-testid="input-github-owner"
+                      className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
 
-              {/* Force Scan Days Selector */}
-              <div>
-                <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                  Форсирано сканиране (дни назад)
-                </label>
-                <select
-                  value={forceDays}
-                  onChange={(e) => setForceDays(e.target.value)}
-                  data-testid="select-force-days"
-                  className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
-                >
-                  <option value="0">0 (Стандартно - нови записи)</option>
-                  <option value="1">1 ден назад (презаписва & парсва наново)</option>
-                  <option value="2">2 дни назад (презаписва & парсва наново)</option>
-                  <option value="3">3 дни назад</option>
-                  <option value="7">7 дни назад</option>
-                </select>
-                <p className="text-[11px] text-neutral-400 mt-1">
-                  Преразглежда и парсва филмите публикувани през последните N дни (ползва OMDb кеш при възможност).
-                </p>
-              </div>
+                  {/* GitHub Repo */}
+                  <div>
+                    <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                      Репозитория (Repo) <span className="text-amber-400">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={repo}
+                      onChange={(e) => setRepo(e.target.value)}
+                      placeholder="movies-feed"
+                      required
+                      data-testid="input-github-repo"
+                      className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                </div>
 
-              {/* Dry Run Checkbox */}
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="dry_run_checkbox"
-                  checked={dryRun}
-                  onChange={(e) => setDryRun(e.target.checked)}
-                  data-testid="checkbox-dry-run"
-                  className="w-4 h-4 rounded border-neutral-700 bg-neutral-950 text-amber-500 focus:ring-amber-500 cursor-pointer"
-                />
-                <label htmlFor="dry_run_checkbox" className="text-xs text-neutral-300 cursor-pointer select-none">
-                  Тестово парсване (<code className="text-amber-400">--dry-run</code> - без запис в базата данни)
-                </label>
+                {/* GitHub Token */}
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                    GitHub Personal Access Token (PAT) <span className="text-amber-400">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    value={pat}
+                    onChange={(e) => setPat(e.target.value)}
+                    placeholder="ghp_xxxxxxxxxxxx или github_pat_xxxx"
+                    required
+                    data-testid="input-github-pat"
+                    className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500 font-mono"
+                  />
+                  <p className="text-[11px] text-neutral-400 mt-1 flex items-center gap-1">
+                    <span>Token с право <strong>Actions (write)</strong>.</span>
+                    <a
+                      href="https://github.com/settings/tokens?type=beta"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-amber-400 hover:underline inline-flex items-center gap-0.5"
+                    >
+                      Генерирай PAT <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-1 border-t border-neutral-800/80">
+                  {/* Workflow File */}
+                  <div>
+                    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                      Workflow файл
+                    </label>
+                    <input
+                      type="text"
+                      value={workflow}
+                      onChange={(e) => setWorkflow(e.target.value)}
+                      placeholder="scanner.yml"
+                      data-testid="input-github-workflow"
+                      className="w-full px-3 py-1.5 bg-neutral-950 border border-neutral-800 rounded-lg text-xs text-neutral-300 font-mono focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  {/* Branch / Ref */}
+                  <div>
+                    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                      Клон (Branch / Ref)
+                    </label>
+                    <input
+                      type="text"
+                      value={ref}
+                      onChange={(e) => setRef(e.target.value)}
+                      placeholder="main"
+                      data-testid="input-github-ref"
+                      className="w-full px-3 py-1.5 bg-neutral-950 border border-neutral-800 rounded-lg text-xs text-neutral-300 font-mono focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                </div>
+
+                {/* OMDb API Key */}
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                    OMDb API Key (по избор, за ръчен рефреш)
+                  </label>
+                  <input
+                    type="password"
+                    value={omdbApiKey}
+                    onChange={(e) => setOmdbApiKey(e.target.value)}
+                    placeholder="напр. xxxxxxxx"
+                    data-testid="input-omdb-api-key"
+                    className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500 font-mono"
+                  />
+                </div>
               </div>
 
               {/* Footer Actions */}
