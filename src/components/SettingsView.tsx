@@ -18,7 +18,9 @@ import {
   Tag,
   Film,
   Rss,
-  Info
+  Info,
+  Key,
+  Github
 } from 'lucide-react';
 
 export const SettingsView: React.FC = () => {
@@ -26,6 +28,12 @@ export const SettingsView: React.FC = () => {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Client / Scanner credentials stored in localStorage
+  const [omdbApiKey, setOmdbApiKey] = useState('');
+  const [ghOwner, setGhOwner] = useState('');
+  const [ghRepo, setGhRepo] = useState('movies-feed');
+  const [ghPat, setGhPat] = useState('');
 
   // Input states for adding items
   const [newFeedName, setNewFeedName] = useState('');
@@ -35,6 +43,17 @@ export const SettingsView: React.FC = () => {
   const [newCountry, setNewCountry] = useState('');
 
   useEffect(() => {
+    // Load local storage keys
+    const savedOmdb = localStorage.getItem('movies_feed_omdb_api_key') || import.meta.env.VITE_OMDB_API_KEY || import.meta.env.OMDB_API_KEY || '';
+    const savedOwner = localStorage.getItem('movies_feed_gh_owner') || import.meta.env.VITE_GITHUB_OWNER || '';
+    const savedRepo = localStorage.getItem('movies_feed_gh_repo') || import.meta.env.VITE_GITHUB_REPO || 'movies-feed';
+    const savedPat = localStorage.getItem('movies_feed_gh_pat') || import.meta.env.VITE_GITHUB_PAT || '';
+
+    setOmdbApiKey(savedOmdb);
+    setGhOwner(savedOwner);
+    setGhRepo(savedRepo);
+    setGhPat(savedPat);
+
     async function loadSettings() {
       setIsLoading(true);
       try {
@@ -51,12 +70,18 @@ export const SettingsView: React.FC = () => {
   }, []);
 
   const handleSave = async () => {
+    // Save client localStorage settings
+    localStorage.setItem('movies_feed_omdb_api_key', omdbApiKey.trim());
+    localStorage.setItem('movies_feed_gh_owner', ghOwner.trim());
+    localStorage.setItem('movies_feed_gh_repo', ghRepo.trim());
+    localStorage.setItem('movies_feed_gh_pat', ghPat.trim());
+
     if (!settings) return;
     setIsSaving(true);
     setMessage(null);
     try {
       await firestoreSettingsAdapter.saveSettings(settings);
-      setMessage({ type: 'success', text: 'Настройките бяха запазени успешно в Firestore!' });
+      setMessage({ type: 'success', text: 'Настройките и API ключовете бяха запазени успешно!' });
       setTimeout(() => setMessage(null), 5000);
     } catch (err) {
       console.error('Error saving settings:', err);
@@ -501,6 +526,83 @@ export const SettingsView: React.FC = () => {
                 <Plus className="w-3.5 h-3.5" />
               </button>
             </form>
+          </div>
+        </div>
+      </div>
+
+      {/* API Keys & Scanner Integration (LocalStorage / Client Keys) */}
+      <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-5 shadow-sm space-y-4">
+        <div className="flex items-center gap-2 pb-2 border-b border-neutral-800">
+          <Key className="w-5 h-5 text-amber-500" />
+          <div>
+            <h2 className="text-base font-bold text-neutral-100">API Ключове и GitHub Интеграция (Браузър / Клиентски)</h2>
+            <p className="text-xs text-neutral-400 mt-0.5">
+              Тези ключове се пазят сигурно във вашия браузър (<code className="text-amber-400">localStorage</code>) и се използват за ръчен рефреш и 1-click стартиране на сканиране.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <label className="block text-xs font-semibold text-neutral-200">
+              OMDb API Key (за браузъра)
+            </label>
+            <input
+              type="password"
+              value={omdbApiKey}
+              onChange={(e) => setOmdbApiKey(e.target.value)}
+              placeholder="напр. 1a2b3c4d"
+              data-testid="input-settings-omdb-key"
+              className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-xs font-mono text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500"
+            />
+            <p className="text-[11px] text-neutral-400 leading-relaxed">
+              Необходим при ръчно въвеждане или рефреш на IMDb ID в детайлите на филм. В GitHub Actions скенерът използва тайния ключ от GitHub Secrets (<code className="text-neutral-300">OMDB_API_KEY</code>).
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="block text-xs font-semibold text-neutral-200">
+              GitHub Personal Access Token (PAT)
+            </label>
+            <input
+              type="password"
+              value={ghPat}
+              onChange={(e) => setGhPat(e.target.value)}
+              placeholder="ghp_..."
+              data-testid="input-settings-gh-pat"
+              className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-xs font-mono text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500"
+            />
+            <p className="text-[11px] text-neutral-400 leading-relaxed">
+              Нужен само за директно стартиране на GitHub Actions сканирането от бутона в хедъра (изисква права <code className="text-neutral-300">actions:write</code>).
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="block text-xs font-semibold text-neutral-200">
+              GitHub Потребител / Организация (Owner)
+            </label>
+            <input
+              type="text"
+              value={ghOwner}
+              onChange={(e) => setGhOwner(e.target.value)}
+              placeholder="напр. your-username"
+              data-testid="input-settings-gh-owner"
+              className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="block text-xs font-semibold text-neutral-200">
+              GitHub Репозитория (Repository)
+            </label>
+            <input
+              type="text"
+              value={ghRepo}
+              onChange={(e) => setGhRepo(e.target.value)}
+              placeholder="movies-feed"
+              data-testid="input-settings-gh-repo"
+              className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-xs text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500"
+            />
           </div>
         </div>
       </div>

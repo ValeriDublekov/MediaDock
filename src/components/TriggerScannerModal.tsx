@@ -81,6 +81,14 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     localStorage.setItem(STORAGE_KEYS.OMDB_API_KEY, omdbApiKey.trim());
   };
 
+  const handleSaveOnly = () => {
+    handleSaveSettings();
+    setToastMessage({
+      type: 'success',
+      text: 'Настройките и OMDb API ключът са запазени успешно в браузъра!',
+    });
+  };
+
   const executeDispatch = async (
     targetOwner: string,
     targetRepo: string,
@@ -506,7 +514,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
               </div>
 
               {/* Footer Actions */}
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-neutral-800">
+              <div className="flex flex-wrap items-center justify-end gap-3 pt-4 border-t border-neutral-800">
                 <button
                   type="button"
                   onClick={() => setIsOpen(false)}
@@ -514,6 +522,14 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
                   className="px-4 py-2 text-sm font-medium text-neutral-300 bg-neutral-800 border border-neutral-700 rounded-lg hover:bg-neutral-700 transition-colors cursor-pointer"
                 >
                   Затвори
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveOnly}
+                  data-testid="save-only-settings-button"
+                  className="px-4 py-2 text-sm font-medium text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-lg hover:bg-amber-500/20 transition-colors cursor-pointer"
+                >
+                  Запази настройките
                 </button>
                 <button
                   type="submit"

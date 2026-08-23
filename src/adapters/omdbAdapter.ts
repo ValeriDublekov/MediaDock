@@ -206,6 +206,31 @@ export const updateTitleWithOmdb = async (oldTitle: Title, imdbId: string, apiKe
   };
 };
 
+export const saveTitleManualMapping = async (title: Title, imdbId: string): Promise<void> => {
+  let createdBy: string | null = null;
+  try {
+    const auth = getAuth();
+    createdBy = auth.currentUser?.email || auth.currentUser?.uid || null;
+  } catch {
+    // Auth might not be initialized in test environments
+  }
+
+  await firestoreManualMappingAdapter.saveManualMapping({
+    id: title.id,
+    rawTitle: title.title,
+    imdbId: imdbId.trim(),
+    parsedTitle: title.title,
+    parsedYear: title.year,
+    createdBy,
+  });
+
+  try {
+    await triggerGitHubScanner();
+  } catch {
+    // Ignore trigger failure if PAT not configured
+  }
+};
+
 export const triggerGitHubScanner = async (): Promise<boolean> => {
   try {
     const owner = typeof localStorage !== 'undefined' ? localStorage.getItem('movies_feed_gh_owner') || import.meta.env.VITE_GITHUB_OWNER || '' : '';

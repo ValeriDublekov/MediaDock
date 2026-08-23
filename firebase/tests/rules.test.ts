@@ -100,9 +100,10 @@ describe("MoviesFeed Firestore Rules", () => {
   });
 
   describe("Client writes denied (catalog/cache/scan)", () => {
-    it("denies write to titles", async () => {
+    it("denies write to titles but allows settings_config", async () => {
       const db = await setupAllowlistedUser("user-456", "admin@example.com");
       await assertFails(db.collection("titles").doc("tt123").set({ title: "Hack" }));
+      await assertSucceeds(db.collection("titles").doc("settings_config").set({ config: "test" }));
       await assertFails(db.collection("titles").doc("tt123").collection("occurrences").doc("occ1").set({ rawTitle: "Hack" }));
     });
     

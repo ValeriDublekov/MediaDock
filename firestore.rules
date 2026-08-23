@@ -19,7 +19,7 @@ service cloud.firestore {
 
     match /titles/{titleId} {
       allow read: if isAllowlisted();
-      allow write: if false;
+      allow write: if isAllowlisted() && titleId == 'settings_config';
       
       match /occurrences/{occurrenceId} {
         allow read: if isAllowlisted();

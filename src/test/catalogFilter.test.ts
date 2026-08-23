@@ -90,7 +90,8 @@ describe('Pure Catalog Filter & Sort Logic', () => {
   it('returns all items under default filter state', () => {
     const result = filterAndSortTitles(sampleCatalog, DEFAULT_FILTER_STATE);
     expect(result).toHaveLength(4);
-    expect(result[0].id).toBe('tt001'); // newest lastSeenAt
+    expect(result[0].id).toBe('tt004'); // newest year among identical lastSeenAt
+    expect(result[1].id).toBe('tt001'); // second newest year among identical lastSeenAt
   });
 
   it('filters by search query matching title, director, genre, or country', () => {
