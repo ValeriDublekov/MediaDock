@@ -58,14 +58,17 @@ def get_firestore_client(project_id: str = "demo-project") -> firestore.firestor
 
 def title_from_dict(d: dict) -> Title:
     """Reconstructs a Title model from a camelCase dictionary retrieved from Firestore."""
+    if not isinstance(d, dict) or "title" not in d:
+        keys_str = list(d.keys()) if isinstance(d, dict) else str(type(d))
+        raise KeyError(f"Document missing required 'title' field (keys present: {keys_str})")
     return Title(
         title=d["title"],
-        normalized_title=d["normalizedTitle"],
+        normalized_title=d.get("normalizedTitle", d["title"].lower()),
         year=d.get("year"),
-        media_type=d["mediaType"],
-        first_seen_at=d["firstSeenAt"],
-        last_seen_at=d["lastSeenAt"],
-        updated_at=d["updatedAt"],
+        media_type=d.get("mediaType", "movie"),
+        first_seen_at=d.get("firstSeenAt", datetime.datetime.now(datetime.timezone.utc)),
+        last_seen_at=d.get("lastSeenAt", datetime.datetime.now(datetime.timezone.utc)),
+        updated_at=d.get("updatedAt", datetime.datetime.now(datetime.timezone.utc)),
         imdb_id=d.get("imdbId"),
         imdb_rating=d.get("imdbRating") if d.get("imdbRating") is None else float(d["imdbRating"]),
         imdb_votes=d.get("imdbVotes") if d.get("imdbVotes") is None else int(d["imdbVotes"]),
@@ -168,14 +171,19 @@ class FirestoreTitleRepository(TitleRepository):
         self.collection_ref = self.db.collection("titles")
 
     def get(self, title_id: str) -> Optional[Title]:
+        if title_id == "settings_config":
+            return None
         doc_ref = self.collection_ref.document(title_id)
         snapshot = doc_ref.get()
         if snapshot.exists:
-            return title_from_dict(snapshot.to_dict())
+            data = snapshot.to_dict()
+            if not data or "title" not in data:
+                return None
+            return title_from_dict(data)
         return None
 
     def get_many(self, title_ids: List[str]) -> Dict[str, Title]:
-        ids = list(set(title_ids))
+        ids = [tid for tid in set(title_ids) if tid != "settings_config"]
         if not ids:
             return {}
         result: Dict[str, Title] = {}
@@ -186,7 +194,9 @@ class FirestoreTitleRepository(TitleRepository):
             snapshots = self.db.get_all(doc_refs)
             for snap in snapshots:
                 if snap.exists:
-                    result[snap.id] = title_from_dict(snap.to_dict())
+                    data = snap.to_dict()
+                    if data and "title" in data:
+                        result[snap.id] = title_from_dict(data)
         return result
 
     def upsert(self, title_id: str, title: Title) -> None:
@@ -219,11 +229,35 @@ class FirestoreTitleRepository(TitleRepository):
 
     def list_all(self) -> List[Title]:
         docs = self.collection_ref.stream()
-        return [title_from_dict(doc.to_dict()) for doc in docs]
+        res = []
+        for doc in docs:
+            if doc.id == "settings_config":
+                continue
+            data = doc.to_dict()
+            if not data or "title" not in data:
+                continue
+            try:
+                res.append(title_from_dict(data))
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Skipping document '{doc.id}' in list_all: {e}")
+        return res
 
     def list_all_ids_and_titles(self) -> List[tuple[str, Title]]:
         docs = self.collection_ref.stream()
-        return [(doc.id, title_from_dict(doc.to_dict())) for doc in docs]
+        res = []
+        for doc in docs:
+            if doc.id == "settings_config":
+                continue
+            data = doc.to_dict()
+            if not data or "title" not in data:
+                continue
+            try:
+                res.append((doc.id, title_from_dict(data)))
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Skipping document '{doc.id}' in list_all_ids_and_titles: {e}")
+        return res
 
     def delete(self, title_id: str) -> None:
         doc_ref = self.collection_ref.document(title_id)

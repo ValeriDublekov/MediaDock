@@ -258,6 +258,8 @@ class ScannerService:
         if not self.config.is_dry_run and not self.config.is_parse_only:
             self.run_repo.upsert(run_id, run)
 
+        logger.info(f"Starting scan run {run_id} [mode: '{self.config.mode}', trigger: '{self.config.trigger}']")
+
         section_timings = {
             "prune_logs": 0.0,
             "feed_fetch": 0.0,
@@ -281,6 +283,7 @@ class ScannerService:
         try:
             # 1. RSS Feed Processing (if mode is "rss" or "all")
             if self.config.mode in ("rss", "all"):
+                logger.info("--> [Phase 1/3] Processing RSS feeds...")
                 for feed_def in iter_feed_definitions(self.config.rss_feeds):
                     run.feeds_processed += 1
                     try:
@@ -330,9 +333,10 @@ class ScannerService:
                                     run.error_summary.append("OMDb API limit reached")
                                 break
                             except Exception as e:
-                                logger.error(f"Error processing entry {getattr(entry, 'title', '')}: {e}")
+                                err_text = f"Entry error ({type(e).__name__}): {e}"
+                                logger.error(f"Error processing entry {getattr(entry, 'title', '')}: {err_text}", exc_info=True)
                                 run.error_count += 1
-                                run.error_summary.append(f"Entry error: {e}")
+                                run.error_summary.append(err_text)
                                 try:
                                     self._log_parse_entry(
                                         raw_title=getattr(entry, "title", "") or "",
@@ -343,7 +347,7 @@ class ScannerService:
                                         omdb_status="error",
                                         ignored=True,
                                         ignore_reason="entry_error",
-                                        error_message=str(e),
+                                        error_message=err_text,
                                         feed_entry_id=getattr(entry, "id", None),
                                         torrent_url=getattr(entry, "link", None),
                                         section_timings=section_timings,
@@ -356,28 +360,38 @@ class ScannerService:
                         self._flush_pending_db_upserts(section_timings)
 
                     except Exception as e:
-                        logger.error(f"Error processing feed {feed_def['name']}: {e}")
+                        err_text = f"Feed error for '{feed_def['name']}' ({type(e).__name__}): {e}"
+                        logger.error(err_text, exc_info=True)
                         run.error_count += 1
-                        run.error_summary.append(f"Feed error: {e}")
+                        run.error_summary.append(err_text)
+            else:
+                logger.info(f"--> [Phase 1/3] RSS feed processing SKIPPED (mode is '{self.config.mode}')")
 
             # 2. AI Database Recheck & Fix (if mode is "recheck-existing" or "all")
             if self.config.mode in ("recheck-existing", "all"):
+                logger.info("--> [Phase 2/3] AI Audit & Repair of existing database titles...")
                 t0_recheck = time.perf_counter()
                 self.recheck_existing_titles(run=run, section_timings=section_timings)
                 section_timings["ai_recheck"] += (time.perf_counter() - t0_recheck)
+            else:
+                logger.info(f"--> [Phase 2/3] AI Database Audit SKIPPED (mode is '{self.config.mode}')")
 
             # 3. AI Reparse Unfound Titles (if mode is "reparse-unfound" or "all")
             if self.config.mode in ("reparse-unfound", "all"):
+                logger.info("--> [Phase 3/3] AI Reparsing of unmapped/unfound titles...")
                 t0_reparse = time.perf_counter()
                 self.reparse_unfound_entries(run=run, section_timings=section_timings)
                 section_timings["ai_reparse"] += (time.perf_counter() - t0_reparse)
+            else:
+                logger.info(f"--> [Phase 3/3] AI Unmapped Reparsing SKIPPED (mode is '{self.config.mode}')")
 
             run.status = "succeeded" if run.error_count == 0 else "partial"
         except Exception as e:
-            logger.error(f"Fatal error during scan: {e}")
+            fatal_msg = f"Fatal error during scan ({type(e).__name__}): {e}"
+            logger.error(fatal_msg, exc_info=True)
             run.status = "failed"
             run.error_count += 1
-            run.error_summary.append(f"Fatal error: {e}")
+            run.error_summary.append(fatal_msg)
         finally:
             self._flush_parse_logs(section_timings)
             self._flush_pending_db_upserts(section_timings)

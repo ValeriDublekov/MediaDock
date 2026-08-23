@@ -88,6 +88,25 @@ def main():
         else:
             trigger = "local"
 
+    logger.info("==================================================")
+    logger.info("  MediaDock Movies Feed Scanner - Startup Log     ")
+    logger.info("==================================================")
+    logger.info(f" Execution Mode : '{args.mode}'")
+    logger.info(f" Trigger Source : '{trigger}'")
+    logger.info(f" Dry Run        : {args.dry_run}")
+    logger.info(f" Parse Only     : {args.parse_only}")
+    logger.info(f" Force Days     : {args.force_days}")
+    logger.info(f" Fake Repos     : {args.fake_repos}")
+
+    mode_descriptions = {
+        "rss": "Standard RSS feed scan: Reads feeds, parses titles, queries OMDb, updates catalog.",
+        "recheck-existing": "AI Audit & Repair mode: Audits existing DB titles with AI and fixes/prunes mismatches.",
+        "reparse-unfound": "AI Reparse mode: Uses AI to re-extract and match unmapped titles from parse logs.",
+        "all": "Full run: Executes RSS scan -> AI Audit & Repair -> AI Reparse sequentially.",
+    }
+    logger.info(f" Mode Info     : {mode_descriptions.get(args.mode, 'Unknown mode')}")
+    logger.info("--------------------------------------------------")
+
     config = ScannerConfig(
         rss_feeds=rss_feeds,
         video_settings=video_settings,
