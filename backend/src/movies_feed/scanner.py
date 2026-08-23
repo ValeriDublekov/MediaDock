@@ -2,7 +2,7 @@ import datetime
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import feedparser
@@ -32,10 +32,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ScannerConfig:
-    rss_feeds: Dict[str, Any]
-    video_settings: Dict[str, Any]
-    excluded_countries: List[str]
-    excluded_genres: List[str]
+    rss_feeds: Dict[str, Any] = field(default_factory=dict)
+    video_settings: Dict[str, Any] = field(default_factory=dict)
+    excluded_countries: List[str] = field(default_factory=list)
+    excluded_genres: List[str] = field(default_factory=list)
     is_dry_run: bool = False
     is_parse_only: bool = False
     omdb_limit: int = 50
