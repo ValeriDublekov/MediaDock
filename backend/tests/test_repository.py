@@ -325,3 +325,73 @@ class RepositoryAndIdTests(unittest.TestCase):
         self.assertEqual(fetched_updated.status, "succeeded")
         self.assertEqual(fetched_updated.titles_created, 5)
         self.assertEqual(fetched_updated.finished_at, self.later_time)
+
+    def test_fake_title_repository_delete_and_list_all_ids(self) -> None:
+        repo = FakeTitleRepository()
+        t1 = Title(
+            title="Title 1",
+            normalized_title="title 1",
+            year=2020,
+            media_type="movie",
+            first_seen_at=self.base_time,
+            last_seen_at=self.base_time,
+            updated_at=self.base_time,
+        )
+        t2 = Title(
+            title="Title 2",
+            normalized_title="title 2",
+            year=2021,
+            media_type="series",
+            first_seen_at=self.base_time,
+            last_seen_at=self.base_time,
+            updated_at=self.base_time,
+        )
+        repo.upsert("id1", t1)
+        repo.upsert("id2", t2)
+
+        pairs = repo.list_all_ids_and_titles()
+        self.assertEqual(len(pairs), 2)
+        self.assertEqual({p[0] for p in pairs}, {"id1", "id2"})
+
+        # Delete id1
+        repo.delete("id1")
+        self.assertIsNone(repo.get("id1"))
+        self.assertIsNotNone(repo.get("id2"))
+        self.assertEqual(len(repo.list_all_ids_and_titles()), 1)
+
+    def test_fake_occurrence_repository_delete_by_title(self) -> None:
+        repo = FakeOccurrenceRepository()
+        occ1 = Occurrence(
+            source_feed_id="f1",
+            source_feed_name="F1",
+            feed_entry_id="e1",
+            torrent_url="u1",
+            raw_title="Raw 1",
+            quality="1080p",
+            rip_type="BDRip",
+            first_seen_at=self.base_time,
+            last_seen_at=self.base_time,
+        )
+        occ2 = Occurrence(
+            source_feed_id="f1",
+            source_feed_name="F1",
+            feed_entry_id="e2",
+            torrent_url="u2",
+            raw_title="Raw 2",
+            quality="1080p",
+            rip_type="BDRip",
+            first_seen_at=self.base_time,
+            last_seen_at=self.base_time,
+        )
+        repo.upsert("t1", "occ1", occ1)
+        repo.upsert("t1", "occ2", occ2)
+        repo.upsert("t2", "occ3", occ1)
+
+        self.assertEqual(len(repo.list_by_title("t1")), 2)
+        self.assertEqual(len(repo.list_by_title("t2")), 1)
+
+        # Delete by title t1
+        repo.delete_by_title("t1")
+        self.assertEqual(len(repo.list_by_title("t1")), 0)
+        self.assertEqual(len(repo.list_by_title("t2")), 1)
+

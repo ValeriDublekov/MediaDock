@@ -168,3 +168,72 @@ class AiMatcher:
             if isinstance(entry, dict) and "id" in entry:
                 out[entry["id"]] = entry
         return out
+
+    def batch_recheck_matches(self, items: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+        """
+        Audits existing database titles and their torrent raw titles.
+        Determines whether the currently assigned OMDb metadata is correct.
+        If incorrect, extracts clean corrected title, year, and media type to allow a new OMDb query.
+
+        items: [{
+            "id": 0,
+            "raw_title": "...",
+            "current_omdb_title": "...",
+            "current_omdb_year": 2024,
+            "current_omdb_type": "movie",
+            "current_imdb_id": "tt1234567"
+        }]
+
+        Returns:
+        {
+            0: {
+                "is_valid_match": False,
+                "corrected_title": "Alien: Romulus",
+                "corrected_year": 2024,
+                "corrected_media_type": "movie",
+                "reason": "Previous match was 1979 Alien instead of 2024 Alien Romulus"
+            }
+        }
+        """
+        if not self.is_available or not items:
+            return {}
+
+        prompt = (
+            "You are an expert movie and TV series metadata auditor and correction agent.\n"
+            "You are given pairs of raw torrent titles (from RuTracker / media trackers) and the currently assigned OMDb metadata stored in the database.\n"
+            "Evaluate whether each stored OMDb metadata entry is a TRUE, ACCURATE match for the torrent release.\n\n"
+            "Verification criteria:\n"
+            "1. If the torrent is for a TV series (has season/episode info, e.g. S01, Сезон 1) but the current OMDb item is a movie, it is INVALID (is_valid_match=false).\n"
+            "2. If the torrent is for a movie but the current OMDb item is a TV series, it is INVALID.\n"
+            "3. If release years differ by more than 1 year, it is INVALID.\n"
+            "4. If the title is an unrelated movie (e.g. remake vs original, wrong film with similar word, documentary matched as feature film), it is INVALID.\n"
+            "5. If INVALID, extract the exact original clean English/Latin title, release year, and media type ('movie' or 'series') from the raw torrent title so a new OMDb lookup can be performed.\n"
+            "6. If VALID (the torrent is indeed for the specified movie/series), set is_valid_match=true.\n\n"
+            f"Items to audit:\n{json.dumps(items, ensure_ascii=False)}"
+        )
+
+        schema = {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "id": {"type": "INTEGER"},
+                    "is_valid_match": {"type": "BOOLEAN"},
+                    "corrected_title": {"type": "STRING", "nullable": True},
+                    "corrected_year": {"type": "INTEGER", "nullable": True},
+                    "corrected_media_type": {"type": "STRING", "enum": ["movie", "series"], "nullable": True},
+                    "reason": {"type": "STRING"}
+                },
+                "required": ["id", "is_valid_match"]
+            }
+        }
+
+        result = self._call_gemini(prompt, schema)
+        if not result or not isinstance(result, list):
+            return {}
+
+        out = {}
+        for entry in result:
+            if isinstance(entry, dict) and "id" in entry:
+                out[entry["id"]] = entry
+        return out

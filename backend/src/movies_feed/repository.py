@@ -98,6 +98,16 @@ class TitleRepository(ABC):
         """Lists all Titles in the repository."""
         pass
 
+    @abstractmethod
+    def list_all_ids_and_titles(self) -> List[tuple[str, Title]]:
+        """Lists all (title_id, Title) pairs in the repository."""
+        pass
+
+    @abstractmethod
+    def delete(self, title_id: str) -> None:
+        """Deletes a Title by its ID."""
+        pass
+
 
 class OccurrenceRepository(ABC):
     @abstractmethod
@@ -127,6 +137,16 @@ class OccurrenceRepository(ABC):
     @abstractmethod
     def list_by_title(self, title_id: str) -> List[Occurrence]:
         """Lists all Occurrences associated with a Title."""
+        pass
+
+    @abstractmethod
+    def delete(self, title_id: str, occurrence_id: str) -> None:
+        """Deletes a specific Occurrence."""
+        pass
+
+    @abstractmethod
+    def delete_by_title(self, title_id: str) -> None:
+        """Deletes all Occurrences associated with a Title."""
         pass
 
 
@@ -189,6 +209,11 @@ class ParseLogRepository(ABC):
         """Lists recent parse log entries."""
         pass
 
+    @abstractmethod
+    def list_unmapped(self, limit: int = 200) -> List[ParseLog]:
+        """Lists recent unmapped/not_found/error parse logs."""
+        pass
+
 
 class FakeTitleRepository(TitleRepository):
     def __init__(self) -> None:
@@ -206,6 +231,13 @@ class FakeTitleRepository(TitleRepository):
 
     def list_all(self) -> List[Title]:
         return list(self._store.values())
+
+    def list_all_ids_and_titles(self) -> List[tuple[str, Title]]:
+        return list(self._store.items())
+
+    def delete(self, title_id: str) -> None:
+        if title_id in self._store:
+            del self._store[title_id]
 
 
 class FakeOccurrenceRepository(OccurrenceRepository):
@@ -226,6 +258,14 @@ class FakeOccurrenceRepository(OccurrenceRepository):
 
     def list_by_title(self, title_id: str) -> List[Occurrence]:
         return list(self._store.get(title_id, {}).values())
+
+    def delete(self, title_id: str, occurrence_id: str) -> None:
+        if title_id in self._store and occurrence_id in self._store[title_id]:
+            del self._store[title_id][occurrence_id]
+
+    def delete_by_title(self, title_id: str) -> None:
+        if title_id in self._store:
+            del self._store[title_id]
 
 
 class FakeOmdbCacheRepository(OmdbCacheRepository):
@@ -269,6 +309,14 @@ class FakeParseLogRepository(ParseLogRepository):
     def list_recent(self, limit: int = 100) -> List[ParseLog]:
         sorted_logs = sorted(self._store.values(), key=lambda l: l.processed_at, reverse=True)
         return sorted_logs[:limit]
+
+    def list_unmapped(self, limit: int = 200) -> List[ParseLog]:
+        unmapped = [
+            l for l in self._store.values()
+            if l.omdb_status in ("not_found", "error", "not_parsed", "skipped") or l.ignored
+        ]
+        sorted_unmapped = sorted(unmapped, key=lambda l: l.processed_at, reverse=True)
+        return sorted_unmapped[:limit]
 
     def get_all(self) -> List[ParseLog]:
         return list(self._store.values())

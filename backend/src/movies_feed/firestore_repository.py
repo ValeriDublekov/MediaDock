@@ -221,6 +221,14 @@ class FirestoreTitleRepository(TitleRepository):
         docs = self.collection_ref.stream()
         return [title_from_dict(doc.to_dict()) for doc in docs]
 
+    def list_all_ids_and_titles(self) -> List[tuple[str, Title]]:
+        docs = self.collection_ref.stream()
+        return [(doc.id, title_from_dict(doc.to_dict())) for doc in docs]
+
+    def delete(self, title_id: str) -> None:
+        doc_ref = self.collection_ref.document(title_id)
+        doc_ref.delete()
+
 
 class FirestoreOccurrenceRepository(OccurrenceRepository):
     def __init__(self, db: Optional[firestore.firestore.Client] = None) -> None:
@@ -285,6 +293,25 @@ class FirestoreOccurrenceRepository(OccurrenceRepository):
         collection_ref = self.db.collection("titles").document(title_id).collection("occurrences")
         docs = collection_ref.stream()
         return [occurrence_from_dict(doc.to_dict()) for doc in docs]
+
+    def delete(self, title_id: str, occurrence_id: str) -> None:
+        doc_ref = self._get_occ_ref(title_id, occurrence_id)
+        doc_ref.delete()
+
+    def delete_by_title(self, title_id: str) -> None:
+        collection_ref = self.db.collection("titles").document(title_id).collection("occurrences")
+        docs = collection_ref.stream()
+        batch = self.db.batch()
+        count = 0
+        for doc in docs:
+            batch.delete(doc.reference)
+            count += 1
+            if count >= 450:
+                batch.commit()
+                batch = self.db.batch()
+                count = 0
+        if count > 0:
+            batch.commit()
 
 
 class FirestoreOmdbCacheRepository(OmdbCacheRepository):
@@ -374,6 +401,19 @@ class FirestoreParseLogRepository(ParseLogRepository):
         query = self.collection_ref.order_by("processedAt", direction=firestore.Query.DESCENDING).limit(limit)
         docs = query.stream()
         return [parse_log_from_dict(doc.to_dict(), doc_id=doc.id) for doc in docs]
+
+    def list_unmapped(self, limit: int = 200) -> List[ParseLog]:
+        # Query recent parse logs and filter unmapped/ignored
+        query = self.collection_ref.order_by("processedAt", direction=firestore.Query.DESCENDING).limit(limit * 2)
+        docs = query.stream()
+        unmapped = []
+        for doc in docs:
+            log = parse_log_from_dict(doc.to_dict(), doc_id=doc.id)
+            if log.omdb_status in ("not_found", "error", "not_parsed", "skipped") or log.ignored:
+                unmapped.append(log)
+                if len(unmapped) >= limit:
+                    break
+        return unmapped
 
 
 class FirestoreManualMappingRepository(ManualMappingRepository):

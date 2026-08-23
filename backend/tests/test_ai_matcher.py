@@ -91,6 +91,52 @@ class TestAiMatcher(unittest.TestCase):
         self.assertTrue(res[0]["is_match"])
         self.assertFalse(res[1]["is_match"])
 
+    @patch.object(AiMatcher, "_call_gemini")
+    def test_batch_recheck_matches(self, mock_call):
+        mock_call.return_value = [
+            {
+                "id": 0,
+                "is_valid_match": True,
+                "reason": "Correct match",
+                "corrected_title": None,
+                "corrected_year": None,
+                "corrected_media_type": None
+            },
+            {
+                "id": 1,
+                "is_valid_match": False,
+                "reason": "Title is a TV series from 2024, but was matched to 1980 short movie",
+                "corrected_title": "Fallout",
+                "corrected_year": 2024,
+                "corrected_media_type": "series"
+            }
+        ]
+
+        matcher = AiMatcher(api_key="valid_key")
+        items = [
+            {
+                "id": 0,
+                "raw_title": "Dune 2 (2024)",
+                "current_omdb_title": "Dune: Part Two",
+                "current_omdb_year": 2024,
+                "current_omdb_type": "movie",
+            },
+            {
+                "id": 1,
+                "raw_title": "Fallout (Сезон 1) (2024)",
+                "current_omdb_title": "Fallout",
+                "current_omdb_year": 1980,
+                "current_omdb_type": "short",
+            }
+        ]
+        res = matcher.batch_recheck_matches(items)
+        self.assertEqual(len(res), 2)
+        self.assertTrue(res[0]["is_valid_match"])
+        self.assertFalse(res[1]["is_valid_match"])
+        self.assertEqual(res[1]["corrected_title"], "Fallout")
+        self.assertEqual(res[1]["corrected_year"], 2024)
+        self.assertEqual(res[1]["corrected_media_type"], "series")
+
 
 if __name__ == "__main__":
     unittest.main()

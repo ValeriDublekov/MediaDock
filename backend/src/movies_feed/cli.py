@@ -42,6 +42,7 @@ def main():
     parser.add_argument("--parse-only", action="store_true", help="Only parse RSS and titles, no OMDb requests or Firestore writes")
     parser.add_argument("--fake-repos", action="store_true", help="Use in-memory repositories instead of Firestore")
     parser.add_argument("--force-days", type=int, default=0, help="Force scan entries N days back")
+    parser.add_argument("--mode", type=str, default="rss", choices=["rss", "recheck-existing", "reparse-unfound", "all"], help="Scan mode: 'rss' (feed scan), 'recheck-existing' (AI check stored titles), 'reparse-unfound' (AI reparse unmapped titles), or 'all'")
     
     parser.add_argument("--trigger", type=str, default=None, choices=["schedule", "manual", "local"], help="Trigger type (schedule, manual, local)")
     
@@ -98,6 +99,7 @@ def main():
         cache_ttl_days=30,
         trigger=trigger,
         force_days=args.force_days,
+        mode=args.mode,
     )
 
     if args.fake_repos or args.parse_only:

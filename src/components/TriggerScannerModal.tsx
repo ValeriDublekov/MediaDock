@@ -13,6 +13,7 @@ const STORAGE_KEYS = {
   WORKFLOW: 'movies_feed_gh_workflow',
   REF: 'movies_feed_gh_ref',
   FORCE_DAYS: 'movies_feed_gh_force_days',
+  MODE: 'movies_feed_gh_mode',
   OMDB_API_KEY: 'movies_feed_omdb_api_key',
 };
 
@@ -28,6 +29,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
   const [ref, setRef] = useState<string>('main');
   const [dryRun, setDryRun] = useState<boolean>(false);
   const [forceDays, setForceDays] = useState<string>('0');
+  const [mode, setMode] = useState<string>('rss');
   const [omdbApiKey, setOmdbApiKey] = useState<string>('');
 
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -56,6 +58,8 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     const savedRef = localStorage.getItem(STORAGE_KEYS.REF) || 'main';
     const savedForceDays =
       localStorage.getItem(STORAGE_KEYS.FORCE_DAYS) || '0';
+    const savedMode =
+      localStorage.getItem(STORAGE_KEYS.MODE) || 'rss';
     const savedOmdbApiKey =
       localStorage.getItem(STORAGE_KEYS.OMDB_API_KEY) ||
       import.meta.env.VITE_OMDB_API_KEY ||
@@ -68,6 +72,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     setWorkflow(savedWorkflow);
     setRef(savedRef);
     setForceDays(savedForceDays);
+    setMode(savedMode);
     setOmdbApiKey(savedOmdbApiKey);
   }, []);
 
@@ -78,6 +83,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     localStorage.setItem(STORAGE_KEYS.WORKFLOW, workflow.trim());
     localStorage.setItem(STORAGE_KEYS.REF, ref.trim());
     localStorage.setItem(STORAGE_KEYS.FORCE_DAYS, forceDays.trim());
+    localStorage.setItem(STORAGE_KEYS.MODE, mode.trim());
     localStorage.setItem(STORAGE_KEYS.OMDB_API_KEY, omdbApiKey.trim());
   };
 
@@ -96,7 +102,8 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     targetWorkflow: string,
     targetRef: string,
     isDryRun: boolean,
-    targetForceDays: string
+    targetForceDays: string,
+    targetMode: string = 'rss'
   ) => {
     setIsSubmitting(true);
     setToastMessage({ type: null, text: '' });
@@ -116,6 +123,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
           inputs: {
             dry_run: isDryRun,
             force_days: targetForceDays,
+            mode: targetMode,
           },
         }),
       });
@@ -177,7 +185,8 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
       workflow.trim() || 'scanner.yml',
       ref.trim() || 'main',
       dryRun,
-      forceDays
+      forceDays,
+      mode
     );
   };
 
@@ -212,7 +221,8 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
       workflow.trim() || 'scanner.yml',
       ref.trim() || 'main',
       dryRun,
-      forceDays
+      forceDays,
+      mode
     );
   };
 
@@ -474,6 +484,30 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
                   data-testid="input-omdb-api-key"
                   className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500 font-mono"
                 />
+              </div>
+
+              {/* Scan Mode Selector */}
+              <div>
+                <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                  Режим на сканиране (Scan Mode)
+                </label>
+                <select
+                  value={mode}
+                  onChange={(e) => setMode(e.target.value)}
+                  data-testid="select-scan-mode"
+                  className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
+                >
+                  <option value="rss">1. Стандартно RSS сканиране (нови торенти)</option>
+                  <option value="recheck-existing">2. AI проверка & поправка на съществуващи заглавия в базата</option>
+                  <option value="reparse-unfound">3. AI повторно парсване на ненамерени заглавия</option>
+                  <option value="all">4. Пълен цикъл (RSS сканиране + AI проверка + AI парсване)</option>
+                </select>
+                <p className="text-[11px] text-neutral-400 mt-1">
+                  {mode === 'recheck-existing' && 'Извлича записаните в базата заглавия и ги проверява с AI за грешни OMDb съвпадения. При грешка прави нова OMDb заявка или изтрива невалидния запис.'}
+                  {mode === 'reparse-unfound' && 'Взима ненамерените/неразпознати заглавия от логовете и ги подава на AI за извличане и ново търсене в OMDb.'}
+                  {mode === 'all' && 'Изпълнява пълен процес: ново RSS сканиране, последвано от AI одит на базата и AI опит за парсване на ненамерени заглавия.'}
+                  {mode === 'rss' && 'Сканира актуалните RSS емисии и добавя новите филми/сериали.'}
+                </p>
               </div>
 
               {/* Force Scan Days Selector */}

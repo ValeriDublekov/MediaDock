@@ -41,6 +41,7 @@ class ScannerConfig:
     cache_ttl_days: int = 30
     trigger: str = "manual"
     force_days: int = 0
+    mode: str = "rss"  # "rss", "recheck-existing", "reparse-unfound", "all"
 
 def _get_entry_datetime(entry: Any) -> Optional[datetime.datetime]:
     parsed_time = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
@@ -263,6 +264,8 @@ class ScannerService:
             "omdb_api": 0.0,
             "db_upsert": 0.0,
             "parse_log_write": 0.0,
+            "ai_recheck": 0.0,
+            "ai_reparse": 0.0,
         }
 
         if self.parse_log_repo and not self.config.is_dry_run:
@@ -274,84 +277,99 @@ class ScannerService:
             logger.info(f"Section [prune_logs]: completed in {t_prune:.4f}s")
 
         try:
-            for feed_def in iter_feed_definitions(self.config.rss_feeds):
-                run.feeds_processed += 1
-                try:
-                    t0_feed = time.perf_counter()
-                    feed = feedparser.parse(feed_def["url"])
-                    t_feed = time.perf_counter() - t0_feed
-                    section_timings["feed_fetch"] += t_feed
-                    entries = getattr(feed, "entries", [])
-                    entries_cnt = len(entries)
-                    logger.info(
-                        f"Section [feed_fetch]: Feed '{feed_def['name']}' fetched in {t_feed:.4f}s ({entries_cnt} entries)"
-                    )
+            # 1. RSS Feed Processing (if mode is "rss" or "all")
+            if self.config.mode in ("rss", "all"):
+                for feed_def in iter_feed_definitions(self.config.rss_feeds):
+                    run.feeds_processed += 1
+                    try:
+                        t0_feed = time.perf_counter()
+                        feed = feedparser.parse(feed_def["url"])
+                        t_feed = time.perf_counter() - t0_feed
+                        section_timings["feed_fetch"] += t_feed
+                        entries = getattr(feed, "entries", [])
+                        entries_cnt = len(entries)
+                        logger.info(
+                            f"Section [feed_fetch]: Feed '{feed_def['name']}' fetched in {t_feed:.4f}s ({entries_cnt} entries)"
+                        )
 
-                    # Bulk pre-fetch cache entries for this feed
-                    cache_keys_to_prefetch = []
-                    for entry in entries:
-                        raw_title = getattr(entry, "title", "")
-                        if raw_title:
+                        # Bulk pre-fetch cache entries for this feed
+                        cache_keys_to_prefetch = []
+                        for entry in entries:
+                            raw_title = getattr(entry, "title", "")
+                            if raw_title:
+                                try:
+                                    parsed = parse_rutracker_title(
+                                        raw_title,
+                                        content_type=feed_def.get("type"),
+                                        video_settings=self.config.video_settings,
+                                    )
+                                    if parsed.title:
+                                        y = None
+                                        if parsed.year:
+                                            try:
+                                                y = int(parsed.year)
+                                            except ValueError:
+                                                pass
+                                        ck = get_cache_key(parsed.title, y)
+                                        cache_keys_to_prefetch.append(ck)
+                                except Exception as e:
+                                    logger.warning(f"Error during cache key prefetch for '{raw_title}': {e}")
+                        if cache_keys_to_prefetch:
+                            self._prefetch_cache_entries(cache_keys_to_prefetch, section_timings)
+
+                        for entry in entries:
+                            run.entries_seen += 1
                             try:
-                                parsed = parse_rutracker_title(
-                                    raw_title,
-                                    content_type=feed_def.get("type"),
-                                    video_settings=self.config.video_settings,
-                                )
-                                if parsed.title:
-                                    y = None
-                                    if parsed.year:
-                                        try:
-                                            y = int(parsed.year)
-                                        except ValueError:
-                                            pass
-                                    ck = get_cache_key(parsed.title, y)
-                                    cache_keys_to_prefetch.append(ck)
+                                self._process_entry(entry, feed_def, run, section_timings)
+                            except OmdbLimitReachedError as e:
+                                logger.warning(f"OMDb limit reached: {e}")
+                                run.error_count += 1
+                                if "OMDb API limit reached" not in run.error_summary:
+                                    run.error_summary.append("OMDb API limit reached")
+                                break
                             except Exception as e:
-                                logger.warning(f"Error during cache key prefetch for '{raw_title}': {e}")
-                    if cache_keys_to_prefetch:
-                        self._prefetch_cache_entries(cache_keys_to_prefetch, section_timings)
+                                logger.error(f"Error processing entry {getattr(entry, 'title', '')}: {e}")
+                                run.error_count += 1
+                                run.error_summary.append(f"Entry error: {e}")
+                                try:
+                                    self._log_parse_entry(
+                                        raw_title=getattr(entry, "title", "") or "",
+                                        feed_name=feed_def.get("name", ""),
+                                        parsed_successfully=False,
+                                        parsed_title=None,
+                                        parsed_year=None,
+                                        omdb_status="error",
+                                        ignored=True,
+                                        ignore_reason="entry_error",
+                                        error_message=str(e),
+                                        feed_entry_id=getattr(entry, "id", None),
+                                        torrent_url=getattr(entry, "link", None),
+                                        section_timings=section_timings,
+                                    )
+                                except Exception as log_ex:
+                                    logger.error(f"Failed to log entry error to parse logs: {log_ex}")
 
-                    for entry in entries:
-                        run.entries_seen += 1
-                        try:
-                            self._process_entry(entry, feed_def, run, section_timings)
-                        except OmdbLimitReachedError as e:
-                            logger.warning(f"OMDb limit reached: {e}")
-                            run.error_count += 1
-                            if "OMDb API limit reached" not in run.error_summary:
-                                run.error_summary.append("OMDb API limit reached")
-                            break
-                        except Exception as e:
-                            logger.error(f"Error processing entry {getattr(entry, 'title', '')}: {e}")
-                            run.error_count += 1
-                            run.error_summary.append(f"Entry error: {e}")
-                            try:
-                                self._log_parse_entry(
-                                    raw_title=getattr(entry, "title", "") or "",
-                                    feed_name=feed_def.get("name", ""),
-                                    parsed_successfully=False,
-                                    parsed_title=None,
-                                    parsed_year=None,
-                                    omdb_status="error",
-                                    ignored=True,
-                                    ignore_reason="entry_error",
-                                    error_message=str(e),
-                                    feed_entry_id=getattr(entry, "id", None),
-                                    torrent_url=getattr(entry, "link", None),
-                                    section_timings=section_timings,
-                                )
-                            except Exception as log_ex:
-                                logger.error(f"Failed to log entry error to parse logs: {log_ex}")
+                        # Flush batch parse logs and db upserts for feed
+                        self._flush_parse_logs(section_timings)
+                        self._flush_pending_db_upserts(section_timings)
 
-                    # Flush batch parse logs and db upserts for feed
-                    self._flush_parse_logs(section_timings)
-                    self._flush_pending_db_upserts(section_timings)
+                    except Exception as e:
+                        logger.error(f"Error processing feed {feed_def['name']}: {e}")
+                        run.error_count += 1
+                        run.error_summary.append(f"Feed error: {e}")
 
-                except Exception as e:
-                    logger.error(f"Error processing feed {feed_def['name']}: {e}")
-                    run.error_count += 1
-                    run.error_summary.append(f"Feed error: {e}")
+            # 2. AI Database Recheck & Fix (if mode is "recheck-existing" or "all")
+            if self.config.mode in ("recheck-existing", "all"):
+                t0_recheck = time.perf_counter()
+                self.recheck_existing_titles(run=run, section_timings=section_timings)
+                section_timings["ai_recheck"] += (time.perf_counter() - t0_recheck)
+
+            # 3. AI Reparse Unfound Titles (if mode is "reparse-unfound" or "all")
+            if self.config.mode in ("reparse-unfound", "all"):
+                t0_reparse = time.perf_counter()
+                self.reparse_unfound_entries(run=run, section_timings=section_timings)
+                section_timings["ai_reparse"] += (time.perf_counter() - t0_reparse)
+
             run.status = "succeeded" if run.error_count == 0 else "partial"
         except Exception as e:
             logger.error(f"Fatal error during scan: {e}")
@@ -370,6 +388,340 @@ class ScannerService:
                 self.run_repo.upsert(run_id, run)
 
         return run
+
+    def recheck_existing_titles(
+        self,
+        run: Optional[ScanRun] = None,
+        section_timings: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, int]:
+        """
+        Audits existing database titles and their occurrences with AI.
+        Detects mismatches, queries OMDb for corrected titles, verifies candidates.
+        If valid: upserts corrected Title/Occurrences, removes obsolete old Title/Occurrences.
+        If invalid/not found: marks as not found in parseLogs and deletes the erroneous Title/Occurrences from database.
+        """
+        stats = {
+            "titles_checked": 0,
+            "mismatches_found": 0,
+            "repaired": 0,
+            "removed": 0,
+        }
+
+        all_titles = self.title_repo.list_all_ids_and_titles()
+        if not all_titles:
+            logger.info("No titles found in database to recheck.")
+            return stats
+
+        logger.info(f"Starting AI recheck of {len(all_titles)} titles in database...")
+
+        batch_size = 15
+        for i in range(0, len(all_titles), batch_size):
+            chunk = all_titles[i : i + batch_size]
+            items_to_audit = []
+            chunk_context = []
+
+            for idx, (title_id, title_record) in enumerate(chunk):
+                occs = self.occurrence_repo.list_by_title(title_id)
+                raw_title = occs[0].raw_title if occs else title_record.title
+                feed_name = occs[0].source_feed_name if occs else "database"
+                items_to_audit.append({
+                    "id": idx,
+                    "raw_title": raw_title,
+                    "feed_name": feed_name,
+                    "current_omdb_title": title_record.title,
+                    "current_omdb_year": title_record.year,
+                    "current_omdb_type": title_record.media_type,
+                    "current_imdb_id": title_record.imdb_id,
+                })
+                chunk_context.append((title_id, title_record, occs, raw_title, feed_name))
+
+            stats["titles_checked"] += len(chunk)
+
+            audit_results = {}
+            if self.ai_matcher and self.ai_matcher.is_available:
+                try:
+                    audit_results = self.ai_matcher.batch_recheck_matches(items_to_audit)
+                except Exception as e:
+                    logger.warning(f"AI batch_recheck_matches failed: {e}")
+
+            for idx, (title_id, title_record, occs, raw_title, feed_name) in enumerate(chunk_context):
+                ai_res = audit_results.get(idx, {})
+                if audit_results and not ai_res.get("is_valid_match", True):
+                    stats["mismatches_found"] += 1
+                    corr_title = ai_res.get("corrected_title")
+                    corr_year = ai_res.get("corrected_year")
+                    corr_media_type = ai_res.get("corrected_media_type")
+                    reason = ai_res.get("reason", "AI detected mismatch")
+                    logger.info(f"Mismatch for title '{title_record.title}' (raw: '{raw_title}'): {reason}")
+
+                    new_omdb_result = None
+                    if corr_title:
+                        try:
+                            new_omdb_result = self.omdb_client.get_movie_info(
+                                corr_title,
+                                str(corr_year) if corr_year else None,
+                                media_type=corr_media_type,
+                            )
+                        except (OmdbNoMatchError, OmdbLimitReachedError, OmdbTransportError) as ex:
+                            logger.info(f"OMDb lookup for '{corr_title}' yielded no match or error: {ex}")
+                            new_omdb_result = None
+
+                    is_valid_candidate = False
+                    if new_omdb_result:
+                        is_valid_candidate = True
+                        if self.is_excluded(new_omdb_result.countries, new_omdb_result.genres):
+                            is_valid_candidate = False
+                        elif corr_media_type and (new_omdb_result.media_type != corr_media_type) and (corr_media_type in ("movie", "series")):
+                            is_valid_candidate = False
+                        elif new_omdb_result.media_type in ("movie", "documentary") and corr_year and abs(new_omdb_result.year - corr_year) > 1:
+                            is_valid_candidate = False
+                        elif self.ai_matcher and self.ai_matcher.is_available:
+                            try:
+                                v_res = self.ai_matcher.batch_validate_omdb_matches([{
+                                    "id": 0,
+                                    "raw_title": raw_title,
+                                    "feed_type": corr_media_type,
+                                    "omdb_title": new_omdb_result.title,
+                                    "omdb_year": new_omdb_result.year,
+                                    "omdb_type": new_omdb_result.media_type,
+                                }]).get(0)
+                                if v_res and not v_res.get("is_match", True):
+                                    is_valid_candidate = False
+                            except Exception as e:
+                                logger.warning(f"AI candidate validation check failed: {e}")
+
+                    if new_omdb_result and is_valid_candidate:
+                        norm_lookup_title = normalize_title(new_omdb_result.title)
+                        new_title_id = get_title_id(new_omdb_result.imdb_id, norm_lookup_title, new_omdb_result.year, new_omdb_result.media_type)
+
+                        new_title_record = Title(
+                            title=new_omdb_result.title,
+                            normalized_title=norm_lookup_title,
+                            year=new_omdb_result.year,
+                            media_type=new_omdb_result.media_type,
+                            first_seen_at=title_record.first_seen_at or self.now,
+                            last_seen_at=self.now,
+                            updated_at=self.now,
+                            imdb_id=new_omdb_result.imdb_id,
+                            imdb_rating=new_omdb_result.rating,
+                            imdb_votes=new_omdb_result.votes,
+                            metascore=new_omdb_result.metascore,
+                            genres=new_omdb_result.genres,
+                            countries=new_omdb_result.countries,
+                            director=new_omdb_result.director,
+                            plot=new_omdb_result.plot,
+                            poster_url=new_omdb_result.poster_url,
+                            runtime=new_omdb_result.runtime,
+                            awards=new_omdb_result.awards,
+                            box_office=new_omdb_result.box_office,
+                            ratings=new_omdb_result.ratings,
+                        )
+
+                        if not self.config.is_dry_run:
+                            self.title_repo.upsert(new_title_id, new_title_record)
+                            for occ in occs:
+                                occ_id = get_occurrence_id(occ.feed_entry_id, occ.torrent_url)
+                                self.occurrence_repo.upsert(new_title_id, occ_id, occ)
+                            if new_title_id != title_id:
+                                self.title_repo.delete(title_id)
+                                self.occurrence_repo.delete_by_title(title_id)
+
+                        self._log_parse_entry(
+                            raw_title=raw_title,
+                            feed_name=feed_name,
+                            parsed_successfully=True,
+                            parsed_title=corr_title,
+                            parsed_year=corr_year,
+                            omdb_status="found",
+                            ignored=False,
+                            ignore_reason=None,
+                            section_timings=section_timings,
+                        )
+                        stats["repaired"] += 1
+                        if run:
+                            run.titles_created += 1
+                    else:
+                        if not self.config.is_dry_run:
+                            self.title_repo.delete(title_id)
+                            self.occurrence_repo.delete_by_title(title_id)
+
+                        self._log_parse_entry(
+                            raw_title=raw_title,
+                            feed_name=feed_name,
+                            parsed_successfully=True,
+                            parsed_title=corr_title or title_record.title,
+                            parsed_year=corr_year or title_record.year,
+                            omdb_status="not_found",
+                            ignored=True,
+                            ignore_reason="ai_mismatch_removed",
+                            error_message=f"Removed invalid match: {reason}",
+                            section_timings=section_timings,
+                        )
+                        stats["removed"] += 1
+
+            self._flush_parse_logs(section_timings)
+
+        logger.info(f"AI database recheck completed: {stats}")
+        return stats
+
+    def reparse_unfound_entries(
+        self,
+        run: Optional[ScanRun] = None,
+        section_timings: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, int]:
+        """
+        Gathers unmapped/not found parse logs, uses AI to re-extract clean titles,
+        queries OMDb and validates candidates. If successful, writes Title and Occurrence to database.
+        """
+        stats = {
+            "unmapped_seen": 0,
+            "reparsed_succeeded": 0,
+            "reparsed_failed": 0,
+        }
+
+        if not self.parse_log_repo:
+            return stats
+
+        unmapped_logs = self.parse_log_repo.list_unmapped(limit=200)
+        if not unmapped_logs:
+            logger.info("No unmapped logs found for re-parsing.")
+            return stats
+
+        logger.info(f"Starting AI re-parsing of {len(unmapped_logs)} unmapped entries...")
+        stats["unmapped_seen"] = len(unmapped_logs)
+
+        seen_raw_titles = set()
+        unique_logs = []
+        for log in unmapped_logs:
+            if log.raw_title and log.raw_title not in seen_raw_titles:
+                seen_raw_titles.add(log.raw_title)
+                unique_logs.append(log)
+
+        batch_size = 15
+        for i in range(0, len(unique_logs), batch_size):
+            chunk = unique_logs[i : i + batch_size]
+            items_to_extract = [
+                {"id": idx, "raw_title": log.raw_title, "feed_type": "movie"}
+                for idx, log in enumerate(chunk)
+            ]
+
+            extracted_results = {}
+            if self.ai_matcher and self.ai_matcher.is_available:
+                try:
+                    extracted_results = self.ai_matcher.batch_extract_titles(items_to_extract)
+                except Exception as e:
+                    logger.warning(f"AI batch_extract_titles failed: {e}")
+
+            for idx, log in enumerate(chunk):
+                ai_data = extracted_results.get(idx, {})
+                title = ai_data.get("title")
+                year = ai_data.get("year")
+                media_type = ai_data.get("media_type")
+
+                if not title:
+                    stats["reparsed_failed"] += 1
+                    continue
+
+                omdb_result = None
+                try:
+                    omdb_result = self.omdb_client.get_movie_info(
+                        title,
+                        str(year) if year else None,
+                        media_type=media_type,
+                    )
+                except (OmdbNoMatchError, OmdbLimitReachedError, OmdbTransportError) as ex:
+                    omdb_result = None
+
+                is_valid = False
+                if omdb_result:
+                    is_valid = True
+                    if self.is_excluded(omdb_result.countries, omdb_result.genres):
+                        is_valid = False
+                    elif media_type and (omdb_result.media_type != media_type) and (media_type in ("movie", "series")):
+                        is_valid = False
+                    elif omdb_result.media_type in ("movie", "documentary") and year and abs(omdb_result.year - year) > 1:
+                        is_valid = False
+                    elif self.ai_matcher and self.ai_matcher.is_available:
+                        try:
+                            v_res = self.ai_matcher.batch_validate_omdb_matches([{
+                                "id": 0,
+                                "raw_title": log.raw_title,
+                                "feed_type": media_type,
+                                "omdb_title": omdb_result.title,
+                                "omdb_year": omdb_result.year,
+                                "omdb_type": omdb_result.media_type,
+                            }]).get(0)
+                            if v_res and not v_res.get("is_match", True):
+                                is_valid = False
+                        except Exception as e:
+                            logger.warning(f"AI candidate validation check failed: {e}")
+
+                if omdb_result and is_valid:
+                    norm_lookup_title = normalize_title(omdb_result.title)
+                    title_id = get_title_id(omdb_result.imdb_id, norm_lookup_title, omdb_result.year, omdb_result.media_type)
+
+                    title_record = Title(
+                        title=omdb_result.title,
+                        normalized_title=norm_lookup_title,
+                        year=omdb_result.year,
+                        media_type=omdb_result.media_type,
+                        first_seen_at=log.processed_at or self.now,
+                        last_seen_at=self.now,
+                        updated_at=self.now,
+                        imdb_id=omdb_result.imdb_id,
+                        imdb_rating=omdb_result.rating,
+                        imdb_votes=omdb_result.votes,
+                        metascore=omdb_result.metascore,
+                        genres=omdb_result.genres,
+                        countries=omdb_result.countries,
+                        director=omdb_result.director,
+                        plot=omdb_result.plot,
+                        poster_url=omdb_result.poster_url,
+                        runtime=omdb_result.runtime,
+                        awards=omdb_result.awards,
+                        box_office=omdb_result.box_office,
+                        ratings=omdb_result.ratings,
+                    )
+
+                    occ_id = get_occurrence_id(None, log.raw_title)
+                    occ_record = Occurrence(
+                        source_feed_id=log.feed_name or "reparsed",
+                        source_feed_name=log.feed_name or "reparsed",
+                        feed_entry_id=None,
+                        torrent_url="",
+                        raw_title=log.raw_title,
+                        quality="",
+                        rip_type="",
+                        first_seen_at=log.processed_at or self.now,
+                        last_seen_at=self.now,
+                    )
+
+                    if not self.config.is_dry_run:
+                        self.title_repo.upsert(title_id, title_record)
+                        self.occurrence_repo.upsert(title_id, occ_id, occ_record)
+
+                    self._log_parse_entry(
+                        raw_title=log.raw_title,
+                        feed_name=log.feed_name or "reparsed",
+                        parsed_successfully=True,
+                        parsed_title=title,
+                        parsed_year=year,
+                        omdb_status="found",
+                        ignored=False,
+                        ignore_reason=None,
+                        section_timings=section_timings,
+                    )
+                    stats["reparsed_succeeded"] += 1
+                    if run:
+                        run.titles_created += 1
+                        run.occurrences_created += 1
+                else:
+                    stats["reparsed_failed"] += 1
+
+            self._flush_parse_logs(section_timings)
+
+        logger.info(f"AI re-parsing completed: {stats}")
+        return stats
 
     def _process_entry(
         self,
