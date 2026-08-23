@@ -34,6 +34,7 @@ function mapDocToParseLog(docSnap: QueryDocumentSnapshot<DocumentData>): ParseLo
     omdbStatus: data.omdbStatus ?? 'not_parsed',
     ignored: Boolean(data.ignored),
     ignoreReason: data.ignoreReason ?? null,
+    errorMessage: data.errorMessage ?? null,
     processedAt: toDate(data.processedAt),
   };
 }

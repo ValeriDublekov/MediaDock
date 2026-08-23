@@ -7,7 +7,8 @@ export interface ParseLog {
   parsedYear: number | null;
   omdbStatus: string; // 'found' | 'not_found' | 'skipped' | 'error' | 'not_parsed'
   ignored: boolean;
-  ignoreReason: string | null; // 'no_title' | 'omdb_not_found' | 'excluded_country_or_genre' | 'omdb_limit_reached' | 'omdb_error' | 'empty_title' | 'parse_only' | null
+  ignoreReason: string | null; // 'no_title' | 'parse_error' | 'entry_error' | 'omdb_not_found' | 'excluded_country_or_genre' | 'omdb_limit_reached' | 'omdb_error' | 'empty_title' | 'parse_only' | null
+  errorMessage?: string | null;
   processedAt: Date;
 }
 

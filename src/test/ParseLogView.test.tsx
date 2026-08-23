@@ -50,7 +50,8 @@ const mockLogs: ParseLog[] = [
     parsedYear: null,
     omdbStatus: 'not_parsed',
     ignored: true,
-    ignoreReason: 'no_title',
+    ignoreReason: 'parse_error',
+    errorMessage: 'Грешка при парсване: Invalid format syntax',
     processedAt: new Date(Date.now() - 10800 * 1000),
   },
 ];
@@ -149,5 +150,25 @@ describe('ParseLogView', () => {
       expect(mappingRepo.mappings.length).toBe(1);
       expect(mappingRepo.mappings[0].imdbId).toBe('tt0133093');
     });
+  });
+
+  it('displays parser error message and filters by failed parse tab', async () => {
+    const repo = new MockParseLogRepo();
+    render(<ParseLogView repository={repo} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('metric-total')).toHaveTextContent('4');
+    });
+
+    // Check that error message is displayed
+    expect(screen.getByTestId('log-error-log-4')).toHaveTextContent('Грешка при парсване: Invalid format syntax');
+
+    // Click 'Failed parse' filter tab
+    const failedTab = screen.getByTestId('filter-tab-failed');
+    fireEvent.click(failedTab);
+
+    expect(screen.queryByText('The Matrix 1999 1080p BluRay')).not.toBeInTheDocument();
+    expect(screen.getByText('Garbage Unparseable Title ###')).toBeInTheDocument();
+    expect(screen.getByTestId('log-error-log-4')).toHaveTextContent('Грешка при парсване: Invalid format syntax');
   });
 });

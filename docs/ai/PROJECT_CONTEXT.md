@@ -50,6 +50,7 @@ with OMDb metadata, and presents an authenticated searchable catalog.
 - UI components access data through typed repositories, not direct Firestore queries.
 - MVP has no client write feature, but owner-scoped writes are a supported extension.
 - Firestore is the catalog source of truth; generated HTML and local JSON are legacy.
+- Optional `GEMINI_API_KEY` enables AI batch parsing and OMDb verification. Prompts are stored in `backend/src/movies_feed/prompts/`.
 
 ## Stable Vocabulary
 

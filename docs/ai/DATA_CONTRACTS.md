@@ -93,7 +93,8 @@ One RSS parse result log entry. Retained for 1 week (7 days).
 | `parsedYear` | number or null | Extracted year if present |
 | `omdbStatus` | string | `found`, `not_found`, `skipped`, `error`, `not_parsed` |
 | `ignored` | boolean | True if entry was filtered/skipped |
-| `ignoreReason` | string or null | `no_title`, `omdb_not_found`, `excluded_country_or_genre`, `omdb_limit_reached`, `omdb_error`, `empty_title`, `parse_only`, or null |
+| `ignoreReason` | string or null | `no_title`, `parse_error`, `entry_error`, `omdb_not_found`, `excluded_country_or_genre`, `omdb_limit_reached`, `omdb_error`, `empty_title`, `parse_only`, or null |
+| `errorMessage` | string or null | Error or exception details if an error occurred |
 | `processedAt` | Timestamp | Time when entry was processed |
 
 ## `manualMappings/{mappingId}`

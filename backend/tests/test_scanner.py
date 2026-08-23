@@ -354,3 +354,82 @@ class TestScanner(unittest.TestCase):
         remaining_mappings = self.manual_mapping_repo.get_all()
         self.assertEqual(len(remaining_mappings), 0)
 
+    def test_parse_error_captured_in_parse_logs(self):
+        rss_feeds = {
+            "test_feed": {
+                "name": "test_feed",
+                "url": """<?xml version="1.0" encoding="UTF-8"?>
+                <rss version="2.0">
+                    <channel>
+                        <item>
+                            <title></title>
+                            <link>https://example.com/torrent/empty</link>
+                            <guid>guid_empty</guid>
+                        </item>
+                    </channel>
+                </rss>""",
+                "type": "movie"
+            }
+        }
+        config = ScannerConfig(
+            trigger="manual",
+            is_dry_run=False,
+            rss_feeds=rss_feeds,
+            video_settings={},
+            excluded_countries=[],
+            excluded_genres=[],
+            omdb_limit=100
+        )
+        omdb = MockOmdbClient({})
+        scanner = self.create_scanner(config, omdb)
+        
+        run = scanner.run("run_empty_title")
+        self.assertEqual(run.ignored_entries, 1)
+        
+        logs = self.parse_log_repo.get_all()
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0].ignore_reason, "empty_title")
+        self.assertFalse(logs[0].parsed_successfully)
+
+    def test_parser_exception_logged_in_parse_logs(self):
+        from unittest.mock import patch
+
+        rss_feeds = {
+            "test_feed": {
+                "name": "test_feed",
+                "url": """<?xml version="1.0" encoding="UTF-8"?>
+                <rss version="2.0">
+                    <channel>
+                        <item>
+                            <title>Malformed Title (2022)</title>
+                            <link>https://example.com/torrent/err</link>
+                            <guid>guid_err</guid>
+                        </item>
+                    </channel>
+                </rss>""",
+                "type": "movie"
+            }
+        }
+        config = ScannerConfig(
+            trigger="manual",
+            is_dry_run=False,
+            rss_feeds=rss_feeds,
+            video_settings={},
+            excluded_countries=[],
+            excluded_genres=[],
+            omdb_limit=100
+        )
+        omdb = MockOmdbClient({})
+        scanner = self.create_scanner(config, omdb)
+
+        with patch("movies_feed.scanner.parse_rutracker_title", side_effect=ValueError("Syntax parsing crash")):
+            run = scanner.run("run_parse_err")
+
+        self.assertEqual(run.ignored_entries, 1)
+        self.assertEqual(run.error_count, 1)
+        logs = self.parse_log_repo.get_all()
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0].ignore_reason, "parse_error")
+        self.assertIn("Syntax parsing crash", logs[0].error_message or "")
+
+

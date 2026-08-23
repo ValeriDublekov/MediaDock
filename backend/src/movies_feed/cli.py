@@ -16,6 +16,7 @@ from .firestore_repository import (
     get_firestore_client,
 )
 from .omdb_client import OmdbClient
+from .ai_matcher import AiMatcher
 from .scanner import ScannerConfig, ScannerService
 from .repository import (
     FakeOccurrenceRepository,
@@ -115,6 +116,10 @@ def main():
         parse_log_repo = FirestoreParseLogRepository(db)
         manual_mapping_repo = FirestoreManualMappingRepository(db)
 
+    ai_matcher = AiMatcher()
+    if ai_matcher.is_available:
+        logger.info("AI matching and validation enabled via GEMINI_API_KEY.")
+
     scanner = ScannerService(
         config=config,
         omdb_client=omdb_client,
@@ -124,6 +129,7 @@ def main():
         run_repo=run_repo,
         parse_log_repo=parse_log_repo,
         manual_mapping_repo=manual_mapping_repo,
+        ai_matcher=ai_matcher,
     )
 
     run_id = str(uuid.uuid4())

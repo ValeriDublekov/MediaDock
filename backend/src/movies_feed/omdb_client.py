@@ -278,6 +278,8 @@ class OmdbClient:
                 raise OmdbNoMatchError(f"OMDb lookup failed: {err_msg}")
 
         if payload is None and (not media_type or media_type.lower() != "series"):
+            req_year = _parse_year(year) if year else None
+
             # 1. Primary lookup: Title + Year + Media Type (if year is specified)
             if year:
                 try:
@@ -293,28 +295,39 @@ class OmdbClient:
                 except OmdbTransportError:
                     raise
 
-            # 2. Fallback lookup: Title + Media Type (without year, if media_type is specified)
+            # 2. Fallback lookup: Title + Media Type (without year, if media_type is specified or as movie)
             if payload is None and media_type and media_type.lower() in ("movie", "series"):
                 data = self._make_request(title, media_type=media_type)
                 if data.get("Response") == "True":
                     resp_type = data.get("Type", "").lower()
                     if resp_type == media_type.lower():
+                        res_year = _parse_year(data.get("Year"))
+                        # If a specific year was requested for a movie, enforce ±1 year tolerance
+                        if req_year is not None and res_year is not None and abs(res_year - req_year) > 1:
+                            pass  # Year mismatch exceeds tolerance, reject
+                        else:
+                            payload = data
+                else:
+                    err_msg = data.get("Error", "")
+                    if "limit reached" in err_msg.lower():
+                        raise OmdbLimitReachedError("Daily API limit reached")
+
+            # 3. Fallback lookup: Title only (ONLY if media_type was not explicitly constrained)
+            if payload is None and not media_type:
+                data = self._make_request(title)
+                if data.get("Response") == "True":
+                    res_year = _parse_year(data.get("Year"))
+                    if req_year is not None and res_year is not None and abs(res_year - req_year) > 1:
+                        pass
+                    else:
                         payload = data
                 else:
                     err_msg = data.get("Error", "")
                     if "limit reached" in err_msg.lower():
                         raise OmdbLimitReachedError("Daily API limit reached")
 
-            # 3. Fallback lookup: Title only (without year or media_type filter)
             if payload is None:
-                data = self._make_request(title)
-                if data.get("Response") == "True":
-                    payload = data
-                else:
-                    err_msg = data.get("Error", "")
-                    if "limit reached" in err_msg.lower():
-                        raise OmdbLimitReachedError("Daily API limit reached")
-                    raise OmdbNoMatchError(f"OMDb lookup failed: {err_msg}")
+                raise OmdbNoMatchError(f"OMDb lookup failed for '{title}' (year={year}, type={media_type})")
 
         # Return typed normalized result
         return self._normalize_payload(payload)

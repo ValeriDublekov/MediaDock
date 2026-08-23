@@ -85,8 +85,11 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
     const unfoundCount = logs.filter(
       (l) => l.omdbStatus === 'not_found' || l.ignoreReason === 'omdb_not_found'
     ).length;
+    const parseErrorsCount = logs.filter(
+      (l) => !l.parsedSuccessfully || l.ignoreReason === 'parse_error' || l.ignoreReason === 'entry_error' || !!l.errorMessage
+    ).length;
     const ignoredCount = logs.filter((l) => l.ignored).length;
-    return { total, parsedSuccess, omdbFound, unfoundCount, ignoredCount };
+    return { total, parsedSuccess, omdbFound, unfoundCount, parseErrorsCount, ignoredCount };
   }, [logs]);
 
   const unfoundLogs = useMemo(() => {
@@ -99,7 +102,8 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
         (log) =>
           log.rawTitle.toLowerCase().includes(lowerSearch) ||
           (log.parsedTitle && log.parsedTitle.toLowerCase().includes(lowerSearch)) ||
-          (log.feedName && log.feedName.toLowerCase().includes(lowerSearch))
+          (log.feedName && log.feedName.toLowerCase().includes(lowerSearch)) ||
+          (log.errorMessage && log.errorMessage.toLowerCase().includes(lowerSearch))
       );
     }
     return result;
@@ -173,8 +177,9 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
       if (activeFilter === 'ignored' && !log.ignored) {
         return false;
       }
-      if (activeFilter === 'failed_parse' && log.parsedSuccessfully) {
-        return false;
+      if (activeFilter === 'failed_parse') {
+        const isFailed = !log.parsedSuccessfully || log.ignoreReason === 'parse_error' || log.ignoreReason === 'entry_error' || !!log.errorMessage;
+        if (!isFailed) return false;
       }
 
       // Search term
@@ -184,7 +189,8 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
         const matchesParsed = log.parsedTitle ? log.parsedTitle.toLowerCase().includes(query) : false;
         const matchesFeed = log.feedName.toLowerCase().includes(query);
         const matchesReason = log.ignoreReason ? log.ignoreReason.toLowerCase().includes(query) : false;
-        return matchesRaw || matchesParsed || matchesFeed || matchesReason;
+        const matchesError = log.errorMessage ? log.errorMessage.toLowerCase().includes(query) : false;
+        return matchesRaw || matchesParsed || matchesFeed || matchesReason || matchesError;
       }
 
       return true;
@@ -194,6 +200,27 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
   const formatIgnoreReason = (reason: string | null): { text: string; bg: string; border: string; color: string } => {
     if (!reason) return { text: 'N/A', bg: 'bg-neutral-800', border: 'border-neutral-700', color: 'text-neutral-400' };
     switch (reason) {
+      case 'parse_error':
+        return {
+          text: 'Грешка при парсване (Parser Error / Exception)',
+          bg: 'bg-red-950/40',
+          border: 'border-red-800/60',
+          color: 'text-red-300',
+        };
+      case 'entry_error':
+        return {
+          text: 'Грешка при обработка на записа (Entry Processing Error)',
+          bg: 'bg-red-950/40',
+          border: 'border-red-800/60',
+          color: 'text-red-300',
+        };
+      case 'omdb_error':
+        return {
+          text: 'Грешка при комуникация с OMDb (OMDb API Error)',
+          bg: 'bg-red-950/40',
+          border: 'border-red-800/60',
+          color: 'text-red-300',
+        };
       case 'excluded_country_or_genre':
         return {
           text: 'Филтрирана страна/жанр (Excluded Country/Genre)',
@@ -235,6 +262,27 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
           bg: 'bg-blue-950/40',
           border: 'border-blue-800/60',
           color: 'text-blue-300',
+        };
+      case 'media_type_mismatch':
+        return {
+          text: 'Несъответствие в типа (филм/сериал разминаване)',
+          bg: 'bg-amber-950/40',
+          border: 'border-amber-800/60',
+          color: 'text-amber-300',
+        };
+      case 'year_mismatch':
+        return {
+          text: 'Несъответствие в годината (> 1 г. разлика)',
+          bg: 'bg-amber-950/40',
+          border: 'border-amber-800/60',
+          color: 'text-amber-300',
+        };
+      case 'ai_rejected':
+        return {
+          text: 'Отхвърлено от AI валидация (Нисък скор/разминаване)',
+          bg: 'bg-purple-950/40',
+          border: 'border-purple-800/60',
+          color: 'text-purple-300',
         };
       default:
         return {
@@ -442,7 +490,7 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
                 : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
             }`}
           >
-            Грешка при парсване ({logs.filter((l) => !l.parsedSuccessfully).length})
+            Грешка при парсване ({metrics.parseErrorsCount})
           </button>
         </div>
       </div>
@@ -646,9 +694,20 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
                             </div>
                           </div>
                         ) : (
-                          <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-950/60 text-red-300 border border-red-800/60">
-                            <XCircle className="w-3.5 h-3.5" />
-                            Грешка при парсване
+                          <div>
+                            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-950/60 text-red-300 border border-red-800/60">
+                              <XCircle className="w-3.5 h-3.5" />
+                              {log.ignoreReason === 'parse_error' ? 'Грешка при парсване' : 'Неразпознато'}
+                            </div>
+                          </div>
+                        )}
+                        {log.errorMessage && (
+                          <div
+                            data-testid={`log-error-${log.id}`}
+                            className="mt-1.5 flex items-start gap-1.5 p-2 rounded bg-red-950/60 border border-red-800/70 text-[11px] text-red-200 font-mono break-all"
+                          >
+                            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
+                            <span>{log.errorMessage}</span>
                           </div>
                         )}
                       </td>

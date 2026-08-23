@@ -12,6 +12,7 @@ MVP Complete.
 - P10: Implemented newest-first catalog querying, custom pagination, and UI.
 - P12-P14: Configured pull-request CI, daily scanner workflow, and GitHub Pages deployment.
 - P15: Final integration and documentation audit. MVP contracts verified.
+- P16: Strict media-type matching, year tolerance enforcement, and Gemini 3.7 Flash AI parsing/validation with standalone prompt templates in `backend/src/movies_feed/prompts/`.
 
 ## Next Prompt
 

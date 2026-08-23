@@ -89,6 +89,7 @@ repository base path. Firebase Authorized Domains must include the Pages host.
 ### Secret server values
 
 - `OMDB_API_KEY`
+- `GEMINI_API_KEY` (optional, for AI title extraction & OMDb validation; prompt templates in `backend/src/movies_feed/prompts/`)
 - Firebase Admin credentials
 
 These exist in local ignored environment/credential storage or GitHub Secrets.

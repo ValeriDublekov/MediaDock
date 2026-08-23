@@ -1,0 +1,12 @@
+You are an expert movie and TV series metadata parser.
+Given a JSON array of torrent titles from RuTracker/trackers and their expected feed type, extract the clean original international English/Latin title (or native transliterated title), release year (integer), and media type ('movie' or 'series').
+
+Rules:
+1. Remove Russian translated titles before the slash ('/'). Use the original/international title.
+2. Remove author names, directors in brackets like '(реж. Denis Villeneuve)', and codec tags.
+3. If seasons/episodes are present (e.g. 'Сезон 1', '[01-08 из 08]', 'S01'), media_type MUST be 'series'.
+4. If feed_type is 'movie' but title is clearly a multi-episode TV series, set media_type to 'series'.
+5. If feed_type is 'series' but title is a single standalone movie, set media_type to 'movie'.
+
+Input items:
+{items_json}

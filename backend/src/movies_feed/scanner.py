@@ -24,7 +24,8 @@ from .repository import (
     merge_occurrences,
     merge_titles,
 )
-from .rutracker_parser import iter_feed_definitions, parse_rutracker_title
+from .rutracker_parser import ParsedTitle, iter_feed_definitions, parse_rutracker_title
+from .ai_matcher import AiMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ class ScannerService:
         run_repo: ScanRunRepository,
         parse_log_repo: Optional[ParseLogRepository] = None,
         manual_mapping_repo: Optional[ManualMappingRepository] = None,
+        ai_matcher: Optional[AiMatcher] = None,
         now: Optional[datetime.datetime] = None,
     ):
         self.config = config
@@ -71,6 +73,7 @@ class ScannerService:
         self.run_repo = run_repo
         self.parse_log_repo = parse_log_repo
         self.manual_mapping_repo = manual_mapping_repo
+        self.ai_matcher = ai_matcher
         self.now = now or datetime.datetime.now(datetime.timezone.utc)
         self._reset_session_caches()
 
@@ -213,6 +216,7 @@ class ScannerService:
         omdb_status: str,
         ignored: bool,
         ignore_reason: Optional[str],
+        error_message: Optional[str] = None,
         feed_entry_id: Optional[str] = None,
         torrent_url: Optional[str] = None,
         section_timings: Optional[Dict[str, float]] = None,
@@ -235,6 +239,7 @@ class ScannerService:
             ignored=ignored,
             ignore_reason=ignore_reason,
             processed_at=self.now,
+            error_message=error_message,
         )
         self._pending_parse_logs.append(log)
 
@@ -287,20 +292,23 @@ class ScannerService:
                     for entry in entries:
                         raw_title = getattr(entry, "title", "")
                         if raw_title:
-                            parsed = parse_rutracker_title(
-                                raw_title,
-                                content_type=feed_def.get("type"),
-                                video_settings=self.config.video_settings,
-                            )
-                            if parsed.title:
-                                y = None
-                                if parsed.year:
-                                    try:
-                                        y = int(parsed.year)
-                                    except ValueError:
-                                        pass
-                                ck = get_cache_key(parsed.title, y)
-                                cache_keys_to_prefetch.append(ck)
+                            try:
+                                parsed = parse_rutracker_title(
+                                    raw_title,
+                                    content_type=feed_def.get("type"),
+                                    video_settings=self.config.video_settings,
+                                )
+                                if parsed.title:
+                                    y = None
+                                    if parsed.year:
+                                        try:
+                                            y = int(parsed.year)
+                                        except ValueError:
+                                            pass
+                                    ck = get_cache_key(parsed.title, y)
+                                    cache_keys_to_prefetch.append(ck)
+                            except Exception as e:
+                                logger.warning(f"Error during cache key prefetch for '{raw_title}': {e}")
                     if cache_keys_to_prefetch:
                         self._prefetch_cache_entries(cache_keys_to_prefetch, section_timings)
 
@@ -318,6 +326,23 @@ class ScannerService:
                             logger.error(f"Error processing entry {getattr(entry, 'title', '')}: {e}")
                             run.error_count += 1
                             run.error_summary.append(f"Entry error: {e}")
+                            try:
+                                self._log_parse_entry(
+                                    raw_title=getattr(entry, "title", "") or "",
+                                    feed_name=feed_def.get("name", ""),
+                                    parsed_successfully=False,
+                                    parsed_title=None,
+                                    parsed_year=None,
+                                    omdb_status="error",
+                                    ignored=True,
+                                    ignore_reason="entry_error",
+                                    error_message=str(e),
+                                    feed_entry_id=getattr(entry, "id", None),
+                                    torrent_url=getattr(entry, "link", None),
+                                    section_timings=section_timings,
+                                )
+                            except Exception as log_ex:
+                                logger.error(f"Failed to log entry error to parse logs: {log_ex}")
 
                     # Flush batch parse logs and db upserts for feed
                     self._flush_parse_logs(section_timings)
@@ -390,22 +415,53 @@ class ScannerService:
                 omdb_status="not_parsed",
                 ignored=True,
                 ignore_reason="empty_title",
+                error_message=None,
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
                 section_timings=section_timings,
             )
             return
 
-        t0_parse = time.perf_counter()
-        parsed = parse_rutracker_title(
-            raw_title,
-            content_type=feed_def.get("type"),
-            video_settings=self.config.video_settings,
-        )
-        section_timings["title_parse"] += (time.perf_counter() - t0_parse)
+        parse_error: Optional[str] = None
+        try:
+            t0_parse = time.perf_counter()
+            parsed = parse_rutracker_title(
+                raw_title,
+                content_type=feed_def.get("type"),
+                video_settings=self.config.video_settings,
+            )
+            section_timings["title_parse"] += (time.perf_counter() - t0_parse)
+        except Exception as e:
+            logger.error(f"Error parsing rutracker title '{raw_title}': {e}", exc_info=True)
+            parsed = ParsedTitle(title="", year=None, is_series=False, quality="", rip_type="")
+            parse_error = f"Грешка при парсване: {e}"
+
+        # AI extraction fallback if regex fails to extract a title
+        if not parsed.title and self.ai_matcher and self.ai_matcher.is_available:
+            try:
+                ai_extracted = self.ai_matcher.batch_extract_titles(
+                    [{"id": 0, "raw_title": raw_title, "feed_type": feed_def.get("type")}]
+                ).get(0)
+                if ai_extracted and ai_extracted.get("title"):
+                    parsed = ParsedTitle(
+                        title=ai_extracted["title"],
+                        year=str(ai_extracted.get("year")) if ai_extracted.get("year") else parsed.year,
+                        is_series=(ai_extracted.get("media_type") == "series"),
+                        quality=parsed.quality,
+                        rip_type=parsed.rip_type,
+                    )
+                    parse_error = None
+            except Exception as e:
+                logger.warning(f"AI title extraction fallback failed: {e}")
+                if not parse_error:
+                    parse_error = f"AI fallback грешка: {e}"
 
         if not parsed.title:
             run.ignored_entries += 1
+            if parse_error:
+                run.error_count += 1
+                run.error_summary.append(f"Parse error for '{raw_title}': {parse_error}")
+
             self._log_parse_entry(
                 raw_title=raw_title,
                 feed_name=feed_name,
@@ -414,7 +470,8 @@ class ScannerService:
                 parsed_year=None,
                 omdb_status="not_parsed",
                 ignored=True,
-                ignore_reason="no_title",
+                ignore_reason="parse_error" if parse_error else "no_title",
+                error_message=parse_error,
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
                 section_timings=section_timings,
@@ -495,6 +552,7 @@ class ScannerService:
                     omdb_status="error",
                     ignored=True,
                     ignore_reason="omdb_error",
+                    error_message=f"OMDb Transport Error: {str(e)}",
                     feed_entry_id=feed_entry_id,
                     torrent_url=torrent_url,
                     section_timings=section_timings,
@@ -578,6 +636,7 @@ class ScannerService:
                     omdb_status="error",
                     ignored=True,
                     ignore_reason="omdb_error",
+                    error_message=f"OMDb Transport Error: {str(e)}",
                     feed_entry_id=feed_entry_id,
                     torrent_url=torrent_url,
                     section_timings=section_timings,
@@ -617,6 +676,82 @@ class ScannerService:
 
         if not omdb_result:
             return
+
+        # Check media type consistency against RSS feed type
+        feed_type = (feed_def.get("type") or "").lower()
+        if feed_type in ("movie", "series"):
+            result_is_series = (omdb_result.media_type == "series")
+            expected_is_series = (feed_type == "series")
+            if result_is_series != expected_is_series:
+                run.ignored_entries += 1
+                self._log_parse_entry(
+                    raw_title=raw_title,
+                    feed_name=feed_name,
+                    parsed_successfully=True,
+                    parsed_title=parsed.title,
+                    parsed_year=lookup_year,
+                    omdb_status="found",
+                    ignored=True,
+                    ignore_reason="media_type_mismatch",
+                    feed_entry_id=feed_entry_id,
+                    torrent_url=torrent_url,
+                    section_timings=section_timings,
+                )
+                return
+
+        # Validate year tolerance for movies (max ±1 year difference)
+        if omdb_result.media_type in ("movie", "documentary", "short") and lookup_year is not None and omdb_result.year is not None:
+            if abs(omdb_result.year - lookup_year) > 1:
+                run.ignored_entries += 1
+                self._log_parse_entry(
+                    raw_title=raw_title,
+                    feed_name=feed_name,
+                    parsed_successfully=True,
+                    parsed_title=parsed.title,
+                    parsed_year=lookup_year,
+                    omdb_status="found",
+                    ignored=True,
+                    ignore_reason="year_mismatch",
+                    feed_entry_id=feed_entry_id,
+                    torrent_url=torrent_url,
+                    section_timings=section_timings,
+                )
+                return
+
+        # AI Match Validation if enabled and candidate title differs or requires confidence check
+        if self.ai_matcher and self.ai_matcher.is_available:
+            norm_parsed = normalize_title(parsed.title)
+            norm_omdb = normalize_title(omdb_result.title)
+            if norm_parsed != norm_omdb:
+                try:
+                    validation = self.ai_matcher.batch_validate_omdb_matches([
+                        {
+                            "id": 0,
+                            "raw_title": raw_title,
+                            "feed_type": feed_def.get("type"),
+                            "omdb_title": omdb_result.title,
+                            "omdb_year": omdb_result.year,
+                            "omdb_type": omdb_result.media_type,
+                        }
+                    ]).get(0)
+                    if validation and not validation.get("is_match", True):
+                        run.ignored_entries += 1
+                        self._log_parse_entry(
+                            raw_title=raw_title,
+                            feed_name=feed_name,
+                            parsed_successfully=True,
+                            parsed_title=parsed.title,
+                            parsed_year=lookup_year,
+                            omdb_status="found",
+                            ignored=True,
+                            ignore_reason="ai_rejected",
+                            feed_entry_id=feed_entry_id,
+                            torrent_url=torrent_url,
+                            section_timings=section_timings,
+                        )
+                        return
+                except Exception as e:
+                    logger.warning(f"AI candidate validation check failed: {e}")
 
         if self.is_excluded(omdb_result.countries, omdb_result.genres):
             run.ignored_entries += 1

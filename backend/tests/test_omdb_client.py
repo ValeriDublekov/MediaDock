@@ -334,6 +334,64 @@ class OmdbClientTests(unittest.TestCase):
         with self.assertRaises(OmdbNoMatchError):
             client.get_by_imdb_id("tt0000000")
 
+    def test_movie_fallback_rejects_year_mismatch_exceeding_one_year(self):
+        # 1st request with year 2024 fails
+        # 2nd fallback request returns a 1980 film with same title -> should be rejected (>1 year diff)
+        responses = [
+            {"Response": "False", "Error": "Movie not found!"},
+            {
+                "Response": "True",
+                "Title": "Classic Movie",
+                "Year": "1980",
+                "imdbID": "tt0080000",
+                "Type": "movie",
+                "Genre": "Drama"
+            }
+        ]
+        transport = MockHttpTransport(responses)
+        client = OmdbClient("secret_key_12345", transport=transport)
+
+        with self.assertRaises(OmdbNoMatchError):
+            client.get_movie_info("Classic Movie", "2024", media_type="movie")
+
+    def test_movie_fallback_accepts_year_difference_within_one_year(self):
+        # 1st request with year 2024 fails
+        # 2nd fallback returns 2023 (festival release vs commercial release) -> accepted (tolerance ±1)
+        responses = [
+            {"Response": "False", "Error": "Movie not found!"},
+            {
+                "Response": "True",
+                "Title": "Recent Movie",
+                "Year": "2023",
+                "imdbID": "tt1234567",
+                "Type": "movie",
+                "Genre": "Drama"
+            }
+        ]
+        transport = MockHttpTransport(responses)
+        client = OmdbClient("secret_key_12345", transport=transport)
+
+        result = client.get_movie_info("Recent Movie", "2024", media_type="movie")
+        self.assertEqual(result.title, "Recent Movie")
+        self.assertEqual(result.year, 2023)
+
+    def test_movie_search_does_not_fallback_to_series(self):
+        # Search for a movie where only a series exists -> should NOT return the series
+        responses = [
+            {"Response": "False", "Error": "Movie not found!"},
+            {"Response": "False", "Error": "Movie not found!"}
+        ]
+        transport = MockHttpTransport(responses)
+        client = OmdbClient("secret_key_12345", transport=transport)
+
+        with self.assertRaises(OmdbNoMatchError):
+            client.get_movie_info("Some Series Title", "2024", media_type="movie")
+
+        # Verify both requests requested type=movie and did NOT drop the type constraint
+        self.assertEqual(len(transport.requests), 2)
+        self.assertEqual(transport.requests[0][1]["type"], "movie")
+        self.assertEqual(transport.requests[1][1]["type"], "movie")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,9 @@
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 SERIES_KEYWORDS = [
@@ -58,9 +61,15 @@ def iter_feed_definitions(rss_feeds: Dict[str, Any]) -> Iterable[Dict[str, Optio
 
 def infer_feed_type(feed_name: str) -> Optional[str]:
     lowered = feed_name.lower()
-    if "сериал" in lowered or "series" in lowered:
+    if "сериал" in lowered or "series" in lowered or "tv" in lowered:
         return "series"
-    if "филм" in lowered or "movie" in lowered:
+    if (
+        "филм" in lowered
+        or "фильм" in lowered
+        or "кино" in lowered
+        or "movie" in lowered
+        or "cinema" in lowered
+    ):
         return "movie"
     return None
 
@@ -71,6 +80,8 @@ def parse_rutracker_title(
     content_type: Optional[str] = None,
     video_settings: Optional[Dict[str, Any]] = None,
 ) -> ParsedTitle:
+    if not raw_title or not isinstance(raw_title, str):
+        return ParsedTitle(title="", year=None, is_series=False, quality="", rip_type="")
     clean = re.sub(r"^\[.*?\]\s*", "", raw_title).strip()
     year = extract_year(clean)
     title_section = extract_title_section(clean)
