@@ -641,6 +641,13 @@ class ScannerService:
         logger.info(f"AI database recheck completed: {stats}")
         return stats
 
+    def _recheck_existing_titles(
+        self,
+        run: Optional[ScanRun] = None,
+        section_timings: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, int]:
+        return self.recheck_existing_titles(run=run, section_timings=section_timings)
+
     def reparse_unfound_entries(
         self,
         run: Optional[ScanRun] = None,
@@ -818,6 +825,13 @@ class ScannerService:
 
         logger.info(f"AI re-parsing completed: {stats}")
         return stats
+
+    def _reparse_unfound_entries(
+        self,
+        run: Optional[ScanRun] = None,
+        section_timings: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, int]:
+        return self.reparse_unfound_entries(run=run, section_timings=section_timings)
 
     def _process_entry(
         self,
