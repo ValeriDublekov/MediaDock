@@ -110,50 +110,28 @@ class AiMatcher:
                     self.failed_calls += 1
                     return None
             except urllib.error.HTTPError as e:
-                if e.code == 403:
-                    if attempt < max_retries - 1:
-                        cooldown_mins = self.forbidden_cooldown_seconds / 60.0
-                        logger.warning(
-                            f"[Gemini API #{call_id}] HTTP 403 Forbidden received. "
-                            f"Pausing execution for {int(self.forbidden_cooldown_seconds)}s ({cooldown_mins:.1f} minutes) "
-                            f"before retry (attempt {attempt + 1}/{max_retries})..."
-                        )
-                        time.sleep(self.forbidden_cooldown_seconds)
-                        continue
-                    else:
-                        logger.error(
-                            f"[Gemini API #{call_id}] HTTP 403 Forbidden: persistent error "
-                            f"after {max_retries} attempts."
-                        )
-                        self.failed_calls += 1
-                        self._disabled = True
-                        break
-                if e.code == 429:
-                    logger.error(
-                        f"[Gemini API #{call_id}] HTTP 429 (Too Many Requests). "
-                        f"Quota likely exhausted. Disabling further AI calls for this run."
-                    )
-                    self.failed_calls += 1
-                    self._disabled = True
-                    break
-                if e.code in (500, 502, 503, 504) and attempt < max_retries - 1:
-                    sleep_time = (2 ** attempt) * 5.0
-                    logger.warning(
-                        f"[Gemini API #{call_id}] HTTP {e.code} ({e.reason}). "
-                        f"Retrying in {sleep_time:.1f}s (attempt {attempt + 1}/{max_retries})..."
-                    )
-                    time.sleep(sleep_time)
-                    continue
-                logger.warning(f"[Gemini API #{call_id}] HTTP error {e.code}: {e.reason}")
+                logger.error(
+                    f"[Gemini API #{call_id}] HTTP error {e.code} ({e.reason}). "
+                    f"Disabling further AI calls for this run."
+                )
                 self.failed_calls += 1
+                self._disabled = True
                 break
             except urllib.error.URLError as e:
-                logger.warning(f"[Gemini API #{call_id}] URL error: {e.reason}")
+                logger.error(
+                    f"[Gemini API #{call_id}] URL error: {e.reason}. "
+                    f"Disabling further AI calls for this run."
+                )
                 self.failed_calls += 1
+                self._disabled = True
                 break
             except Exception as e:
-                logger.warning(f"[Gemini API #{call_id}] Call failed: {e}")
+                logger.error(
+                    f"[Gemini API #{call_id}] Call failed: {e}. "
+                    f"Disabling further AI calls for this run."
+                )
                 self.failed_calls += 1
+                self._disabled = True
                 break
 
         return None

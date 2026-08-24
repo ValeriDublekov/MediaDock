@@ -137,44 +137,35 @@ class TestAiMatcher(unittest.TestCase):
         self.assertEqual(res[1]["corrected_year"], 2024)
         self.assertEqual(res[1]["corrected_media_type"], "series")
 
-    @patch("time.sleep", return_value=None)
     @patch("urllib.request.urlopen")
-    def test_call_gemini_retry_on_429(self, mock_urlopen, mock_sleep):
+    def test_call_gemini_error_disables_matcher(self, mock_urlopen):
         import urllib.error
         from io import BytesIO
 
-        mock_resp = MagicMock()
-        mock_resp.__enter__.return_value = mock_resp
-        mock_resp.read.return_value = b'{"candidates": [{"content": {"parts": [{"text": "{\\"id\\": 0}"}]}}]}'
-
-        # Raise HTTP 429 once, then succeed
         error_429 = urllib.error.HTTPError("http://example.com", 429, "Too Many Requests", {}, BytesIO())
-        mock_urlopen.side_effect = [error_429, mock_resp]
+        mock_urlopen.side_effect = error_429
 
         matcher = AiMatcher(api_key="valid_key")
         res = matcher._call_gemini("test prompt")
-        self.assertEqual(res, {"id": 0})
-        self.assertEqual(mock_urlopen.call_count, 2)
-        mock_sleep.assert_called_once_with(2.0)
+        self.assertIsNone(res)
+        self.assertFalse(matcher.is_available)
+        self.assertEqual(mock_urlopen.call_count, 1)
         self.assertEqual(matcher.get_stats()["total_calls"], 1)
-        self.assertEqual(matcher.get_stats()["successful_calls"], 1)
+        self.assertEqual(matcher.get_stats()["failed_calls"], 1)
 
-    @patch("time.sleep")
     @patch("urllib.request.urlopen")
-    def test_call_gemini_403_forbidden_retries_and_pauses(self, mock_urlopen, mock_sleep):
+    def test_call_gemini_403_forbidden_disables_matcher(self, mock_urlopen):
         import urllib.error
         from io import BytesIO
 
         error_403 = urllib.error.HTTPError("http://example.com", 403, "Forbidden", {}, BytesIO())
         mock_urlopen.side_effect = error_403
 
-        matcher = AiMatcher(api_key="valid_key", forbidden_cooldown_seconds=300.0)
+        matcher = AiMatcher(api_key="valid_key")
         res = matcher._call_gemini("test prompt")
         self.assertIsNone(res)
-        # Should attempt 3 times before failing
-        self.assertEqual(mock_urlopen.call_count, 3)
-        self.assertEqual(mock_sleep.call_count, 2)
-        mock_sleep.assert_called_with(300.0)
+        self.assertFalse(matcher.is_available)
+        self.assertEqual(mock_urlopen.call_count, 1)
         stats = matcher.get_stats()
         self.assertEqual(stats["total_calls"], 1)
         self.assertEqual(stats["failed_calls"], 1)

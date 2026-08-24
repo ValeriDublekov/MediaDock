@@ -1,5 +1,6 @@
 pyproject.toml
 src/movies_feed/__init__.py
+src/movies_feed/ai_matcher.py
 src/movies_feed/cli.py
 src/movies_feed/firestore_repository.py
 src/movies_feed/ids.py
@@ -13,6 +14,7 @@ src/movies_feed.egg-info/SOURCES.txt
 src/movies_feed.egg-info/dependency_links.txt
 src/movies_feed.egg-info/requires.txt
 src/movies_feed.egg-info/top_level.txt
+tests/test_ai_matcher.py
 tests/test_firestore_repository.py
 tests/test_omdb_client.py
 tests/test_repository.py
