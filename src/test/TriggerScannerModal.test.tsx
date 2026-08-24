@@ -65,6 +65,7 @@ describe('TriggerScannerModal', () => {
             inputs: {
               dry_run: false,
               force_days: '2',
+              audit_days: '0',
               mode: 'rss',
             },
           }),
@@ -80,17 +81,24 @@ describe('TriggerScannerModal', () => {
     });
   });
 
-  it('allows selecting force_days in settings modal', () => {
+  it('allows selecting force_days and audit_days in settings modal', () => {
     render(<TriggerScannerModal />);
 
     fireEvent.click(screen.getByTestId('scanner-settings-button'));
 
-    const select = screen.getByTestId('select-force-days') as HTMLSelectElement;
-    expect(select).toBeInTheDocument();
-    expect(select.value).toBe('0');
+    const forceSelect = screen.getByTestId('select-force-days') as HTMLSelectElement;
+    expect(forceSelect).toBeInTheDocument();
+    expect(forceSelect.value).toBe('0');
 
-    fireEvent.change(select, { target: { value: '2' } });
-    expect(select.value).toBe('2');
+    fireEvent.change(forceSelect, { target: { value: '2' } });
+    expect(forceSelect.value).toBe('2');
+
+    const auditSelect = screen.getByTestId('select-audit-days') as HTMLSelectElement;
+    expect(auditSelect).toBeInTheDocument();
+    expect(auditSelect.value).toBe('0');
+
+    fireEvent.change(auditSelect, { target: { value: '7' } });
+    expect(auditSelect.value).toBe('7');
   });
 
   it('opens settings modal if credentials are missing on action click', async () => {

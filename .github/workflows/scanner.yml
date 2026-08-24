@@ -16,6 +16,11 @@ on:
         type: string
         required: false
         default: "0"
+      audit_days:
+        description: "Audit existing records N days back (0 = unlimited)"
+        type: string
+        required: false
+        default: "0"
       mode:
         description: "Scan mode: rss (feed scan), recheck-existing (AI audit DB), reparse-unfound (AI reparse unmapped), or all"
         type: choice
@@ -75,6 +80,9 @@ jobs:
           fi
           if [ -n "${{ github.event.inputs.force_days }}" ] && [ "${{ github.event.inputs.force_days }}" != "0" ]; then
             EXTRA_ARGS="$EXTRA_ARGS --force-days ${{ github.event.inputs.force_days }}"
+          fi
+          if [ -n "${{ github.event.inputs.audit_days }}" ] && [ "${{ github.event.inputs.audit_days }}" != "0" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --audit-days ${{ github.event.inputs.audit_days }}"
           fi
           if [ -n "${{ github.event.inputs.mode }}" ]; then
             EXTRA_ARGS="$EXTRA_ARGS --mode ${{ github.event.inputs.mode }}"

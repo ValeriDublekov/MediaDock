@@ -42,6 +42,7 @@ class ScannerConfig:
     cache_ttl_days: int = 30
     trigger: str = "manual"
     force_days: int = 0
+    audit_days: int = 0  # 0 = unlimited
     mode: str = "rss"  # "rss", "recheck-existing", "reparse-unfound", "all"
 
 
@@ -416,6 +417,7 @@ class ScannerService:
         self,
         run: Optional[ScanRun] = None,
         section_timings: Optional[Dict[str, float]] = None,
+        audit_days: Optional[int] = None,
     ) -> Dict[str, int]:
         """
         Audits existing database titles and their occurrences with AI.
@@ -423,6 +425,9 @@ class ScannerService:
         If valid: upserts corrected Title/Occurrences, removes obsolete old Title/Occurrences.
         If invalid/not found: marks as not found in parseLogs and deletes the erroneous Title/Occurrences from database.
         """
+        if audit_days is None:
+            audit_days = self.config.audit_days
+
         stats = {
             "titles_checked": 0,
             "mismatches_found": 0,
@@ -440,11 +445,23 @@ class ScannerService:
             (tid, trec) for (tid, trec) in all_titles if not trec.ai_validated
         ]
 
-        logger.info(
-            f"AI recheck status: {len(all_titles)} total in DB, "
-            f"{len(all_titles) - len(unvalidated_titles)} already AI-validated. "
-            f"{len(unvalidated_titles)} remaining to audit."
-        )
+        if audit_days and audit_days > 0:
+            cutoff = self.now - datetime.timedelta(days=audit_days)
+            unvalidated_titles = [
+                (tid, trec) for (tid, trec) in unvalidated_titles
+                if (trec.last_seen_at or trec.updated_at or trec.first_seen_at or datetime.datetime.min) >= cutoff
+            ]
+            logger.info(
+                f"AI recheck status: {len(all_titles)} total in DB, "
+                f"filtered to last {audit_days} days (cutoff {cutoff.isoformat()}). "
+                f"{len(unvalidated_titles)} remaining unvalidated titles to audit."
+            )
+        else:
+            logger.info(
+                f"AI recheck status: {len(all_titles)} total in DB (unlimited date range), "
+                f"{len(all_titles) - len(unvalidated_titles)} already AI-validated. "
+                f"{len(unvalidated_titles)} remaining to audit."
+            )
 
         if not unvalidated_titles:
             logger.info("All existing database titles are already AI-validated. Skipping recheck.")

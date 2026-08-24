@@ -490,4 +490,41 @@ class TestScanner(unittest.TestCase):
         # On batch 1 failure, it should stop immediately
         self.assertEqual(mock_ai.batch_recheck_matches.call_count, 1)
 
+    def test_recheck_audit_days_filtering(self):
+        old_date = self.now - datetime.timedelta(days=10)
+        recent_date = self.now - datetime.timedelta(days=1)
+
+        t_old = Title(
+            title="Old Film", normalized_title="old film", year=2020, media_type="movie",
+            first_seen_at=old_date, last_seen_at=old_date, updated_at=old_date, ai_validated=False
+        )
+        t_recent = Title(
+            title="Recent Film", normalized_title="recent film", year=2023, media_type="movie",
+            first_seen_at=recent_date, last_seen_at=recent_date, updated_at=recent_date, ai_validated=False
+        )
+        self.title_repo.upsert("t_old", t_old)
+        self.title_repo.upsert("t_recent", t_recent)
+
+        config = ScannerConfig(trigger="manual", mode="recheck-existing")
+        omdb = MockOmdbClient({})
+        scanner = self.create_scanner(config, omdb)
+
+        from unittest.mock import MagicMock
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        mock_ai.batch_recheck_matches.return_value = {0: {"is_valid_match": True}}
+        scanner.ai_matcher = mock_ai
+
+        # With audit_days=3, only t_recent (1 day old) should be audited
+        res_filtered = scanner.recheck_existing_titles(audit_days=3)
+        self.assertEqual(res_filtered["titles_checked"], 1)
+
+        # Reset ai_validated flag on t_recent for unlimited test
+        t_recent.ai_validated = False
+        self.title_repo.upsert("t_recent", t_recent)
+
+        # With audit_days=0 (unlimited), both t_recent and t_old should be audited
+        res_unlimited = scanner.recheck_existing_titles(audit_days=0)
+        self.assertEqual(res_unlimited["titles_checked"], 2)
+
 

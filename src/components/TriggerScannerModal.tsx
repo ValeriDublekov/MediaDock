@@ -13,6 +13,7 @@ const STORAGE_KEYS = {
   WORKFLOW: 'movies_feed_gh_workflow',
   REF: 'movies_feed_gh_ref',
   FORCE_DAYS: 'movies_feed_gh_force_days',
+  AUDIT_DAYS: 'movies_feed_gh_audit_days',
   OMDB_API_KEY: 'movies_feed_omdb_api_key',
 };
 
@@ -29,6 +30,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
   const [ref, setRef] = useState<string>('main');
   const [dryRun, setDryRun] = useState<boolean>(false);
   const [forceDays, setForceDays] = useState<string>('0');
+  const [auditDays, setAuditDays] = useState<string>('0');
   const [omdbApiKey, setOmdbApiKey] = useState<string>('');
 
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -57,6 +59,8 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     const savedRef = localStorage.getItem(STORAGE_KEYS.REF) || 'main';
     const savedForceDays =
       localStorage.getItem(STORAGE_KEYS.FORCE_DAYS) || '0';
+    const savedAuditDays =
+      localStorage.getItem(STORAGE_KEYS.AUDIT_DAYS) || '0';
     const savedOmdbApiKey =
       localStorage.getItem(STORAGE_KEYS.OMDB_API_KEY) ||
       import.meta.env.VITE_OMDB_API_KEY ||
@@ -69,6 +73,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     setWorkflow(savedWorkflow);
     setRef(savedRef);
     setForceDays(savedForceDays);
+    setAuditDays(savedAuditDays);
     setOmdbApiKey(savedOmdbApiKey);
   }, []);
 
@@ -79,6 +84,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     localStorage.setItem(STORAGE_KEYS.WORKFLOW, workflow.trim());
     localStorage.setItem(STORAGE_KEYS.REF, ref.trim());
     localStorage.setItem(STORAGE_KEYS.FORCE_DAYS, forceDays.trim());
+    localStorage.setItem(STORAGE_KEYS.AUDIT_DAYS, auditDays.trim());
     localStorage.setItem(STORAGE_KEYS.OMDB_API_KEY, omdbApiKey.trim());
   };
 
@@ -127,6 +133,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
           inputs: {
             dry_run: dryRun,
             force_days: forceDays,
+            audit_days: auditDays,
             mode: targetMode,
           },
         }),
@@ -308,8 +315,15 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
                   <Search className="w-5 h-5" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-neutral-200 group-hover:text-amber-400 transition-colors">AI Одит на съществуващи записи</h4>
-                  <p className="text-xs text-neutral-400 mt-1">Проверява вече записаните филми за грешни съвпадения и ги коригира.</p>
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-bold text-neutral-200 group-hover:text-amber-400 transition-colors">AI Одит на съществуващи записи</h4>
+                    <span className="text-[11px] font-semibold text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">
+                      {auditDays === '0' || !auditDays ? 'неограничено' : `${auditDays} дни`}
+                    </span>
+                  </div>
+                  <p className="text-xs text-neutral-400 mt-1">
+                    Проверява вече записаните филми за грешни съвпадения и ги коригира ({auditDays === '0' || !auditDays ? 'неограничено назад' : `за последните ${auditDays} дни`}).
+                  </p>
                 </div>
               </button>
 
@@ -344,18 +358,43 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
               </button>
             </div>
             
-            <div className="px-6 py-4 border-t border-neutral-800 bg-neutral-950/60 flex justify-between items-center">
-               <div className="flex items-center gap-2">
-                 <input
-                    type="checkbox"
-                    id="actions_dry_run_checkbox"
-                    checked={dryRun}
-                    onChange={(e) => setDryRun(e.target.checked)}
-                    className="w-4 h-4 rounded border-neutral-700 bg-neutral-950 text-amber-500 focus:ring-amber-500 cursor-pointer"
-                  />
-                  <label htmlFor="actions_dry_run_checkbox" className="text-xs text-neutral-300 cursor-pointer select-none">
-                    Тестово (<code className="text-amber-400">--dry-run</code>)
-                  </label>
+            <div className="px-6 py-4 border-t border-neutral-800 bg-neutral-950/60 flex flex-wrap justify-between items-center gap-3">
+               <div className="flex items-center gap-4">
+                 <div className="flex items-center gap-2">
+                   <input
+                      type="checkbox"
+                      id="actions_dry_run_checkbox"
+                      checked={dryRun}
+                      onChange={(e) => setDryRun(e.target.checked)}
+                      className="w-4 h-4 rounded border-neutral-700 bg-neutral-950 text-amber-500 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <label htmlFor="actions_dry_run_checkbox" className="text-xs text-neutral-300 cursor-pointer select-none">
+                      Тестово (<code className="text-amber-400">--dry-run</code>)
+                    </label>
+                 </div>
+                 <div className="flex items-center gap-1.5 border-l border-neutral-800 pl-3">
+                   <label htmlFor="actions_audit_days_select" className="text-xs text-neutral-400 select-none">
+                     Одит дни:
+                   </label>
+                   <select
+                     id="actions_audit_days_select"
+                     value={auditDays}
+                     onChange={(e) => {
+                       const val = e.target.value;
+                       setAuditDays(val);
+                       localStorage.setItem(STORAGE_KEYS.AUDIT_DAYS, val);
+                     }}
+                     className="px-2 py-1 bg-neutral-950 border border-neutral-800 rounded text-xs text-amber-400 focus:outline-none cursor-pointer"
+                   >
+                     <option value="0">0 (Неограничено)</option>
+                     <option value="1">1 ден</option>
+                     <option value="2">2 дни</option>
+                     <option value="3">3 дни</option>
+                     <option value="7">7 дни</option>
+                     <option value="14">14 дни</option>
+                     <option value="30">30 дни</option>
+                   </select>
+                 </div>
                </div>
                <button
                  type="button"
@@ -454,6 +493,32 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
                   </select>
                   <p className="text-[11px] text-neutral-400 mt-1">
                     Приложимо само при изпълнение на RSS сканиране или Пълен цикъл.
+                  </p>
+                </div>
+
+                {/* Audit Days Selector */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-neutral-300">
+                      Одит на съществуващи записи (дни назад)
+                    </label>
+                  </div>
+                  <select
+                    value={auditDays}
+                    onChange={(e) => setAuditDays(e.target.value)}
+                    data-testid="select-audit-days"
+                    className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="0">0 (Неограничено — проверка на всички записи)</option>
+                    <option value="1">1 ден назад (проверка за последния 1 ден)</option>
+                    <option value="2">2 дни назад</option>
+                    <option value="3">3 дни назад</option>
+                    <option value="7">7 дни назад</option>
+                    <option value="14">14 дни назад</option>
+                    <option value="30">30 дни назад</option>
+                  </select>
+                  <p className="text-[11px] text-neutral-400 mt-1">
+                    Приложимо при "AI Одит на съществуващи записи" и "Пълен цикъл". При 0 се проверяват всички.
                   </p>
                 </div>
 
