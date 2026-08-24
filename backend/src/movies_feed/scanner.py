@@ -474,7 +474,7 @@ class ScannerService:
 
         unvalidated_titles.sort(key=_get_sort_key, reverse=True)
 
-        batch_size = 8
+        batch_size = 15
         total_batches = (len(unvalidated_titles) + batch_size - 1) // batch_size
         logger.info(
             f"Starting AI recheck of {len(unvalidated_titles)} unvalidated titles in database "
@@ -698,7 +698,7 @@ class ScannerService:
                 seen_raw_titles.add(log.raw_title)
                 unique_logs.append(log)
 
-        batch_size = 8
+        batch_size = 15
         total_batches = (len(unique_logs) + batch_size - 1) // batch_size
         for batch_idx, i in enumerate(range(0, len(unique_logs), batch_size), start=1):
             chunk = unique_logs[i : i + batch_size]

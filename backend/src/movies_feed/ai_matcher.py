@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime
 import urllib.request
 import urllib.error
 from typing import Any, Dict, List, Optional
@@ -59,9 +60,10 @@ class AiMatcher:
         self.total_calls += 1
         call_id = self.total_calls
         t0 = time.perf_counter()
+        sent_time_str = datetime.now().strftime("%H:%M:%S")
 
         logger.info(
-            f"[Gemini API #{call_id}] Starting '{action_name}' request "
+            f"[Gemini API #{call_id}] [Sent @ {sent_time_str}] Starting '{action_name}' request "
             f"(model: {self.model}, items: {item_count}, prompt_len: {len(prompt)} chars)..."
         )
 
@@ -75,6 +77,9 @@ class AiMatcher:
             "generationConfig": {
                 "temperature": 0.1,
                 "responseMimeType": "application/json",
+                "thinkingConfig": {
+                    "thinkingBudget": 0
+                },
             }
         }
         if schema:
@@ -90,71 +95,79 @@ class AiMatcher:
 
         max_retries = 3
         for attempt in range(max_retries):
+            attempt_start_time_str = datetime.now().strftime("%H:%M:%S")
             try:
-                with urllib.request.urlopen(req, timeout=60) as resp:
+                attempt_t0 = time.perf_counter()
+                with urllib.request.urlopen(req, timeout=120) as resp:
                     resp_bytes = resp.read()
                     resp_json = json.loads(resp_bytes.decode("utf-8"))
                     candidates = resp_json.get("candidates", [])
+                    finished_time_str = datetime.now().strftime("%H:%M:%S")
                     if candidates:
                         first_part = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
                         parsed_res = json.loads(first_part)
-                        elapsed = time.perf_counter() - t0
+                        elapsed = time.perf_counter() - attempt_t0
                         self.successful_calls += 1
                         self.total_items_processed += item_count
                         logger.info(
-                            f"[Gemini API #{call_id}] Request '{action_name}' SUCCEEDED in {elapsed:.2f}s "
+                            f"[Gemini API #{call_id}] [Received @ {finished_time_str}] Request '{action_name}' SUCCEEDED in {elapsed:.2f}s "
                             f"(processed {item_count} items)."
                         )
                         return parsed_res
-                    logger.warning(f"[Gemini API #{call_id}] No candidates returned in response.")
+                    logger.warning(
+                        f"[Gemini API #{call_id}] [Received @ {finished_time_str}] No candidates returned in response."
+                    )
                     self.failed_calls += 1
                     return None
             except urllib.error.HTTPError as e:
+                err_time_str = datetime.now().strftime("%H:%M:%S")
                 # Retry on rate limits or transient server errors
                 if e.code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
                     retry_delay = 2.0 * (attempt + 1)
                     logger.warning(
-                        f"[Gemini API #{call_id}] HTTP error {e.code} ({e.reason}) on attempt {attempt + 1}/{max_retries}. "
+                        f"[Gemini API #{call_id}] [Error @ {err_time_str}] HTTP error {e.code} ({e.reason}) on attempt {attempt + 1}/{max_retries}. "
                         f"Retrying in {retry_delay:.1f}s..."
                     )
                     time.sleep(retry_delay)
                     continue
                 logger.error(
-                    f"[Gemini API #{call_id}] HTTP error {e.code} ({e.reason}). "
+                    f"[Gemini API #{call_id}] [Error @ {err_time_str}] HTTP error {e.code} ({e.reason}). "
                     f"Disabling further AI calls for this run."
                 )
                 self.failed_calls += 1
                 self._disabled = True
                 break
             except urllib.error.URLError as e:
+                err_time_str = datetime.now().strftime("%H:%M:%S")
                 is_timeout = "timed out" in str(e.reason).lower() or isinstance(getattr(e, "reason", None), TimeoutError)
                 if is_timeout and attempt < max_retries - 1:
                     retry_delay = 2.0 * (attempt + 1)
                     logger.warning(
-                        f"[Gemini API #{call_id}] Connection/read timeout on attempt {attempt + 1}/{max_retries}: {e.reason}. "
+                        f"[Gemini API #{call_id}] [Error @ {err_time_str}] Connection/read timeout on attempt {attempt + 1}/{max_retries}: {e.reason}. "
                         f"Retrying in {retry_delay:.1f}s..."
                     )
                     time.sleep(retry_delay)
                     continue
                 logger.error(
-                    f"[Gemini API #{call_id}] URL error: {e.reason}. "
+                    f"[Gemini API #{call_id}] [Error @ {err_time_str}] URL error: {e.reason}. "
                     f"Disabling further AI calls for this run."
                 )
                 self.failed_calls += 1
                 self._disabled = True
                 break
             except Exception as e:
+                err_time_str = datetime.now().strftime("%H:%M:%S")
                 is_timeout = "timed out" in str(e).lower() or isinstance(e, TimeoutError)
                 if is_timeout and attempt < max_retries - 1:
                     retry_delay = 2.0 * (attempt + 1)
                     logger.warning(
-                        f"[Gemini API #{call_id}] Timeout on attempt {attempt + 1}/{max_retries}: {e}. "
+                        f"[Gemini API #{call_id}] [Error @ {err_time_str}] Timeout on attempt {attempt + 1}/{max_retries}: {e}. "
                         f"Retrying in {retry_delay:.1f}s..."
                     )
                     time.sleep(retry_delay)
                     continue
                 logger.error(
-                    f"[Gemini API #{call_id}] Call failed: {e}. "
+                    f"[Gemini API #{call_id}] [Error @ {err_time_str}] Call failed: {e}. "
                     f"Disabling further AI calls for this run."
                 )
                 self.failed_calls += 1
