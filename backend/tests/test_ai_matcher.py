@@ -19,11 +19,14 @@ class TestAiMatcher(unittest.TestCase):
         self.assertTrue(matcher_with_key.is_available)
 
     def test_model_normalization(self):
-        matcher_default = AiMatcher(api_key="valid_key")
-        self.assertEqual(matcher_default.model, "gemini-2.5-flash")
+        matcher_default = AiMatcher(api_key="valid_key", inter_request_delay=0.1)
+        self.assertEqual(matcher_default.model, "gemini-3.1-flash-lite")
 
-        matcher_invalid = AiMatcher(api_key="valid_key", model="gemini-2.5-flash-lite")
-        self.assertEqual(matcher_invalid.model, "gemini-2.5-flash")
+        matcher_legacy_25_lite = AiMatcher(api_key="valid_key", model="gemini-2.5-flash-lite", inter_request_delay=0.1)
+        self.assertEqual(matcher_legacy_25_lite.model, "gemini-3.1-flash-lite")
+
+        matcher_legacy_25_flash = AiMatcher(api_key="valid_key", model="gemini-2.5-flash", inter_request_delay=0.1)
+        self.assertEqual(matcher_legacy_25_flash.model, "gemini-3.1-flash-lite")
 
     @patch.object(AiMatcher, "_call_gemini")
     def test_batch_extract_titles(self, mock_call):

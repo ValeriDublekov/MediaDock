@@ -9,7 +9,8 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
 
 
 class AiMatcher:
@@ -23,17 +24,39 @@ class AiMatcher:
         self,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
+        inter_request_delay: Optional[float] = None,
         forbidden_cooldown_seconds: float = 300.0,
     ):
         self.api_key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "")
         chosen_model = model or os.environ.get("GEMINI_MODEL", GEMINI_MODEL)
-        if chosen_model == "gemini-2.5-flash-lite":
+        
+        # Map legacy or invalid model identifiers to official active API model IDs
+        invalid_or_legacy = (
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash-lite",
+            "gemini-2.0-flash",
+        )
+        if chosen_model in invalid_or_legacy:
             logger.warning(
-                "Model 'gemini-2.5-flash-lite' is invalid for Google Generative Language v1beta API. "
-                "Normalizing model to 'gemini-2.5-flash'."
+                f"Model '{chosen_model}' is not a valid active model for Google Generative Language v1beta API. "
+                f"Normalizing to active model 'gemini-3.1-flash-lite'."
             )
-            chosen_model = "gemini-2.5-flash"
+            chosen_model = "gemini-3.1-flash-lite"
         self.model = chosen_model
+
+        # Determine inter-request delay to comply with model RPM limits
+        if inter_request_delay is not None:
+            self.inter_request_delay = inter_request_delay
+        elif os.environ.get("GEMINI_INTER_REQUEST_DELAY"):
+            self.inter_request_delay = float(os.environ["GEMINI_INTER_REQUEST_DELAY"])
+        else:
+            # Default delays based on model RPM limits:
+            # Flash Lite (15 RPM limit) -> ~4.0s delay (60/15 = 4s)
+            # Standard Flash / Pro (5 RPM limit) -> ~12.0s delay (60/5 = 12s)
+            is_lite = "lite" in self.model.lower()
+            self.inter_request_delay = 4.0 if is_lite else 12.0
+
         self.endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
         self.forbidden_cooldown_seconds = forbidden_cooldown_seconds
         self.total_calls: int = 0
