@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 class AiMatcher:
@@ -22,11 +22,18 @@ class AiMatcher:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = GEMINI_MODEL,
+        model: Optional[str] = None,
         forbidden_cooldown_seconds: float = 300.0,
     ):
         self.api_key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "")
-        self.model = model
+        chosen_model = model or os.environ.get("GEMINI_MODEL", GEMINI_MODEL)
+        if chosen_model == "gemini-2.5-flash-lite":
+            logger.warning(
+                "Model 'gemini-2.5-flash-lite' is invalid for Google Generative Language v1beta API. "
+                "Normalizing model to 'gemini-2.5-flash'."
+            )
+            chosen_model = "gemini-2.5-flash"
+        self.model = chosen_model
         self.endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
         self.forbidden_cooldown_seconds = forbidden_cooldown_seconds
         self.total_calls: int = 0
@@ -131,7 +138,7 @@ class AiMatcher:
                     time.sleep(retry_delay)
                     continue
                 logger.error(
-                    f"[Gemini API #{call_id}] [Error @ {err_time_str}] HTTP error {e.code} ({e.reason}). "
+                    f"[Gemini API #{call_id}] [Error @ {err_time_str}] HTTP error {e.code} ({e.reason}) for model '{self.model}'. "
                     f"Disabling further AI calls for this run."
                 )
                 self.failed_calls += 1
