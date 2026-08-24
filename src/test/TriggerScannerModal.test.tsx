@@ -13,13 +13,14 @@ describe('TriggerScannerModal', () => {
 
     const button = screen.getByTestId('trigger-scanner-button');
     expect(button).toBeInTheDocument();
-    expect(button).toHaveTextContent('Стартирай сканиране');
+    expect(button).toHaveTextContent('Действия');
 
     const settingsBtn = screen.getByTestId('scanner-settings-button');
     expect(settingsBtn).toBeInTheDocument();
 
     // Modal should not be open initially
     expect(screen.queryByTestId('scanner-modal')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('scanner-actions-modal')).not.toBeInTheDocument();
   });
 
   it('opens settings modal when settings gear button is clicked', () => {
@@ -28,10 +29,10 @@ describe('TriggerScannerModal', () => {
     fireEvent.click(screen.getByTestId('scanner-settings-button'));
 
     expect(screen.getByTestId('scanner-modal')).toBeInTheDocument();
-    expect(screen.getByText('Настройки за RSS Сканиране')).toBeInTheDocument();
+    expect(screen.getByText('Настройки за Сканиране')).toBeInTheDocument();
   });
 
-  it('performs 1-click dispatch directly when credentials exist in localStorage', async () => {
+  it('performs dispatch directly when action is clicked and credentials exist in localStorage', async () => {
     localStorage.setItem('movies_feed_gh_owner', 'testowner');
     localStorage.setItem('movies_feed_gh_repo', 'testrepo');
     localStorage.setItem('movies_feed_gh_pat', 'ghp_savedtoken');
@@ -45,8 +46,11 @@ describe('TriggerScannerModal', () => {
 
     render(<TriggerScannerModal />);
 
-    // Click trigger button directly
+    // Click trigger button directly to open actions menu
     fireEvent.click(screen.getByTestId('trigger-scanner-button'));
+    
+    // Click the RSS scan action
+    fireEvent.click(screen.getByTestId('action-btn-rss'));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -71,7 +75,7 @@ describe('TriggerScannerModal', () => {
     // Check success status toast message
     await waitFor(() => {
       expect(screen.getByTestId('scanner-status-message')).toHaveTextContent(
-        'Сканирането е стартирано успешно в GitHub Actions!'
+        'Действието (rss) е стартирано успешно в GitHub Actions!'
       );
     });
   });
@@ -89,14 +93,20 @@ describe('TriggerScannerModal', () => {
     expect(select.value).toBe('2');
   });
 
-  it('opens modal if credentials are missing on 1-click trigger', async () => {
+  it('opens settings modal if credentials are missing on action click', async () => {
     vi.stubEnv('VITE_GITHUB_PAT', '');
     vi.stubEnv('VITE_GITHUB_OWNER', '');
     render(<TriggerScannerModal />);
 
     fireEvent.click(screen.getByTestId('trigger-scanner-button'));
+    fireEvent.click(screen.getByTestId('action-btn-rss'));
 
-    // Should automatically prompt modal because token/owner are missing
+    // Should automatically prompt settings modal because token/owner are missing
     expect(screen.getByTestId('scanner-modal')).toBeInTheDocument();
+    
+    // Check error status toast inside modal
+    expect(screen.getByTestId('scanner-status-message-modal')).toHaveTextContent(
+      'Моля, въведете GitHub Owner, Repo и Token преди да стартирате действие.'
+    );
   });
 });

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Play, Settings, CheckCircle2, AlertCircle, ExternalLink, X, Loader2, RefreshCw } from 'lucide-react';
+import { Play, Settings, CheckCircle2, AlertCircle, ExternalLink, X, Loader2, RefreshCw, Rss, Search, Sparkles, LayoutList } from 'lucide-react';
 
 interface TriggerScannerModalProps {
   buttonClassName?: string;
@@ -13,7 +13,6 @@ const STORAGE_KEYS = {
   WORKFLOW: 'movies_feed_gh_workflow',
   REF: 'movies_feed_gh_ref',
   FORCE_DAYS: 'movies_feed_gh_force_days',
-  MODE: 'movies_feed_gh_mode',
   OMDB_API_KEY: 'movies_feed_omdb_api_key',
 };
 
@@ -21,7 +20,8 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
   buttonClassName,
   buttonVariant = 'header',
 }) => {
-  const [isOpen, setIsOpen] = useState<boolean>(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [isActionsOpen, setIsActionsOpen] = useState<boolean>(false);
   const [owner, setOwner] = useState<string>('');
   const [repo, setRepo] = useState<string>('movies-feed');
   const [pat, setPat] = useState<string>('');
@@ -29,7 +29,6 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
   const [ref, setRef] = useState<string>('main');
   const [dryRun, setDryRun] = useState<boolean>(false);
   const [forceDays, setForceDays] = useState<string>('0');
-  const [mode, setMode] = useState<string>('rss');
   const [omdbApiKey, setOmdbApiKey] = useState<string>('');
 
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -58,8 +57,6 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     const savedRef = localStorage.getItem(STORAGE_KEYS.REF) || 'main';
     const savedForceDays =
       localStorage.getItem(STORAGE_KEYS.FORCE_DAYS) || '0';
-    const savedMode =
-      localStorage.getItem(STORAGE_KEYS.MODE) || 'rss';
     const savedOmdbApiKey =
       localStorage.getItem(STORAGE_KEYS.OMDB_API_KEY) ||
       import.meta.env.VITE_OMDB_API_KEY ||
@@ -72,7 +69,6 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     setWorkflow(savedWorkflow);
     setRef(savedRef);
     setForceDays(savedForceDays);
-    setMode(savedMode);
     setOmdbApiKey(savedOmdbApiKey);
   }, []);
 
@@ -83,7 +79,6 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     localStorage.setItem(STORAGE_KEYS.WORKFLOW, workflow.trim());
     localStorage.setItem(STORAGE_KEYS.REF, ref.trim());
     localStorage.setItem(STORAGE_KEYS.FORCE_DAYS, forceDays.trim());
-    localStorage.setItem(STORAGE_KEYS.MODE, mode.trim());
     localStorage.setItem(STORAGE_KEYS.OMDB_API_KEY, omdbApiKey.trim());
   };
 
@@ -91,38 +86,47 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     handleSaveSettings();
     setToastMessage({
       type: 'success',
-      text: 'Настройките и OMDb API ключът са запазени успешно в браузъра!',
+      text: 'Настройките са запазени успешно в браузъра!',
     });
+    setIsSettingsOpen(false);
   };
 
   const executeDispatch = async (
-    targetOwner: string,
-    targetRepo: string,
-    targetPat: string,
-    targetWorkflow: string,
-    targetRef: string,
-    isDryRun: boolean,
-    targetForceDays: string,
-    targetMode: string = 'rss'
+    targetMode: string
   ) => {
+    const trimmedOwner = owner.trim();
+    const trimmedRepo = repo.trim();
+    const trimmedPat = pat.trim();
+
+    if (!trimmedOwner || !trimmedRepo || !trimmedPat) {
+      setIsActionsOpen(false);
+      setIsSettingsOpen(true);
+      setToastMessage({
+        type: 'error',
+        text: 'Моля, въведете GitHub Owner, Repo и Token преди да стартирате действие.',
+      });
+      return;
+    }
+
     setIsSubmitting(true);
     setToastMessage({ type: null, text: '' });
+    setIsActionsOpen(false); // Close actions menu while submitting
 
     try {
-      const url = `https://api.github.com/repos/${targetOwner}/${targetRepo}/actions/workflows/${targetWorkflow}/dispatches`;
+      const url = `https://api.github.com/repos/${trimmedOwner}/${trimmedRepo}/actions/workflows/${workflow.trim() || 'scanner.yml'}/dispatches`;
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${targetPat}`,
+          Authorization: `Bearer ${trimmedPat}`,
           'X-GitHub-Api-Version': '2022-11-28',
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          ref: targetRef,
+          ref: ref.trim() || 'main',
           inputs: {
-            dry_run: isDryRun,
-            force_days: targetForceDays,
+            dry_run: dryRun,
+            force_days: forceDays,
             mode: targetMode,
           },
         }),
@@ -131,99 +135,38 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
       if (response.status === 204 || response.ok) {
         setToastMessage({
           type: 'success',
-          text: `Сканирането е стартирано успешно в GitHub Actions!`,
-          actionUrl: `https://github.com/${targetOwner}/${targetRepo}/actions`,
+          text: `Действието (${targetMode}) е стартирано успешно в GitHub Actions!`,
+          actionUrl: `https://github.com/${trimmedOwner}/${trimmedRepo}/actions`,
         });
-        setIsOpen(false);
       } else if (response.status === 401 || response.status === 403) {
         setToastMessage({
           type: 'error',
           text: `Грешка при автентикация (${response.status}). Проверете дали вашият GitHub token има 'actions:write' права.`,
         });
-        setIsOpen(true);
+        setIsSettingsOpen(true);
       } else if (response.status === 404) {
         setToastMessage({
           type: 'error',
-          text: `Репозиторията ${targetOwner}/${targetRepo} или workflow файлът (${targetWorkflow}) не бяха намерени (404).`,
+          text: `Репозиторията ${trimmedOwner}/${trimmedRepo} или workflow файлът (${workflow}) не бяха намерени (404).`,
         });
-        setIsOpen(true);
+        setIsSettingsOpen(true);
       } else {
         const errData = await response.json().catch(() => ({}));
         setToastMessage({
           type: 'error',
           text: `Грешка (${response.status}): ${errData.message || response.statusText}`,
         });
-        setIsOpen(true);
+        setIsSettingsOpen(true);
       }
     } catch (err) {
       setToastMessage({
         type: 'error',
         text: `Мрежова грешка: ${err instanceof Error ? err.message : 'Грешка при връзка с GitHub API.'}`,
       });
-      setIsOpen(true);
+      setIsSettingsOpen(true);
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const handleQuickTrigger = () => {
-    const trimmedOwner = owner.trim();
-    const trimmedRepo = repo.trim();
-    const trimmedPat = pat.trim();
-
-    // If credentials missing, open settings modal
-    if (!trimmedOwner || !trimmedRepo || !trimmedPat) {
-      setIsOpen(true);
-      return;
-    }
-
-    // Direct 1-click execution!
-    executeDispatch(
-      trimmedOwner,
-      trimmedRepo,
-      trimmedPat,
-      workflow.trim() || 'scanner.yml',
-      ref.trim() || 'main',
-      dryRun,
-      forceDays,
-      mode
-    );
-  };
-
-  const handleFormSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-
-    const trimmedOwner = owner.trim();
-    const trimmedRepo = repo.trim();
-    const trimmedPat = pat.trim();
-
-    if (!trimmedOwner || !trimmedRepo) {
-      setToastMessage({
-        type: 'error',
-        text: 'Моля, въведете GitHub потребител (Owner) и име на репозитория (Repository).',
-      });
-      return;
-    }
-
-    if (!trimmedPat) {
-      setToastMessage({
-        type: 'error',
-        text: 'Моля, въведете GitHub Personal Access Token (PAT) с права "actions:write".',
-      });
-      return;
-    }
-
-    handleSaveSettings();
-    executeDispatch(
-      trimmedOwner,
-      trimmedRepo,
-      trimmedPat,
-      workflow.trim() || 'scanner.yml',
-      ref.trim() || 'main',
-      dryRun,
-      forceDays,
-      mode
-    );
   };
 
   const defaultBtnClass =
@@ -233,14 +176,14 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
 
   return (
     <div className="relative inline-flex items-center gap-2">
-      {/* 1-Click Trigger Button */}
+      {/* 1-Click Trigger Button -> Now opens Actions Menu */}
       <button
-        onClick={handleQuickTrigger}
+        onClick={() => setIsActionsOpen(true)}
         disabled={isSubmitting}
         type="button"
         data-testid="trigger-scanner-button"
         className={buttonClassName || defaultBtnClass}
-        title="1-click стартер за RSS сканирането"
+        title="Избор на действия за сканиране"
       >
         {isSubmitting ? (
           <>
@@ -250,24 +193,24 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
         ) : (
           <>
             <Play className="w-4 h-4 fill-current text-amber-400" />
-            <span>Стартирай сканиране</span>
+            <span>Действия</span>
           </>
         )}
       </button>
 
       {/* Settings Gear Button */}
       <button
-        onClick={() => setIsOpen(true)}
+        onClick={() => setIsSettingsOpen(true)}
         type="button"
         data-testid="scanner-settings-button"
         className="w-10 h-10 rounded-xl border border-neutral-800 bg-neutral-900 text-neutral-400 hover:text-neutral-200 hover:border-neutral-700 flex items-center justify-center transition-colors cursor-pointer"
-        title="Настройки за GitHub API / Token"
+        title="Настройки за сканиране и GitHub API"
       >
         <Settings className="w-4 h-4" />
       </button>
 
       {/* Toast Banner Feedback */}
-      {toastMessage.type && !isOpen && (
+      {toastMessage.type && !isSettingsOpen && !isActionsOpen && (
         <div
           data-testid="scanner-status-message"
           className={`absolute top-12 left-0 z-40 min-w-[280px] sm:min-w-[340px] p-3 rounded-xl text-xs border shadow-xl flex items-center justify-between gap-2.5 animate-in fade-in duration-200 ${
@@ -308,8 +251,126 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
         </div>
       )}
 
+      {/* Actions Modal */}
+      {isActionsOpen && (
+        <div
+          data-testid="scanner-actions-modal-backdrop"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
+        >
+          <div
+            data-testid="scanner-actions-modal"
+            className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-800 bg-neutral-950/60">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+                  <LayoutList className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-neutral-100">Действия</h3>
+                  <p className="text-xs text-neutral-400">Изберете процес за изпълнение</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsActionsOpen(false)}
+                data-testid="close-actions-modal-button"
+                className="w-8 h-8 rounded-lg text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 flex items-center justify-center transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Actions List */}
+            <div className="p-4 space-y-3 overflow-y-auto">
+              <button
+                type="button"
+                data-testid="action-btn-rss"
+                onClick={() => executeDispatch('rss')}
+                className="w-full text-left p-4 rounded-xl border border-neutral-800 bg-neutral-950/50 hover:bg-neutral-800 hover:border-amber-500/50 transition-all cursor-pointer group flex gap-4 items-start"
+              >
+                <div className="p-2.5 bg-blue-500/10 text-blue-400 rounded-lg group-hover:scale-110 transition-transform">
+                  <Rss className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-neutral-200 group-hover:text-amber-400 transition-colors">Сканиране на RSS емисии</h4>
+                  <p className="text-xs text-neutral-400 mt-1">Извлича нови филми и сериали от конфигурираните RSS източници.</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                data-testid="action-btn-recheck-existing"
+                onClick={() => executeDispatch('recheck-existing')}
+                className="w-full text-left p-4 rounded-xl border border-neutral-800 bg-neutral-950/50 hover:bg-neutral-800 hover:border-amber-500/50 transition-all cursor-pointer group flex gap-4 items-start"
+              >
+                <div className="p-2.5 bg-emerald-500/10 text-emerald-400 rounded-lg group-hover:scale-110 transition-transform">
+                  <Search className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-neutral-200 group-hover:text-amber-400 transition-colors">AI Одит на съществуващи записи</h4>
+                  <p className="text-xs text-neutral-400 mt-1">Проверява вече записаните филми за грешни съвпадения и ги коригира.</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                data-testid="action-btn-reparse-unfound"
+                onClick={() => executeDispatch('reparse-unfound')}
+                className="w-full text-left p-4 rounded-xl border border-neutral-800 bg-neutral-950/50 hover:bg-neutral-800 hover:border-amber-500/50 transition-all cursor-pointer group flex gap-4 items-start"
+              >
+                <div className="p-2.5 bg-purple-500/10 text-purple-400 rounded-lg group-hover:scale-110 transition-transform">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-neutral-200 group-hover:text-amber-400 transition-colors">AI Повторно разпознаване</h4>
+                  <p className="text-xs text-neutral-400 mt-1">Извършва повторен опит за разпознаване на нерешените торенти от логовете.</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                data-testid="action-btn-all"
+                onClick={() => executeDispatch('all')}
+                className="w-full text-left p-4 rounded-xl border border-neutral-800 bg-neutral-950/50 hover:bg-neutral-800 hover:border-amber-500/50 transition-all cursor-pointer group flex gap-4 items-start"
+              >
+                <div className="p-2.5 bg-amber-500/10 text-amber-400 rounded-lg group-hover:scale-110 transition-transform">
+                  <RefreshCw className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-neutral-200 group-hover:text-amber-400 transition-colors">Пълен цикъл</h4>
+                  <p className="text-xs text-neutral-400 mt-1">Изпълнява последователно RSS сканиране, AI Одит и AI разпознаване.</p>
+                </div>
+              </button>
+            </div>
+            
+            <div className="px-6 py-4 border-t border-neutral-800 bg-neutral-950/60 flex justify-between items-center">
+               <div className="flex items-center gap-2">
+                 <input
+                    type="checkbox"
+                    id="actions_dry_run_checkbox"
+                    checked={dryRun}
+                    onChange={(e) => setDryRun(e.target.checked)}
+                    className="w-4 h-4 rounded border-neutral-700 bg-neutral-950 text-amber-500 focus:ring-amber-500 cursor-pointer"
+                  />
+                  <label htmlFor="actions_dry_run_checkbox" className="text-xs text-neutral-300 cursor-pointer select-none">
+                    Тестово (<code className="text-amber-400">--dry-run</code>)
+                  </label>
+               </div>
+               <button
+                 type="button"
+                 onClick={() => setIsActionsOpen(false)}
+                 className="px-4 py-2 text-sm font-medium text-neutral-300 bg-neutral-800 border border-neutral-700 rounded-lg hover:bg-neutral-700 transition-colors cursor-pointer"
+               >
+                 Затвори
+               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Settings / Configuration Modal */}
-      {isOpen && (
+      {isSettingsOpen && (
         <div
           data-testid="scanner-modal-backdrop"
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
@@ -322,15 +383,15 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
             <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-800 bg-neutral-950/60">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
-                  <RefreshCw className="w-4 h-4" />
+                  <Settings className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-neutral-100">Настройки за RSS Сканиране</h3>
-                  <p className="text-xs text-neutral-400">GitHub Actions Workflow Dispatches</p>
+                  <h3 className="text-base font-bold text-neutral-100">Настройки за Сканиране</h3>
+                  <p className="text-xs text-neutral-400">GitHub Actions Configuration</p>
                 </div>
               </div>
               <button
-                onClick={() => setIsOpen(false)}
+                onClick={() => setIsSettingsOpen(false)}
                 data-testid="close-modal-button"
                 className="w-8 h-8 rounded-lg text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 flex items-center justify-center transition-colors cursor-pointer"
               >
@@ -339,9 +400,9 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
             </div>
 
             {/* Modal Body / Form */}
-            <form onSubmit={handleFormSubmit} className="p-6 space-y-4 overflow-y-auto">
+            <form onSubmit={(e) => { e.preventDefault(); handleSaveOnly(); }} className="p-6 space-y-4 overflow-y-auto">
               <p className="text-xs text-neutral-300 leading-relaxed bg-neutral-950/80 p-3.5 rounded-xl border border-neutral-800">
-                Запазените данни се съхраняват сигурно във вашия браузър (localStorage) и с тях бутонът <strong>"Стартирай сканиране"</strong> работи с <strong>1 клик</strong>.
+                Запазените данни се съхраняват сигурно във вашия браузър (localStorage).
                 Алтернативно, можете да ги въведете в <code className="text-amber-400">.env</code> файла (<code className="text-amber-400">VITE_GITHUB_PAT</code>).
               </p>
 
@@ -363,73 +424,27 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
                     )}
                     <span className="leading-snug">{toastMessage.text}</span>
                   </div>
-
-                  {toastMessage.actionUrl && (
-                    <a
-                      href={toastMessage.actionUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 self-start text-xs font-semibold text-emerald-300 hover:text-emerald-100 underline mt-1"
-                    >
-                      <span>Виж прогреса в GitHub Actions</span>
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                  )}
                 </div>
               )}
 
               {/* SECTION: Scan Configuration */}
               <div className="p-3.5 bg-neutral-900/80 border border-neutral-800 rounded-xl space-y-3">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400">
-                  1. Режим на сканиране & Настройки
+                  Основни Настройки
                 </h4>
-
-                {/* Scan Mode Selector */}
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                    Изберете какво да изпълни сканерът (Scan Mode)
-                  </label>
-                  <select
-                    value={mode}
-                    onChange={(e) => setMode(e.target.value)}
-                    data-testid="select-scan-mode"
-                    className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
-                  >
-                    <option value="rss">1. RSS Сканиране — за нови торенти от емисиите</option>
-                    <option value="recheck-existing">2. AI Одит & Поправка — проверка на филмите в базата</option>
-                    <option value="reparse-unfound">3. AI Разпознаване — повторен опит за ненамерени заглавия</option>
-                    <option value="all">4. Пълен цикъл — RSS сканиране + AI одит + AI разпознаване</option>
-                  </select>
-                  <p className="text-[11px] text-neutral-400 mt-1">
-                    {mode === 'rss' && 'Сканира актуалните RSS емисии и добавя новите филми/сериали.'}
-                    {mode === 'recheck-existing' && 'Извлича записаните филми от базата данни и ги проверява с AI за грешни OMDb съвпадения. Поправя ги или премахва невалидните.'}
-                    {mode === 'reparse-unfound' && 'Взима ненамерените торенти от логовете и ги подава на AI за ново разпознаване и търсене в OMDb.'}
-                    {mode === 'all' && 'Пълен процес: първо RSS сканиране, след това AI одит на базата и AI разпознаване на ненамерените заглавия.'}
-                  </p>
-                </div>
 
                 {/* Force Scan Days Selector */}
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className={`block text-xs font-semibold ${mode === 'rss' || mode === 'all' ? 'text-neutral-300' : 'text-neutral-400'}`}>
+                    <label className="block text-xs font-semibold text-neutral-300">
                       Форсирано сканиране на RSS (дни назад)
                     </label>
-                    {(mode !== 'rss' && mode !== 'all') && (
-                      <span className="text-[10px] bg-neutral-800 text-neutral-400 px-2 py-0.5 rounded font-mono">
-                        Не е приложимо за AI режимите
-                      </span>
-                    )}
                   </div>
                   <select
                     value={forceDays}
                     onChange={(e) => setForceDays(e.target.value)}
-                    disabled={mode !== 'rss' && mode !== 'all'}
                     data-testid="select-force-days"
-                    className={`w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm focus:outline-none ${
-                      mode === 'rss' || mode === 'all'
-                        ? 'text-neutral-100 focus:border-amber-500'
-                        : 'text-neutral-400 opacity-50 cursor-not-allowed'
-                    }`}
+                    className="w-full px-3 py-2 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 focus:outline-none focus:border-amber-500"
                   >
                     <option value="0">0 (Стандартно — само нови публикувани торенти)</option>
                     <option value="1">1 ден назад (прераглежда & парсва наново)</option>
@@ -438,9 +453,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
                     <option value="7">7 дни назад</option>
                   </select>
                   <p className="text-[11px] text-neutral-400 mt-1">
-                    {mode === 'rss' || mode === 'all'
-                      ? 'Указва колко дни назад от RSS фийда да се преразгледат и обработят наново.'
-                      : 'Опцията важи само при сканиране на RSS емисии. Избраният AI режим работи директно върху филмите в базата данни/логовете.'}
+                    Приложимо само при изпълнение на RSS сканиране или Пълен цикъл.
                   </p>
                 </div>
 
@@ -455,7 +468,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
                     className="w-4 h-4 rounded border-neutral-700 bg-neutral-950 text-amber-500 focus:ring-amber-500 cursor-pointer"
                   />
                   <label htmlFor="dry_run_checkbox" className="text-xs text-neutral-300 cursor-pointer select-none">
-                    Тестово изпълнение (<code className="text-amber-400">--dry-run</code> — без запис в базата данни)
+                    По подразбиране използвай тестово изпълнение (<code className="text-amber-400">--dry-run</code>)
                   </label>
                 </div>
               </div>
@@ -463,14 +476,14 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
               {/* SECTION: Credentials & GitHub Settings */}
               <div className="p-3.5 bg-neutral-900/40 border border-neutral-800/80 rounded-xl space-y-3">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-400">
-                  2. GitHub Actions Данни & Ключове
+                  GitHub Actions Данни & Ключове
                 </h4>
 
                 <div className="grid grid-cols-2 gap-3">
                   {/* GitHub Owner */}
                   <div>
                     <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                      GitHub Owner / Потребител <span className="text-amber-400">*</span>
+                      GitHub Owner <span className="text-amber-400">*</span>
                     </label>
                     <input
                       type="text"
@@ -503,7 +516,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
                 {/* GitHub Token */}
                 <div>
                   <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                    GitHub Personal Access Token (PAT) <span className="text-amber-400">*</span>
+                    GitHub PAT <span className="text-amber-400">*</span>
                   </label>
                   <input
                     type="password"
@@ -562,7 +575,7 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
                 {/* OMDb API Key */}
                 <div>
                   <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                    OMDb API Key (по избор, за ръчен рефреш)
+                    OMDb API Key (за ръчен рефреш)
                   </label>
                   <input
                     type="password"
@@ -579,37 +592,18 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
               <div className="flex flex-wrap items-center justify-end gap-3 pt-4 border-t border-neutral-800">
                 <button
                   type="button"
-                  onClick={() => setIsOpen(false)}
-                  data-testid="cancel-trigger-button"
+                  onClick={() => setIsSettingsOpen(false)}
+                  data-testid="cancel-settings-button"
                   className="px-4 py-2 text-sm font-medium text-neutral-300 bg-neutral-800 border border-neutral-700 rounded-lg hover:bg-neutral-700 transition-colors cursor-pointer"
                 >
-                  Затвори
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveOnly}
-                  data-testid="save-only-settings-button"
-                  className="px-4 py-2 text-sm font-medium text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-lg hover:bg-amber-500/20 transition-colors cursor-pointer"
-                >
-                  Запази настройките
+                  Отказ
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
-                  data-testid="submit-trigger-button"
-                  className="inline-flex items-center gap-2 min-h-[40px] px-5 py-2 text-sm font-semibold text-neutral-950 bg-amber-500 hover:bg-amber-400 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+                  data-testid="save-settings-button"
+                  className="inline-flex items-center gap-2 min-h-[40px] px-5 py-2 text-sm font-semibold text-neutral-950 bg-amber-500 hover:bg-amber-400 rounded-lg transition-colors cursor-pointer"
                 >
-                  {isSubmitting ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin text-neutral-950" />
-                      <span>Стартиране...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4 fill-current" />
-                      <span>Запази и Стартирай</span>
-                    </>
-                  )}
+                  Запази настройките
                 </button>
               </div>
             </form>
@@ -619,3 +613,4 @@ export const TriggerScannerModal: React.FC<TriggerScannerModalProps> = ({
     </div>
   );
 };
+
