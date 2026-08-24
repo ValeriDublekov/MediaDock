@@ -636,7 +636,7 @@ class ScannerService:
 
             # Brief rate-limit pause between AI batches if more remain
             if batch_idx < total_batches and self.ai_matcher and self.ai_matcher.is_available:
-                time.sleep(2.0)
+                time.sleep(5.0)
 
         logger.info(f"AI database recheck completed: {stats}")
         return stats
@@ -710,7 +710,7 @@ class ScannerService:
                 break
 
             if batch_idx < total_batches and self.ai_matcher and self.ai_matcher.is_available:
-                time.sleep(2.0)
+                time.sleep(5.0)
 
             for idx, log in enumerate(chunk):
                 ai_data = extracted_results.get(idx, {})
@@ -897,26 +897,6 @@ class ScannerService:
             logger.error(f"Error parsing rutracker title '{raw_title}': {e}", exc_info=True)
             parsed = ParsedTitle(title="", year=None, is_series=False, quality="", rip_type="")
             parse_error = f"Грешка при парсване: {e}"
-
-        # AI extraction fallback if regex fails to extract a title
-        if not parsed.title and self.ai_matcher and self.ai_matcher.is_available:
-            try:
-                ai_extracted = self.ai_matcher.batch_extract_titles(
-                    [{"id": 0, "raw_title": raw_title, "feed_type": feed_def.get("type")}]
-                ).get(0)
-                if ai_extracted and ai_extracted.get("title"):
-                    parsed = ParsedTitle(
-                        title=ai_extracted["title"],
-                        year=str(ai_extracted.get("year")) if ai_extracted.get("year") else parsed.year,
-                        is_series=(ai_extracted.get("media_type") == "series"),
-                        quality=parsed.quality,
-                        rip_type=parsed.rip_type,
-                    )
-                    parse_error = None
-            except Exception as e:
-                logger.warning(f"AI title extraction fallback failed: {e}")
-                if not parse_error:
-                    parse_error = f"AI fallback грешка: {e}"
 
         if not parsed.title:
             run.ignored_entries += 1
@@ -1183,41 +1163,6 @@ class ScannerService:
                         section_timings=section_timings,
                     )
                     return
-
-            # AI Match Validation if enabled and candidate title substantially differs
-            if self.ai_matcher and self.ai_matcher.is_available:
-                clean_parsed = clean_title_for_comparison(parsed.title)
-                clean_omdb = clean_title_for_comparison(omdb_result.title)
-                if clean_parsed != clean_omdb:
-                    try:
-                        validation = self.ai_matcher.batch_validate_omdb_matches([
-                            {
-                                "id": 0,
-                                "raw_title": raw_title,
-                                "feed_type": feed_def.get("type"),
-                                "omdb_title": omdb_result.title,
-                                "omdb_year": omdb_result.year,
-                                "omdb_type": omdb_result.media_type,
-                            }
-                        ]).get(0)
-                        if validation and not validation.get("is_match", True):
-                            run.ignored_entries += 1
-                            self._log_parse_entry(
-                                raw_title=raw_title,
-                                feed_name=feed_name,
-                                parsed_successfully=True,
-                                parsed_title=parsed.title,
-                                parsed_year=lookup_year,
-                                omdb_status="found",
-                                ignored=True,
-                                ignore_reason="ai_rejected",
-                                feed_entry_id=feed_entry_id,
-                                torrent_url=torrent_url,
-                                section_timings=section_timings,
-                            )
-                            return
-                    except Exception as e:
-                        logger.warning(f"AI candidate validation check failed: {e}")
 
         if self.is_excluded(omdb_result.countries, omdb_result.genres):
             run.ignored_entries += 1

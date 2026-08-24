@@ -32,10 +32,11 @@ class AiMatcher:
         self.successful_calls: int = 0
         self.failed_calls: int = 0
         self.total_items_processed: int = 0
+        self._disabled: bool = False
 
     @property
     def is_available(self) -> bool:
-        return bool(self.api_key and len(self.api_key.strip()) > 5)
+        return bool(self.api_key and len(self.api_key.strip()) > 5) and not self._disabled
 
     def get_stats(self) -> Dict[str, int]:
         return {
@@ -125,9 +126,18 @@ class AiMatcher:
                             f"after {max_retries} attempts."
                         )
                         self.failed_calls += 1
+                        self._disabled = True
                         break
-                if e.code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
-                    sleep_time = (2 ** attempt) * 2.0
+                if e.code == 429:
+                    logger.error(
+                        f"[Gemini API #{call_id}] HTTP 429 (Too Many Requests). "
+                        f"Quota likely exhausted. Disabling further AI calls for this run."
+                    )
+                    self.failed_calls += 1
+                    self._disabled = True
+                    break
+                if e.code in (500, 502, 503, 504) and attempt < max_retries - 1:
+                    sleep_time = (2 ** attempt) * 5.0
                     logger.warning(
                         f"[Gemini API #{call_id}] HTTP {e.code} ({e.reason}). "
                         f"Retrying in {sleep_time:.1f}s (attempt {attempt + 1}/{max_retries})..."
