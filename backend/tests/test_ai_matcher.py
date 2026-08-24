@@ -137,8 +137,9 @@ class TestAiMatcher(unittest.TestCase):
         self.assertEqual(res[1]["corrected_year"], 2024)
         self.assertEqual(res[1]["corrected_media_type"], "series")
 
+    @patch("time.sleep")
     @patch("urllib.request.urlopen")
-    def test_call_gemini_error_disables_matcher(self, mock_urlopen):
+    def test_call_gemini_error_disables_matcher(self, mock_urlopen, mock_sleep):
         import urllib.error
         from io import BytesIO
 
@@ -149,9 +150,29 @@ class TestAiMatcher(unittest.TestCase):
         res = matcher._call_gemini("test prompt")
         self.assertIsNone(res)
         self.assertFalse(matcher.is_available)
-        self.assertEqual(mock_urlopen.call_count, 1)
+        self.assertEqual(mock_urlopen.call_count, 3)
         self.assertEqual(matcher.get_stats()["total_calls"], 1)
         self.assertEqual(matcher.get_stats()["failed_calls"], 1)
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_call_gemini_timeout_retry_success(self, mock_urlopen, mock_sleep):
+        import urllib.error
+        from io import BytesIO
+
+        timeout_err = urllib.error.URLError("The read operation timed out")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"candidates": [{"content": {"parts": [{"text": "[{\\"id\\": 0}]"}]}}]}'
+        mock_resp.__enter__.return_value = mock_resp
+
+        mock_urlopen.side_effect = [timeout_err, mock_resp]
+
+        matcher = AiMatcher(api_key="valid_key")
+        res = matcher._call_gemini("test prompt")
+        self.assertIsNotNone(res)
+        self.assertTrue(matcher.is_available)
+        self.assertEqual(mock_urlopen.call_count, 2)
+        self.assertEqual(matcher.get_stats()["successful_calls"], 1)
 
     @patch("urllib.request.urlopen")
     def test_call_gemini_403_forbidden_disables_matcher(self, mock_urlopen):

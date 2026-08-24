@@ -91,7 +91,7 @@ class AiMatcher:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                with urllib.request.urlopen(req, timeout=20) as resp:
+                with urllib.request.urlopen(req, timeout=60) as resp:
                     resp_bytes = resp.read()
                     resp_json = json.loads(resp_bytes.decode("utf-8"))
                     candidates = resp_json.get("candidates", [])
@@ -110,6 +110,15 @@ class AiMatcher:
                     self.failed_calls += 1
                     return None
             except urllib.error.HTTPError as e:
+                # Retry on rate limits or transient server errors
+                if e.code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                    retry_delay = 2.0 * (attempt + 1)
+                    logger.warning(
+                        f"[Gemini API #{call_id}] HTTP error {e.code} ({e.reason}) on attempt {attempt + 1}/{max_retries}. "
+                        f"Retrying in {retry_delay:.1f}s..."
+                    )
+                    time.sleep(retry_delay)
+                    continue
                 logger.error(
                     f"[Gemini API #{call_id}] HTTP error {e.code} ({e.reason}). "
                     f"Disabling further AI calls for this run."
@@ -118,6 +127,15 @@ class AiMatcher:
                 self._disabled = True
                 break
             except urllib.error.URLError as e:
+                is_timeout = "timed out" in str(e.reason).lower() or isinstance(getattr(e, "reason", None), TimeoutError)
+                if is_timeout and attempt < max_retries - 1:
+                    retry_delay = 2.0 * (attempt + 1)
+                    logger.warning(
+                        f"[Gemini API #{call_id}] Connection/read timeout on attempt {attempt + 1}/{max_retries}: {e.reason}. "
+                        f"Retrying in {retry_delay:.1f}s..."
+                    )
+                    time.sleep(retry_delay)
+                    continue
                 logger.error(
                     f"[Gemini API #{call_id}] URL error: {e.reason}. "
                     f"Disabling further AI calls for this run."
@@ -126,6 +144,15 @@ class AiMatcher:
                 self._disabled = True
                 break
             except Exception as e:
+                is_timeout = "timed out" in str(e).lower() or isinstance(e, TimeoutError)
+                if is_timeout and attempt < max_retries - 1:
+                    retry_delay = 2.0 * (attempt + 1)
+                    logger.warning(
+                        f"[Gemini API #{call_id}] Timeout on attempt {attempt + 1}/{max_retries}: {e}. "
+                        f"Retrying in {retry_delay:.1f}s..."
+                    )
+                    time.sleep(retry_delay)
+                    continue
                 logger.error(
                     f"[Gemini API #{call_id}] Call failed: {e}. "
                     f"Disabling further AI calls for this run."
