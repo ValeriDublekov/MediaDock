@@ -201,14 +201,19 @@ class ScannerService:
         if section_timings is not None:
             section_timings["db_upsert"] += (time.perf_counter() - t0)
 
-    def is_excluded(self, countries: List[str], genres: List[str]) -> bool:
+    def get_exclusion_reason(self, countries: List[str], genres: List[str]) -> Optional[str]:
         excluded_country_set = {c.lower() for c in self.config.excluded_countries}
         if countries and all(c.lower() in excluded_country_set for c in countries):
-            return True
+            matched = [c for c in countries if c.lower() in excluded_country_set]
+            return f"Филтрирана държава: {', '.join(matched)} (Всички държави: {', '.join(countries)})"
         excluded_genre_set = {g.lower() for g in self.config.excluded_genres}
-        if any(g.lower() in excluded_genre_set for g in genres):
-            return True
-        return False
+        matched_genres = [g for g in genres if g.lower() in excluded_genre_set]
+        if matched_genres:
+            return f"Филтриран жанр: {', '.join(matched_genres)} (OMDb жанрове: {', '.join(genres)})"
+        return None
+
+    def is_excluded(self, countries: List[str], genres: List[str]) -> bool:
+        return self.get_exclusion_reason(countries, genres) is not None
 
     def _log_parse_entry(
         self,
@@ -224,6 +229,7 @@ class ScannerService:
         feed_entry_id: Optional[str] = None,
         torrent_url: Optional[str] = None,
         section_timings: Optional[Dict[str, float]] = None,
+        trace_details: Optional[Dict[str, Any]] = None,
     ) -> None:
         if not self.parse_log_repo or self.config.is_dry_run:
             return
@@ -244,6 +250,7 @@ class ScannerService:
             ignore_reason=ignore_reason,
             processed_at=self.now,
             error_message=error_message,
+            trace_details=trace_details,
         )
         self._pending_parse_logs.append(log)
 
@@ -945,6 +952,18 @@ class ScannerService:
             except ValueError:
                 pass
 
+        base_trace = {
+            "parsedTitle": parsed.title,
+            "parsedYear": lookup_year,
+            "parsedQuality": parsed.quality or None,
+            "parsedRipType": parsed.rip_type or None,
+            "parsedIsSeries": parsed.is_series,
+            "feedName": feed_name,
+            "feedType": feed_def.get("type"),
+        }
+
+        logger.info(f"[Scanner:Parse] Feed '{feed_name}' | '{raw_title}' -> Title: '{parsed.title}', Year: {lookup_year}, Quality: '{parsed.quality}', Rip: '{parsed.rip_type}', IsSeries: {parsed.is_series}")
+
         if self.config.is_parse_only:
             self._log_parse_entry(
                 raw_title=raw_title,
@@ -955,9 +974,11 @@ class ScannerService:
                 omdb_status="skipped",
                 ignored=True,
                 ignore_reason="parse_only",
+                error_message="Режим само парсване (OMDb заявките са изключени)",
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
                 section_timings=section_timings,
+                trace_details={**base_trace, "decision": "ignored_parse_only", "decisionDetails": "Parse only mode"},
             )
             return
 
@@ -1017,6 +1038,7 @@ class ScannerService:
                     feed_entry_id=feed_entry_id,
                     torrent_url=torrent_url,
                     section_timings=section_timings,
+                    trace_details={**base_trace, "decision": "error_omdb_transport", "decisionDetails": str(e)},
                 )
                 return
             finally:
@@ -1035,8 +1057,16 @@ class ScannerService:
 
         if omdb_result is None and cache_entry and cache_entry.expires_at > self.now:
             run.cache_hits += 1
+            cache_info = {
+                "cacheKey": cache_key,
+                "cacheHit": True,
+                "cacheStatus": cache_entry.status,
+                "cacheFetchedAt": cache_entry.fetched_at.strftime('%Y-%m-%d %H:%M') if cache_entry.fetched_at else None,
+            }
             if cache_entry.status != "found" or not cache_entry.payload:
                 run.ignored_entries += 1
+                err_msg = f"OMDb кеш статус '{cache_entry.status}' (записан на {cache_entry.fetched_at.strftime('%Y-%m-%d %H:%M') if cache_entry.fetched_at else 'предишен скан'})"
+                logger.info(f"[Scanner:Cache] '{parsed.title}' ({lookup_year}) -> HIT negative cache: {cache_key}")
                 self._log_parse_entry(
                     raw_title=raw_title,
                     feed_name=feed_name,
@@ -1046,17 +1076,21 @@ class ScannerService:
                     omdb_status="not_found",
                     ignored=True,
                     ignore_reason="omdb_not_found",
+                    error_message=err_msg,
                     feed_entry_id=feed_entry_id,
                     torrent_url=torrent_url,
                     section_timings=section_timings,
+                    trace_details={**base_trace, **cache_info, "decision": "ignored_omdb_not_found", "decisionDetails": err_msg},
                 )
                 return
             omdb_payload = cache_entry.payload
             omdb_result = self.omdb_client._normalize_payload(omdb_payload)
+            logger.info(f"[Scanner:Cache] '{parsed.title}' ({lookup_year}) -> HIT positive cache: {omdb_result.title} ({omdb_result.year}) [{omdb_result.imdb_id}]")
         elif omdb_result is None:
             if run.omdb_requests >= self.config.omdb_limit:
                 logger.info("Soft limit reached for OMDb requests in this run.")
                 run.ignored_entries += 1
+                err_msg = "Достигнат лимит на OMDb заявки за това сканиране"
                 self._log_parse_entry(
                     raw_title=raw_title,
                     feed_name=feed_name,
@@ -1066,9 +1100,11 @@ class ScannerService:
                     omdb_status="skipped",
                     ignored=True,
                     ignore_reason="omdb_limit_reached",
+                    error_message=err_msg,
                     feed_entry_id=feed_entry_id,
                     torrent_url=torrent_url,
                     section_timings=section_timings,
+                    trace_details={**base_trace, "decision": "ignored_omdb_limit_reached", "decisionDetails": err_msg},
                 )
                 return
 
@@ -1076,8 +1112,9 @@ class ScannerService:
             status = "not_found"
             payload = None
             t0_omdb = time.perf_counter()
+            media_type_hint = "series" if parsed.is_series else (feed_def.get("type") if feed_def.get("type") in ("movie", "series") else None)
+            logger.info(f"[Scanner:OMDb Query] Requesting OMDb for '{parsed.title}', Year: {lookup_year}, Hint: '{media_type_hint}'")
             try:
-                media_type_hint = "series" if parsed.is_series else (feed_def.get("type") if feed_def.get("type") in ("movie", "series") else None)
                 omdb_result = self.omdb_client.get_movie_info(parsed.title, parsed.year, media_type=media_type_hint)
                 status = "found"
                 payload = omdb_result.raw_payload
@@ -1101,18 +1138,21 @@ class ScannerService:
                     feed_entry_id=feed_entry_id,
                     torrent_url=torrent_url,
                     section_timings=section_timings,
+                    trace_details={**base_trace, "decision": "error_omdb_transport", "decisionDetails": str(e)},
                 )
                 return
             finally:
                 section_timings["omdb_api"] += (time.perf_counter() - t0_omdb)
             
+            # Use shorter TTL (2 days) for negative cache so newly added titles are checked again sooner
+            cache_days = self.config.cache_ttl_days if status == "found" else min(2, self.config.cache_ttl_days)
             new_cache = OmdbCacheEntry(
                 lookup_title=parsed.title,
                 lookup_year=lookup_year,
                 status=status,
                 payload=payload,
                 fetched_at=self.now,
-                expires_at=self.now + datetime.timedelta(days=self.config.cache_ttl_days),
+                expires_at=self.now + datetime.timedelta(days=cache_days),
             )
             t0_cache_write = time.perf_counter()
             self._set_cache_entry(cache_key, new_cache)
@@ -1120,6 +1160,8 @@ class ScannerService:
 
             if status != "found":
                 run.ignored_entries += 1
+                err_msg = f"OMDb не намери заглавие '{parsed.title}' (търсено с година: {lookup_year}, тип: {media_type_hint or 'всички'})"
+                logger.info(f"[Scanner:OMDb Result] '{parsed.title}' ({lookup_year}) -> NOT FOUND in OMDb")
                 self._log_parse_entry(
                     raw_title=raw_title,
                     feed_name=feed_name,
@@ -1129,14 +1171,35 @@ class ScannerService:
                     omdb_status="not_found",
                     ignored=True,
                     ignore_reason="omdb_not_found",
+                    error_message=err_msg,
                     feed_entry_id=feed_entry_id,
                     torrent_url=torrent_url,
                     section_timings=section_timings,
+                    trace_details={
+                        **base_trace,
+                        "cacheKey": cache_key,
+                        "cacheHit": False,
+                        "omdbQueryTitle": parsed.title,
+                        "omdbQueryYear": lookup_year,
+                        "omdbQueryType": media_type_hint,
+                        "decision": "ignored_omdb_not_found",
+                        "decisionDetails": err_msg,
+                    },
                 )
                 return
 
         if not omdb_result:
             return
+
+        omdb_trace_info = {
+            "omdbFoundTitle": omdb_result.title,
+            "omdbFoundYear": omdb_result.year,
+            "omdbFoundType": omdb_result.media_type,
+            "omdbImdbId": omdb_result.imdb_id,
+            "omdbGenres": omdb_result.genres,
+            "omdbCountries": omdb_result.countries,
+            "omdbRating": omdb_result.rating,
+        }
 
         # Automated validation checks (bypassed for explicit manual mappings)
         if not used_manual_mapping:
@@ -1147,6 +1210,8 @@ class ScannerService:
                 expected_is_series = (feed_type == "series")
                 if result_is_series != expected_is_series:
                     run.ignored_entries += 1
+                    err_msg = f"Разминаване в типа медия: RSS каналът очаква '{feed_type}', а OMDb върна '{omdb_result.media_type}'"
+                    logger.info(f"[Scanner:Validate] '{parsed.title}' -> Type mismatch: expected {feed_type}, OMDb returned {omdb_result.media_type}")
                     self._log_parse_entry(
                         raw_title=raw_title,
                         feed_name=feed_name,
@@ -1156,9 +1221,16 @@ class ScannerService:
                         omdb_status="found",
                         ignored=True,
                         ignore_reason="media_type_mismatch",
+                        error_message=err_msg,
                         feed_entry_id=feed_entry_id,
                         torrent_url=torrent_url,
                         section_timings=section_timings,
+                        trace_details={
+                            **base_trace,
+                            **omdb_trace_info,
+                            "decision": "ignored_media_type_mismatch",
+                            "decisionDetails": err_msg,
+                        },
                     )
                     return
 
@@ -1166,6 +1238,8 @@ class ScannerService:
             if omdb_result.media_type in ("movie", "documentary", "short") and lookup_year is not None and omdb_result.year is not None:
                 if abs(omdb_result.year - lookup_year) > 1:
                     run.ignored_entries += 1
+                    err_msg = f"Разминаване в годината: търсена {lookup_year}, OMDb върна {omdb_result.year} (> 1 г. разлика)"
+                    logger.info(f"[Scanner:Validate] '{parsed.title}' -> Year mismatch: expected {lookup_year}, OMDb returned {omdb_result.year}")
                     self._log_parse_entry(
                         raw_title=raw_title,
                         feed_name=feed_name,
@@ -1175,14 +1249,24 @@ class ScannerService:
                         omdb_status="found",
                         ignored=True,
                         ignore_reason="year_mismatch",
+                        error_message=err_msg,
                         feed_entry_id=feed_entry_id,
                         torrent_url=torrent_url,
                         section_timings=section_timings,
+                        trace_details={
+                            **base_trace,
+                            **omdb_trace_info,
+                            "decision": "ignored_year_mismatch",
+                            "decisionDetails": err_msg,
+                        },
                     )
                     return
 
-        if self.is_excluded(omdb_result.countries, omdb_result.genres):
+        exclusion_reason = self.get_exclusion_reason(omdb_result.countries, omdb_result.genres)
+        if exclusion_reason:
             run.ignored_entries += 1
+            err_msg = f"Филтрирано по конфигурация: {exclusion_reason}"
+            logger.info(f"[Scanner:Filter] '{parsed.title}' -> {err_msg}")
             self._log_parse_entry(
                 raw_title=raw_title,
                 feed_name=feed_name,
@@ -1192,13 +1276,22 @@ class ScannerService:
                 omdb_status="found",
                 ignored=True,
                 ignore_reason="excluded_country_or_genre",
+                error_message=err_msg,
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
                 section_timings=section_timings,
+                trace_details={
+                    **base_trace,
+                    **omdb_trace_info,
+                    "decision": "ignored_excluded_country_or_genre",
+                    "decisionDetails": err_msg,
+                },
             )
             return
 
         # Record success log entry
+        success_msg = f"Успешно съвпадение в OMDb ({omdb_result.imdb_id}) и преминати всички филтри"
+        logger.info(f"[Scanner:Success] '{omdb_result.title}' ({omdb_result.year}) [{omdb_result.imdb_id}] -> Добавено в каталога")
         self._log_parse_entry(
             raw_title=raw_title,
             feed_name=feed_name,
@@ -1208,9 +1301,16 @@ class ScannerService:
             omdb_status="found",
             ignored=False,
             ignore_reason=None,
+            error_message=None,
             feed_entry_id=feed_entry_id,
             torrent_url=torrent_url,
             section_timings=section_timings,
+            trace_details={
+                **base_trace,
+                **omdb_trace_info,
+                "decision": "added_to_catalog",
+                "decisionDetails": success_msg,
+            },
         )
 
         # Prepare records

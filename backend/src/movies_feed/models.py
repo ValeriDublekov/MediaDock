@@ -174,6 +174,7 @@ class ParseLog:
     ignore_reason: Optional[str]  # 'no_title', 'parse_error', 'entry_error', 'omdb_not_found', 'excluded_country_or_genre', 'omdb_limit_reached', 'omdb_error', 'empty_title', 'parse_only', None
     processed_at: datetime.datetime
     error_message: Optional[str] = None
+    trace_details: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the ParseLog model to a camelCase Firestore dictionary."""
@@ -191,6 +192,8 @@ class ParseLog:
         }
         if self.error_message is not None:
             res["errorMessage"] = self.error_message
+        if self.trace_details is not None:
+            res["traceDetails"] = self.trace_details
         return res
 
 

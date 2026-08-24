@@ -20,6 +20,14 @@ import {
   Plus,
   Trash2,
   Check,
+  ChevronDown,
+  ChevronUp,
+  Database,
+  Layers,
+  Copy,
+  ExternalLink,
+  ShieldAlert,
+  Info,
 } from 'lucide-react';
 
 interface ParseLogViewProps {
@@ -41,6 +49,8 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
   const [error, setError] = useState<Error | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+  const [copiedLogId, setCopiedLogId] = useState<string | null>(null);
 
   // Local state for IMDb input values keyed by log ID
   const [imdbInputs, setImdbInputs] = useState<Record<string, string>>({});
@@ -160,6 +170,30 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
     }
   };
 
+  const toggleExpand = (logId: string) => {
+    setExpandedLogId((prev) => (prev === logId ? null : logId));
+  };
+
+  const copyTraceJson = (log: ParseLog) => {
+    const fullTrace = {
+      id: log.id,
+      rawTitle: log.rawTitle,
+      feedName: log.feedName,
+      processedAt: log.processedAt.toISOString(),
+      parsedSuccessfully: log.parsedSuccessfully,
+      parsedTitle: log.parsedTitle,
+      parsedYear: log.parsedYear,
+      omdbStatus: log.omdbStatus,
+      ignored: log.ignored,
+      ignoreReason: log.ignoreReason,
+      errorMessage: log.errorMessage,
+      traceDetails: log.traceDetails || null,
+    };
+    navigator.clipboard.writeText(JSON.stringify(fullTrace, null, 2));
+    setCopiedLogId(log.id);
+    setTimeout(() => setCopiedLogId(null), 2000);
+  };
+
   const filteredLogs = useMemo(() => {
     return logs.filter((log) => {
       // Filter tab
@@ -190,7 +224,8 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
         const matchesFeed = log.feedName.toLowerCase().includes(query);
         const matchesReason = log.ignoreReason ? log.ignoreReason.toLowerCase().includes(query) : false;
         const matchesError = log.errorMessage ? log.errorMessage.toLowerCase().includes(query) : false;
-        return matchesRaw || matchesParsed || matchesFeed || matchesReason || matchesError;
+        const matchesTrace = log.traceDetails ? JSON.stringify(log.traceDetails).toLowerCase().includes(query) : false;
+        return matchesRaw || matchesParsed || matchesFeed || matchesReason || matchesError || matchesTrace;
       }
 
       return true;
@@ -312,10 +347,10 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
         <div>
           <div className="flex items-center gap-2 text-amber-400 mb-1">
             <FileText className="w-5 h-5" />
-            <h2 className="text-lg font-bold text-neutral-100">Лог от парсването (Parse Results Log)</h2>
+            <h2 className="text-lg font-bold text-neutral-100">Диагностика и лог от парсването (Parse & Trace Log)</h2>
           </div>
           <p className="text-sm text-neutral-400">
-            История на обработените RSS заглавия от последните 7 дни, статус на парсване, OMDb метаданни и филтрация.
+            История на обработените RSS заглавия от последните 7 дни. Кликнете на ред за да проследите целия процес (парсване, OMDb кеш, заявки и филтри).
           </p>
         </div>
 
@@ -416,7 +451,7 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Търси по RSS име, заглавие или причина..."
+              placeholder="Търси по заглавие, IMDb ID, OMDb данни, причина за отхвърляне..."
               data-testid="parse-log-search-input"
               className="w-full pl-10 pr-4 py-2.5 bg-neutral-950 border border-neutral-800 rounded-lg text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
             />
@@ -651,116 +686,342 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
             <table className="w-full text-left text-sm" data-testid="parse-logs-table">
               <thead className="bg-neutral-950/80 border-b border-neutral-800 text-xs text-neutral-400 font-semibold uppercase tracking-wider">
                 <tr>
+                  <th className="w-10 px-3 py-3.5 text-center"></th>
                   <th className="px-4 py-3.5">Дата & Време</th>
                   <th className="px-4 py-3.5">RSS Канал & Име</th>
                   <th className="px-4 py-3.5">Резултат от Парсване</th>
                   <th className="px-4 py-3.5">OMDb Данни</th>
-                  <th className="px-4 py-3.5">Статус / Причина за филтрация</th>
+                  <th className="px-4 py-3.5">Статус / Причина</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-800/60">
                 {filteredLogs.map((log) => {
                   const reasonInfo = formatIgnoreReason(log.ignoreReason);
+                  const isExpanded = expandedLogId === log.id;
+                  const trace = log.traceDetails;
+
                   return (
-                    <tr key={log.id} className="hover:bg-neutral-800/40 transition-colors" data-testid={`log-row-${log.id}`}>
-                      {/* Date & Time */}
-                      <td className="px-4 py-3.5 text-xs text-neutral-400 whitespace-nowrap font-mono">
-                        {formatDate(log.processedAt)}
-                      </td>
-
-                      {/* RSS Title & Feed */}
-                      <td className="px-4 py-3.5 max-w-xs md:max-w-md">
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-neutral-800 text-neutral-300 border border-neutral-700">
-                            <Tag className="w-3 h-3 text-amber-400" />
-                            {log.feedName || 'RSS'}
-                          </span>
-                        </div>
-                        <div className="text-xs text-neutral-200 font-medium break-words" title={log.rawTitle}>
-                          {log.rawTitle}
-                        </div>
-                      </td>
-
-                      {/* Parsed Result */}
-                      <td className="px-4 py-3.5">
-                        {log.parsedSuccessfully ? (
-                          <div>
-                            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-emerald-950/60 text-emerald-300 border border-emerald-800/60 mb-1">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              Парснато
-                            </div>
-                            <div className="text-xs font-semibold text-neutral-100">
-                              {log.parsedTitle} {log.parsedYear ? `(${log.parsedYear})` : ''}
-                            </div>
-                          </div>
-                        ) : (
-                          <div>
-                            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-950/60 text-red-300 border border-red-800/60">
-                              <XCircle className="w-3.5 h-3.5" />
-                              {log.ignoreReason === 'parse_error' ? 'Грешка при парсване' : 'Неразпознато'}
-                            </div>
-                          </div>
-                        )}
-                        {log.errorMessage && (
-                          <div
-                            data-testid={`log-error-${log.id}`}
-                            className="mt-1.5 flex items-start gap-1.5 p-2 rounded bg-red-950/60 border border-red-800/70 text-[11px] text-red-200 font-mono break-all"
+                    <React.Fragment key={log.id}>
+                      <tr
+                        onClick={() => toggleExpand(log.id)}
+                        className={`hover:bg-neutral-800/50 transition-colors cursor-pointer ${
+                          isExpanded ? 'bg-neutral-800/30' : ''
+                        }`}
+                        data-testid={`log-row-${log.id}`}
+                      >
+                        {/* Expand toggle */}
+                        <td className="px-3 py-3.5 text-center">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleExpand(log.id);
+                            }}
+                            className="p-1 rounded text-neutral-400 hover:text-amber-400 hover:bg-neutral-800 transition-colors"
+                            data-testid={`expand-button-${log.id}`}
+                            title={isExpanded ? 'Свий детайли' : 'Виж диагностика'}
                           >
-                            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
-                            <span>{log.errorMessage}</span>
-                          </div>
-                        )}
-                      </td>
+                            {isExpanded ? <ChevronUp className="w-4 h-4 text-amber-400" /> : <ChevronDown className="w-4 h-4" />}
+                          </button>
+                        </td>
 
-                      {/* OMDb Status */}
-                      <td className="px-4 py-3.5 whitespace-nowrap">
-                        {log.omdbStatus === 'found' && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-950/60 text-blue-300 border border-blue-800/60">
-                            <Globe className="w-3.5 h-3.5" />
-                            Намерено
-                          </span>
-                        )}
-                        {log.omdbStatus === 'not_found' && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-orange-950/60 text-orange-300 border border-orange-800/60">
-                            <AlertTriangle className="w-3.5 h-3.5" />
-                            Няма съвпадение
-                          </span>
-                        )}
-                        {log.omdbStatus === 'skipped' && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-neutral-800 text-neutral-400 border border-neutral-700">
-                            Пропуснато
-                          </span>
-                        )}
-                        {log.omdbStatus === 'error' && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-950/60 text-red-300 border border-red-800/60">
-                            Грешка API
-                          </span>
-                        )}
-                        {log.omdbStatus === 'not_parsed' && (
-                          <span className="text-xs text-neutral-500">-</span>
-                        )}
-                      </td>
+                        {/* Date & Time */}
+                        <td className="px-4 py-3.5 text-xs text-neutral-400 whitespace-nowrap font-mono">
+                          {formatDate(log.processedAt)}
+                        </td>
 
-                      {/* Final Status & Ignore Reason */}
-                      <td className="px-4 py-3.5">
-                        {!log.ignored ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            Добавено в каталога
-                          </span>
-                        ) : (
-                          <div className="space-y-1">
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-950/60 text-amber-300 border border-amber-800/60">
-                              <Filter className="w-3.5 h-3.5" />
-                              Игнорирано
+                        {/* RSS Title & Feed */}
+                        <td className="px-4 py-3.5 max-w-xs md:max-w-md">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-neutral-800 text-neutral-300 border border-neutral-700">
+                              <Tag className="w-3 h-3 text-amber-400" />
+                              {log.feedName || 'RSS'}
                             </span>
-                            <div className={`text-[11px] px-2 py-1 rounded border ${reasonInfo.bg} ${reasonInfo.border} ${reasonInfo.color}`}>
-                              {reasonInfo.text}
-                            </div>
                           </div>
-                        )}
-                      </td>
-                    </tr>
+                          <div className="text-xs text-neutral-200 font-medium break-words" title={log.rawTitle}>
+                            {log.rawTitle}
+                          </div>
+                        </td>
+
+                        {/* Parsed Result */}
+                        <td className="px-4 py-3.5">
+                          {log.parsedSuccessfully ? (
+                            <div>
+                              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-emerald-950/60 text-emerald-300 border border-emerald-800/60 mb-1">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                Парснато
+                              </div>
+                              <div className="text-xs font-semibold text-neutral-100">
+                                {log.parsedTitle} {log.parsedYear ? `(${log.parsedYear})` : ''}
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-950/60 text-red-300 border border-red-800/60">
+                                <XCircle className="w-3.5 h-3.5" />
+                                {log.ignoreReason === 'parse_error' ? 'Грешка при парсване' : 'Неразпознато'}
+                              </div>
+                            </div>
+                          )}
+                          {log.errorMessage && (
+                            <div
+                              data-testid={`log-error-${log.id}`}
+                              className="mt-1.5 flex items-start gap-1.5 p-2 rounded bg-red-950/60 border border-red-800/70 text-[11px] text-red-200 font-mono break-all"
+                            >
+                              <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
+                              <span>{log.errorMessage}</span>
+                            </div>
+                          )}
+                        </td>
+
+                        {/* OMDb Status */}
+                        <td className="px-4 py-3.5 whitespace-nowrap">
+                          {log.omdbStatus === 'found' && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-950/60 text-blue-300 border border-blue-800/60">
+                              <Globe className="w-3.5 h-3.5" />
+                              Намерено
+                            </span>
+                          )}
+                          {log.omdbStatus === 'not_found' && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-orange-950/60 text-orange-300 border border-orange-800/60">
+                              <AlertTriangle className="w-3.5 h-3.5" />
+                              Няма съвпадение
+                            </span>
+                          )}
+                          {log.omdbStatus === 'skipped' && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-neutral-800 text-neutral-400 border border-neutral-700">
+                              Пропуснато
+                            </span>
+                          )}
+                          {log.omdbStatus === 'error' && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-red-950/60 text-red-300 border border-red-800/60">
+                              Грешка API
+                            </span>
+                          )}
+                          {log.omdbStatus === 'not_parsed' && (
+                            <span className="text-xs text-neutral-500">-</span>
+                          )}
+                        </td>
+
+                        {/* Final Status & Ignore Reason */}
+                        <td className="px-4 py-3.5">
+                          {!log.ignored ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              Добавено в каталога
+                            </span>
+                          ) : (
+                            <div className="space-y-1">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-950/60 text-amber-300 border border-amber-800/60">
+                                <Filter className="w-3.5 h-3.5" />
+                                Игнорирано
+                              </span>
+                              <div className={`text-[11px] px-2 py-1 rounded border ${reasonInfo.bg} ${reasonInfo.border} ${reasonInfo.color}`}>
+                                {reasonInfo.text}
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+
+                      {/* Expandable Diagnostic Trace Breakdown */}
+                      {isExpanded && (
+                        <tr className="bg-neutral-950/90 border-b border-neutral-800">
+                          <td colSpan={6} className="p-4 md:p-6 space-y-4" data-testid={`diagnostic-drawer-${log.id}`}>
+                            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+                              <div className="flex items-center gap-2 text-amber-400 font-semibold text-sm">
+                                <Layers className="w-4 h-4" />
+                                <span>Диагностичен отчет за обработката (Trace Pipeline)</span>
+                              </div>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  copyTraceJson(log);
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 transition-colors cursor-pointer"
+                                title="Копирай пълния JSON лог"
+                              >
+                                {copiedLogId === log.id ? (
+                                  <>
+                                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                    <span className="text-emerald-400">Копирано!</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3.5 h-3.5" />
+                                    <span>Копирай JSON</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+
+                            {/* 4-Step Pipeline Cards */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                              {/* Step 1: RSS Parser */}
+                              <div className="p-3.5 bg-neutral-900/80 border border-neutral-800 rounded-lg space-y-2">
+                                <div className="flex items-center gap-2 text-xs font-semibold text-neutral-300">
+                                  <FileText className="w-4 h-4 text-amber-400 shrink-0" />
+                                  <span>1. Парсване на заглавие</span>
+                                </div>
+                                <div className="space-y-1 text-xs text-neutral-400">
+                                  <div>
+                                    <span className="text-neutral-500">Заглавие: </span>
+                                    <span className="text-neutral-200 font-medium">{log.parsedTitle || '—'}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-neutral-500">Година: </span>
+                                    <span className="text-neutral-200 font-medium">{log.parsedYear ?? '—'}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-neutral-500">Качество / Rip: </span>
+                                    <span className="text-neutral-200 font-mono">
+                                      {trace?.parsedQuality || '—'} / {trace?.parsedRipType || '—'}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <span className="text-neutral-500">Тип: </span>
+                                    <span className="text-neutral-200">
+                                      {trace?.parsedIsSeries ? 'Сериал (series)' : 'Филм (movie)'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Step 2: Cache Layer */}
+                              <div className="p-3.5 bg-neutral-900/80 border border-neutral-800 rounded-lg space-y-2">
+                                <div className="flex items-center gap-2 text-xs font-semibold text-neutral-300">
+                                  <Database className="w-4 h-4 text-blue-400 shrink-0" />
+                                  <span>2. Проверка в кеша</span>
+                                </div>
+                                <div className="space-y-1 text-xs text-neutral-400">
+                                  <div>
+                                    <span className="text-neutral-500">Кеш статус: </span>
+                                    {trace?.cacheHit ? (
+                                      <span className="text-emerald-400 font-medium">Хит ({trace.cacheStatus || 'found'})</span>
+                                    ) : (
+                                      <span className="text-neutral-400">Липсва в кеша / Нова заявка</span>
+                                    )}
+                                  </div>
+                                  {trace?.cacheFetchedAt && (
+                                    <div>
+                                      <span className="text-neutral-500">Записан на: </span>
+                                      <span className="text-neutral-300 font-mono">{trace.cacheFetchedAt}</span>
+                                    </div>
+                                  )}
+                                  {trace?.cacheKey && (
+                                    <div className="truncate" title={trace.cacheKey}>
+                                      <span className="text-neutral-500">Ключ: </span>
+                                      <span className="text-neutral-300 font-mono text-[11px]">{trace.cacheKey}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Step 3: OMDb Match */}
+                              <div className="p-3.5 bg-neutral-900/80 border border-neutral-800 rounded-lg space-y-2">
+                                <div className="flex items-center gap-2 text-xs font-semibold text-neutral-300">
+                                  <Globe className="w-4 h-4 text-purple-400 shrink-0" />
+                                  <span>3. OMDb Резултат</span>
+                                </div>
+                                <div className="space-y-1 text-xs text-neutral-400">
+                                  <div>
+                                    <span className="text-neutral-500">Статус: </span>
+                                    {log.omdbStatus === 'found' ? (
+                                      <span className="text-emerald-400 font-medium">Намерен запис</span>
+                                    ) : log.omdbStatus === 'not_found' ? (
+                                      <span className="text-orange-400 font-medium">Няма съвпадение</span>
+                                    ) : (
+                                      <span className="text-neutral-300">{log.omdbStatus}</span>
+                                    )}
+                                  </div>
+                                  {trace?.omdbImdbId && (
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-neutral-500">IMDb ID: </span>
+                                      <a
+                                        href={`https://www.imdb.com/title/${trace.omdbImdbId}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-amber-400 hover:underline font-mono inline-flex items-center gap-1"
+                                      >
+                                        {trace.omdbImdbId}
+                                        <ExternalLink className="w-3 h-3" />
+                                      </a>
+                                    </div>
+                                  )}
+                                  {trace?.omdbFoundTitle && (
+                                    <div>
+                                      <span className="text-neutral-500">OMDb заглавие: </span>
+                                      <span className="text-neutral-200 font-medium">
+                                        {trace.omdbFoundTitle} ({trace.omdbFoundYear})
+                                      </span>
+                                    </div>
+                                  )}
+                                  {trace?.omdbRating && (
+                                    <div>
+                                      <span className="text-neutral-500">Рейтинг: </span>
+                                      <span className="text-amber-300 font-bold">★ {trace.omdbRating}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Step 4: Decision & Filters */}
+                              <div className="p-3.5 bg-neutral-900/80 border border-neutral-800 rounded-lg space-y-2">
+                                <div className="flex items-center gap-2 text-xs font-semibold text-neutral-300">
+                                  <ShieldAlert className="w-4 h-4 text-emerald-400 shrink-0" />
+                                  <span>4. Решение & Филтри</span>
+                                </div>
+                                <div className="space-y-1 text-xs text-neutral-400">
+                                  <div>
+                                    <span className="text-neutral-500">Резултат: </span>
+                                    {!log.ignored ? (
+                                      <span className="text-emerald-400 font-semibold">Добавено в каталога</span>
+                                    ) : (
+                                      <span className="text-amber-400 font-semibold">Игнорирано</span>
+                                    )}
+                                  </div>
+                                  {log.errorMessage ? (
+                                    <div className="text-red-300 font-mono text-[11px] break-words">
+                                      {log.errorMessage}
+                                    </div>
+                                  ) : trace?.decisionDetails ? (
+                                    <div className="text-neutral-300 text-[11px] break-words">
+                                      {trace.decisionDetails}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Additional Metadata tags if available */}
+                            {(trace?.omdbGenres?.length || trace?.omdbCountries?.length) && (
+                              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-neutral-800/80 text-xs">
+                                {trace.omdbGenres && trace.omdbGenres.length > 0 && (
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-neutral-500">Жанрове:</span>
+                                    {trace.omdbGenres.map((g, idx) => (
+                                      <span key={idx} className="px-2 py-0.5 rounded bg-neutral-800 text-neutral-300 border border-neutral-700 text-[11px]">
+                                        {g}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                {trace.omdbCountries && trace.omdbCountries.length > 0 && (
+                                  <div className="flex items-center gap-1.5 ml-4">
+                                    <span className="text-neutral-500">Държави:</span>
+                                    {trace.omdbCountries.map((c, idx) => (
+                                      <span key={idx} className="px-2 py-0.5 rounded bg-neutral-800 text-neutral-300 border border-neutral-700 text-[11px]">
+                                        {c}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -771,3 +1032,4 @@ export const ParseLogView: React.FC<ParseLogViewProps> = ({
     </div>
   );
 };
+

@@ -312,7 +312,7 @@ class OmdbClient:
                     if "limit reached" in err_msg.lower():
                         raise OmdbLimitReachedError("Daily API limit reached")
 
-            # 3. Fallback lookup: Title only (ONLY if media_type was not explicitly constrained)
+            # 3. Fallback lookup: Title only (if not explicitly constrained or after media_type lookup)
             if payload is None and not media_type:
                 data = self._make_request(title)
                 if data.get("Response") == "True":

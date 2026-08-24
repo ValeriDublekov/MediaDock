@@ -35,6 +35,7 @@ function mapDocToParseLog(docSnap: QueryDocumentSnapshot<DocumentData>): ParseLo
     ignored: Boolean(data.ignored),
     ignoreReason: data.ignoreReason ?? null,
     errorMessage: data.errorMessage ?? null,
+    traceDetails: data.traceDetails ?? null,
     processedAt: toDate(data.processedAt),
   };
 }

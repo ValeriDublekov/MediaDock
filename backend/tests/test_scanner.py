@@ -527,4 +527,43 @@ class TestScanner(unittest.TestCase):
         res_unlimited = scanner.recheck_existing_titles(audit_days=0)
         self.assertEqual(res_unlimited["titles_checked"], 2)
 
+    def test_parse_log_trace_details_and_diagnostics(self):
+        rss_feeds = {
+            "test_feed": {
+                "name": "test_feed",
+                "url": "backend/tests/fixtures/movies_feed.atom",
+                "type": "movie"
+            }
+        }
+        config = ScannerConfig(
+            rss_feeds=rss_feeds,
+            video_settings={},
+            excluded_countries=["Russia"],
+            excluded_genres=["Horror"],
+            omdb_limit=100
+        )
+        omdb = MockOmdbClient({
+            "four rooms": self.filtered_movie,
+        })
+
+        scanner = self.create_scanner(config, omdb)
+        scanner.run("run_trace_test")
+
+        logs = scanner.parse_log_repo.get_all()
+        self.assertTrue(len(logs) > 0)
+        
+        # Check that trace_details exist
+        logs_with_trace = [l for l in logs if l.trace_details is not None]
+        self.assertTrue(len(logs_with_trace) > 0)
+        
+        # Find the filtered movie log (Horror genre excluded)
+        filtered_logs = [l for l in logs if l.ignore_reason == "excluded_country_or_genre"]
+        if filtered_logs:
+            f_log = filtered_logs[0]
+            self.assertIn("Филтриран жанр", f_log.error_message)
+            self.assertIsNotNone(f_log.trace_details)
+            self.assertEqual(f_log.trace_details.get("decision"), "ignored_excluded_country_or_genre")
+            self.assertEqual(f_log.trace_details.get("parsedTitle"), "Four Rooms")
+
+
 

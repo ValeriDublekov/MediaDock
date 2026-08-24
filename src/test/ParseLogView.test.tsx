@@ -171,4 +171,23 @@ describe('ParseLogView', () => {
     expect(screen.getByText('Garbage Unparseable Title ###')).toBeInTheDocument();
     expect(screen.getByTestId('log-error-log-4')).toHaveTextContent('Грешка при парсване: Invalid format syntax');
   });
+
+  it('expands diagnostic trace drawer on row or toggle click', async () => {
+    const repo = new MockParseLogRepo();
+    render(<ParseLogView repository={repo} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('metric-total')).toHaveTextContent('4');
+    });
+
+    const expandBtn = screen.getByTestId('expand-button-log-1');
+    fireEvent.click(expandBtn);
+
+    expect(screen.getByTestId('diagnostic-drawer-log-1')).toBeInTheDocument();
+    expect(screen.getByText('Диагностичен отчет за обработката (Trace Pipeline)')).toBeInTheDocument();
+    expect(screen.getByText('1. Парсване на заглавие')).toBeInTheDocument();
+    expect(screen.getByText('2. Проверка в кеша')).toBeInTheDocument();
+    expect(screen.getByText('3. OMDb Резултат')).toBeInTheDocument();
+    expect(screen.getByText('4. Решение & Филтри')).toBeInTheDocument();
+  });
 });
