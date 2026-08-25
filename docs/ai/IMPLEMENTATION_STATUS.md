@@ -22,7 +22,7 @@ MVP wiring is present; production hardening is not complete.
 
 ## Next Prompt
 
-Run Prompt 4 in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+Run Prompt 4A in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 

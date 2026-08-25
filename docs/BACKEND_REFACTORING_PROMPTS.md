@@ -1,212 +1,297 @@
 # Backend Refactoring Prompt Roadmap
 
-Use these prompts in order. Prompts 0A-0C are prerequisite hardening stages; complete them before changing catalog matching or repair behavior. Each stage should fit one focused coding session. Do not ask one session to execute multiple stages.
+Use these prompts in order. Prompts 0A-0C are prerequisite hardening stages; complete them before changing catalog matching or repair behavior. Each prompt or substage should fit one focused coding session. Do not combine adjacent substages in one session. A substage may depend on earlier substages, but must have its own tests, checkpoint, and reviewable diff.
 
 The roadmap is based on `docs/BACKEND_PARSING_PIPELINES.md`. Complete and verify the current stage before starting the next one. A separate commit after each successful stage is useful, but the prompts do not ask the model to commit.
 
 ## Shared Preamble
 
-Paste this before each numbered prompt:
+Paste this before each numbered prompt or substage:
 
 ```text
 You are refactoring the active MediaDock system. First read docs/BACKEND_PARSING_PIPELINES.md, docs/ai/ARCHITECTURE.md, docs/ai/DATA_CONTRACTS.md, docs/ai/TESTING.md, docs/ai/IMPLEMENTATION_STATUS.md, and inspect the current implementation and nearby tests. Work only in the files named by this stage plus directly affected contract documentation. Do not modify the legacy implementation. Prompts 0A and 0B may modify the explicitly named workflow, rules, frontend configuration, or client files.
-Implement only the requested stage. Preserve unrelated behavior and existing public APIs where practical. Do not use live RSS, OMDb, Gemini, or production Firestore in tests; mocked transports, fakes, and the Firebase emulator are allowed where the stage requires a repository/rules contract test. Treat feed text, OMDb fields, AI output, and workflow inputs as untrusted data. Never put secrets in URLs, prompts, logs, fixtures, or error summaries. Add focused regression tests before or with the implementation, run the narrow tests first, then run the full backend suite from the repository root. Do not hide a failing test or weaken an assertion. At the end, report changed files, behavioral decisions, contract/migration changes, commands run, and remaining risk. If a prerequisite from an earlier stage is missing, stop and explain it instead of silently rebuilding the whole roadmap.
+Before editing, state one falsifiable local hypothesis about the owning code path and one cheap check that could disconfirm it. Implement only the requested stage. Treat the `Non-goals` section as a hard boundary; if the change requires an unlisted stage, stop and report it. Preserve unrelated behavior and existing public APIs where practical. Do not perform a broad refactor merely to reduce file size; split code only when it creates a clear ownership boundary or is required by the stage contract.
+Do not use live RSS, OMDb, Gemini, or production Firestore in tests; mocked transports, fakes, and the Firebase emulator are allowed where the stage requires a repository/rules contract test. Treat feed text, OMDb fields, AI output, and workflow inputs as untrusted data. Never put secrets in URLs, prompts, logs, fixtures, or error summaries. Add focused regression tests before or with the implementation, run the narrow tests first, then run the full backend suite from the repository root. Do not hide a failing test or weaken an assertion. At the end, report changed files, behavioral decisions, contract/migration changes, commands run, and remaining risk. If a prerequisite from an earlier stage is missing, stop and explain it instead of silently rebuilding the whole roadmap.
 ```
 
-## Prompt 0A: Harden CI and Scanner Workflow
+Each new stage below is intentionally written as `Scope`, `Non-goals`, `Contract`,
+`Work`, `Tests`, and `Done when`. Do not infer work from a later stage while
+implementing an earlier one. If an existing implementation already satisfies a
+bullet, add or verify the regression test and leave the behavior unchanged.
+
+## Prompt 4A: Define Source Context and Observation Fields
 
 ```text
-Goal: make the scanner workflow safe to dispatch and make CI truthfully fail when the scanner is partial or broken.
+Goal: define the provenance contract before changing IDs or retry behavior.
 
-Scope for this stage: .github/workflows/scanner.yml, .github/workflows/ci.yml, backend/src/movies_feed/cli.py, and directly affected testing/deployment documentation.
+Scope: backend/src/movies_feed/models.py, backend/src/movies_feed/firestore_repository.py, focused model/serialization tests, and the directly affected AI data contract. Add a typed SourceContext with sourceFeedId, sourceFeedName, feedType, feedEntryId, torrentUrl, rawTitle, sourcePublishedAt, and observedAt. Extend ParseLog and Occurrence serialization/deserialization with backward-compatible optional source fields.
 
-Remove shell injection risk from workflow_dispatch inputs. Read inputs through environment variables, validate force_days and audit_days as decimal integers in an explicit bounded range, keep mode on an allowlist, and pass arguments with a shell array. No untrusted GitHub expression may be interpolated into executable shell source.
+Contract: sourcePublishedAt is the feed's publication time; firstSeenAt and lastSeenAt describe scanner observations. A legacy document without the new fields must remain readable and must not acquire invented provenance. Decide and document that a normal source ParseLog represents one source item, while audit/review events are a separate event kind; retry attempts are metadata on the source log, not silently new IDs.
 
-Add a mode-aware preflight that checks required secrets without printing them: Firebase credentials for Firestore modes, OMDb for modes that can query OMDb, and Gemini for AI modes. Define parse-only combinations explicitly and guarantee that parse-only makes no external API call. Make the CLI return documented non-zero exit codes: 0 only for succeeded, a distinct code for partial/retryable completion, and a distinct code for failed/configuration errors. A stopped or incomplete AI/OMDb phase must reach both ScanRun status and the GitHub job result.
+Non-goals: do not change occurrence/title/parse-log ID algorithms, scanner phase order, retry selection, matching policy, or catalog behavior.
 
-Make emulator commands use an explicit demo project ID. Add a reproducible dependency strategy, pin GitHub Actions to reviewed commit SHAs where practical, and add a static workflow validation check. Add tests or a deterministic script check for injection payloads, missing mode secrets, scanner exit codes, parse-only/all, and secret-free logs. Do not change matching or catalog repair behavior in this stage.
+Work: add the typed model, optional fields, Firestore round-trip conversion, and the exact field names/missing-field defaults to docs/ai/DATA_CONTRACTS.md. Keep existing public fields compatible while making the new context available to later stages.
+
+Tests: round-trip every new field, deserialize old documents with fields absent, preserve null publication time, and prove publication time is not used as observation time.
+
+Done when: focused serialization tests and the full backend suite pass; the data contract names every new field and the next stage can consume SourceContext without guessing.
 ```
 
-## Prompt 0B: Close Configuration and Client Secret Boundaries
+## Prompt 4B: Version Source-Aware IDs
 
 ```text
-Goal: stop browser users and browser JavaScript from controlling privileged scanner behavior or receiving scanner credentials.
+Goal: make source identity stable across feeds and consistent across modes.
 
-Scope for this stage: firestore.rules, the frontend files that read or store OMDb/GitHub credentials, vite.config.ts, backend configuration loading, and directly affected architecture/deployment documentation and tests.
+Scope: backend/src/movies_feed/ids.py, the smallest affected model/scanner call sites, focused ID tests, and docs/ai/DATA_CONTRACTS.md. Introduce v2 IDs for occurrences and source ParseLogs. An occurrence ID must hash sourceFeedId plus normalized feedEntryId when present, otherwise normalized torrentUrl. A source ParseLog ID must use the same source-item identity and be reusable for retry updates; audit events must use an explicit audit namespace/event identity so they cannot overwrite a source log or erase audit history.
 
-Define an explicit admin/reader authorization policy. Restrict scanner settings writes and any privileged manual-mapping operations to admin users, validate allowed fields/types/lengths, bind createdBy to request.auth where client writes remain supported, and move settings out of titles/settings_config if that is required to make ownership clear. Add rules tests for reader, admin, disabled, unauthenticated, malformed, and extra-field cases.
+Contract: new writes use v2 IDs. Old v1 documents remain readable and are not reinterpreted as v2; choose and document lazy migration or natural coexistence, but do not bulk-migrate data in this stage. Fallback title IDs must use normalized resolved title, canonical year semantics, and source media type, so RSS and reparse agree when IMDb ID is absent.
 
-Remove OMDB_API_KEY, GitHub PATs, and any equivalent scanner credential from Vite env exposure and localStorage. Manual dispatch must use GitHub's protected UI/CLI or an authenticated server-side control plane. Update deployment documentation so the browser-secret invariant is true rather than aspirational. Add a bundle/config regression test that fails if private scanner credential names are exposed.
+Non-goals: do not change timestamps, retry selection, repository merge behavior, proposal application, or parser heuristics.
+
+Work: version the ID algorithms without one-letter variables or unrelated renaming. Keep old helper APIs as compatibility wrappers where practical and document the exact canonical input tuple and algorithm version.
+
+Tests: equal GUIDs from different feeds produce different occurrence/log IDs; URL fallbacks are feed-aware; RSS/reparse fallback title IDs agree; v1 compatibility reads remain explicit; repeated source items remain idempotent.
+
+Done when: ID tests cover collisions and cross-mode equivalence, the algorithm is documented, and the full backend suite passes.
 ```
 
-## Prompt 0C: Add a Bounded RSS Fetcher
+## Prompt 4C: Wire Observation Time and Repository Merge Semantics
 
 ```text
-Goal: make the privileged scanner's RSS network boundary explicit before any parser or retry refactor.
+Goal: populate SourceContext consistently and keep fake/Firestore persistence behavior identical.
 
-Add a FeedFetcher that accepts only HTTPS URLs from a code-owned host allowlist, rejects credentials, local/file schemes, private/loopback/link-local/reserved IPs including IPv4-mapped IPv6, validates every redirect, and uses TLS verification, connect/read timeouts, a decompressed response-size limit, content-type/status checks, and an entry limit. Do not let Firestore configuration expand the allowlist. Fetch bytes through this adapter and pass bytes to feedparser; never pass an untrusted URL or local path directly to feedparser.
+Scope: backend/src/movies_feed/scanner.py, repository implementations, focused scanner/repository tests, and directly affected contract documentation. Use the stable configuration key as sourceFeedId; never use the mutable display name as identity. Populate sourcePublishedAt from the feed entry and firstSeenAt/lastSeenAt from scanner observation time. On a rescan of an old publication, lastSeenAt must advance while sourcePublishedAt remains unchanged.
 
-Treat bozo and partial feeds according to an explicit policy: do not silently persist an incomplete feed. Keep fixture input behind an explicit test/CLI file option, separate from configured network URLs. Add mocked transport tests for redirects, DNS/IP validation, private addresses, oversized/decompressed responses, timeout, bad status/content type, bozo feeds, entry limits, and fixture mode. Do not refactor title parsing in this stage.
+Contract: every persisted occurrence and source log carries the stable feed identity and preserves publication time separately from observation time. Bulk writes apply the same merge rules as single writes.
+
+Non-goals: do not change the v2 ID algorithms from Prompt 4B, retry selection, matching policy, or audit proposal behavior.
+
+Work: pass one SourceContext through RSS and reparse persistence, preserve the original context on updates, and align fake and Firestore upsert_many with single-upsert merge semantics. Preserve defensive copies so dry-run decisions cannot mutate stored models.
+
+Tests: rescan timestamp behavior, mutable feed-name versus stable feed-key identity, source-field round trips, fake/Firestore merge parity, bulk/single upsert parity, and dry-run immutability.
+
+Done when: all new writes carry the documented source context, no source identity depends on display text, and narrow plus full backend tests pass.
 ```
 
-## Prompt 1: Make DB Audit Non-Destructive
+## Prompt 5A: Add Explicit Retry State and Paginated Selection
 
 ```text
-Goal: remove the immediate data-loss risk from recheck-existing without attempting the final audit architecture yet.
+Goal: make reparse-unfound a bounded repository workflow without invoking AI yet.
 
-Update ScannerService.recheck_existing_titles so catalog records are never deleted or migrated when AI or OMDb evidence is absent, incomplete, malformed, low-confidence, retryable, or contradictory. Require an explicit AI result for every requested item; never default a missing is_valid_match field to true. A title with no occurrences must become needs_review, not be compared with its own stored title. OMDb no-match, quota exhaustion, transport failure, and a missing corrected title must remain distinguishable enough that retryable failures cannot be treated as confirmed mismatch.
+Scope: backend/src/movies_feed/models.py, repository interfaces, fake and Firestore parse-log repositories, repository contract tests, and docs/ai/DATA_CONTRACTS.md. Add explicit retry metadata: retryState (`retryable`, `terminal`, or `resolved`), attemptCount, lastAttemptAt, and bounded resolution metadata. Add paginated list_retryable methods with a stable cursor/order.
 
-For this stage, keep confirmed mismatches and valid replacement suggestions in place and record a clear needs_review parse-log/audit outcome; do not automatically delete the old title or move all occurrences. Only an explicit complete valid result may set aiValidated=true. Make an AI batch failure visible in run status/error counters instead of ending with succeeded.
+Contract: only genuinely retryable parse/OMDb failures are selectable. Exclusions, parse-only records, confirmed type/year rejection, malformed terminal input, and resolved records are not selectable. Retryable work is not deleted solely because it is older than seven days; retention may prune terminal records only. Preserve old logs by deriving a conservative compatibility state and never treating unknown legacy failures as confirmed success.
 
-Add tests for missing AI item IDs, missing fields, empty batches, orphan titles, OMDb timeout, quota exhaustion, no-match, and dry-run. Assert that title and occurrence repositories remain unchanged in every uncertain/mismatch case. Do not introduce a proposal collection or redesign all matching rules yet; those come later.
+Non-goals: do not call Gemini or OMDb, resolve manual mappings, recreate occurrences, or change parser/AI schemas.
 
-Define the temporary `needs_review` decision/status in the persisted parse-log/audit contract instead of relying on a free-form message. Ensure dry-run cannot mutate fake model objects through shared references; do not defer that safety requirement to a later repository stage.
+Work: replace broad list_unmapped selection behind a compatibility adapter, define cursor semantics and any required Firestore indexes, and document state transitions and retention.
+
+Tests: fake/Firestore selection parity, pagination beyond the first page, terminal versus retryable filtering, retention of old retryable work, attempt/resolution round trips, and deterministic ordering.
+
+Done when: repository tests pass without network services, the scanner can request a bounded retry page, and the full backend suite is green.
 ```
 
-## Prompt 2: Centralize Media and Year Semantics
+## Prompt 5B: Rebuild Reparse Around Retained Source Context
 
 ```text
-Goal: make deterministic match decisions consistent across RSS, reparse, and audit, especially for later TV seasons.
+Goal: resolve retained source items safely and preserve their identity.
 
-Create one small typed match-policy module and route the three scanner paths through it. Represent source media type separately from content kind so an OMDb documentary series remains a series with documentary content, rather than becoming movie-like. Preserve backward-compatible fields where needed.
+Scope: backend/src/movies_feed/scanner.py, directly affected models/repositories, and scanner tests. Before Gemini, resolve a matching manual mapping against retained SourceContext. On successful manual or AI/OMDb resolution, update the original source log to resolved/terminal state and recreate or upsert the occurrence with its original feed ID, entry ID, URL, feed type, publication/observation timestamps, and v2 deterministic ID. A failed attempt updates the same log's retry state and never creates a duplicate log. Deduplicate by source identity, not case-sensitive raw title.
 
-Before implementation, document the compatibility matrix. A configured movie/series feed remains authoritative for the normal RSS path; series markers may be diagnostics, but must not silently change a known feed type. An unknown feed type may be inferred. Define whether a manual IMDb mapping bypasses type/year checks while still applying exclusions, and preserve that decision consistently in all modes.
+Contract: use the stored feed type, or `unknown` when absent; never hard-code `movie`. Parse-only is a run-level early exit and incompatible combinations such as `--parse-only --mode all` are rejected before any OMDb/Gemini call. Manual mappings are consumed only after filtering and durable catalog persistence succeeds.
 
-Give years explicit meanings. A movie release year may use the existing +/-1 tolerance. A raw series year is a season/release year and must not be compared with the show's first broadcast year using +/-1. For a series, accept the season year when it is inside OMDb's closed or open broadcast range; when the range is unavailable, do not reject solely because the start year differs. Parse and expose the OMDb broadcast range without losing the current normalized result.
+Non-goals: do not redesign AI response validation, proposal storage, or parser heuristics; Prompt 6 owns AI schema validation.
 
-Return a typed decision with accepted/rejected/ambiguous plus stable reason codes. Apply the same type, year, and exclusion policy in RSS, reparse, and audit candidate checks. Specify which backward-compatible field remains the display `mediaType`, where `sourceType` and `contentKind` are stored, and which field drives feed compatibility. Update the current AI audit wording immediately so it explains season-year versus series-start-year semantics, but leave full AI response hardening for Prompt 6.
+Work: keep the reparse phase bounded by Prompt 5A pagination, route every lookup through the existing resolver, and make success/failure counters reflect resolved, retried, skipped, and failed work.
 
-Add table-driven tests for movies, series with later seasons, open-ended series, out-of-range seasons, unknown years, documentary series, movie documentaries, shorts, and type mismatches. Remove duplicated deterministic branches only after the shared policy tests pass.
+Tests: manual mapping after RSS disappearance, series retry, success and failure state transitions, provenance preservation, source-identity deduplication, pagination, retention, manual-mapping budget, and parse-only/all API isolation.
+
+Done when: a successful retry resolves its original log exactly once, a failed retry remains retryable without a duplicate, and narrow plus full backend tests pass.
 ```
 
-## Prompt 3: Add One Budgeted OMDb Resolver
+## Prompt 6A: Validate Gemini Responses Strictly
 
 ```text
-Goal: make every mode use the same cache, error classification, quota stop state, timing, and request accounting.
+Goal: make every AI operation complete, typed, confidence-aware, and fail-closed.
 
-Introduce a MetadataResolver/OmdbResolver abstraction used by RSS, reparse-unfound, recheck-existing, and direct IMDb mappings. Return typed outcomes for found, confirmed_not_found, quota_exhausted, transport_error, invalid_request, and unexpected_error. Cache only found and confirmed_not_found outcomes; never negative-cache credentials, malformed requests, quota, transport, or service failures.
+Scope: one shared AI validation module, AiMatcher response handling, prompt/schema tests, and docs/ai/DATA_CONTRACTS.md. Apply one validator to batch_extract_titles, batch_validate_omdb_matches, and batch_recheck_matches. Require exactly one result for every requested ID, no missing/unknown/duplicate IDs, and no permissive `.get(..., True)` defaults. Require a finite numeric confidence in inclusive 0..1; use documented default minimums of 0.70 for extraction/candidate validation and 0.80 for audit unless the contract explicitly changes them.
 
-Use `docs/GEMINI_MODELS.md` as the model-ID reference, but do not silently remap valid model IDs or assume that every listed model supports this text/JSON operation. Validate the configured model and its supported `generateContent` capability during preflight or startup.
+Contract: required fields have exact types and ranges; media type is `movie` or `series`; empty titles and semantically invalid corrections fail validation. Audit results require an explicit boolean is_valid_match and confidence. Candidate results require an explicit boolean is_match and confidence. Malformed, partial, low-confidence, blocked, or empty responses become typed failure/needs_review outcomes and callers must not mutate catalog data.
 
-Version the cache key and include normalized lookup title, lookup year semantics, and media source type. Do not reinterpret an old type-less cache entry as valid for both movie and series. Keep an explicit compatibility strategy for old entries, such as ignoring them until natural expiry.
+Bound raw titles and OMDb text before prompt construction, bound response bodies before JSON parsing, and treat all external text as data. Make either backend/src/movies_feed/prompts/ or inline templates the single documented source of truth; remove divergence without changing unrelated prompts.
 
-Enforce one run-wide HTTP budget across all modes and manual mappings. Count actual OMDb HTTP attempts, including fallback requests, rather than only high-level scanner lookups. A quota response must stop further OMDb work for the whole run and make the run partial/failed as appropriate. Record cache and API timings consistently.
+Non-goals: do not change HTTP retry/delay mechanics, source context, proposal application, or deterministic match policy.
 
-Replace direct omdb_client calls in ScannerService only after resolver tests pass. Add tests for fallback request counting, cache isolation by media type, transient errors not cached, shared budget across phases, manual mapping budget, and quota propagation. Do not change parse-log lifecycle or audit proposal persistence in this stage.
+Tests: missing/duplicate/extra/wrong-type IDs, invalid ranges, low confidence, series season years, semantically invalid but schema-valid output, empty/blocked responses, and caller fail-closed behavior.
+
+Done when: all three operations use the same validator, thresholds and fields are documented, and the full backend suite passes.
 ```
 
-## Prompt 4: Preserve Source Context and Stable Identity
+## Prompt 6B: Isolate Gemini Transport and Rate Control
 
 ```text
-Goal: retain enough provenance to reproduce occurrences and make IDs/timestamps consistent across every mode.
+Goal: make Gemini transport behavior deterministic, secret-safe, and testable.
 
-Add a typed source context containing feed ID/name/type, feed entry ID, torrent URL, raw title, source publication time, and scanner observation time. Extend ParseLog and Occurrence serialization/deserialization with backward-compatible optional fields. Store sourcePublishedAt separately; firstSeenAt/lastSeenAt must describe when the scanner observed the item, so a rescan advances lastSeenAt even for an old publication.
+Scope: backend/src/movies_feed/ai_matcher.py, focused transport tests, and operational/model documentation. Keep the configured model ID unchanged and send the Gemini key through an x-goog-api-key header for both models.list and generateContent. Inject clock/sleep dependencies for inter-request delay, retry backoff, and forbidden cooldown. Cap response-body size before parsing.
 
-Use the stable configuration key as `sourceFeedId`, not the mutable display name. Define separately whether a parse-log ID represents a source item, an observation, or a retry attempt; a single hash must not accidentally discard the audit history required by Prompt 5.
+Contract: classify 429/5xx/timeouts as retryable according to one documented policy; classify authentication, forbidden, invalid-model, and other terminal errors separately. Enforce the configured delay between requests and expose accurate API-call/item statistics. Do not let a failed capability or transport call silently become a successful empty result.
 
-Version occurrence and parse-log IDs so feed identity participates in source identity. Prevent equal GUIDs from different feeds from overwriting a global parse log or merging unrelated same-title occurrences. Keep old documents readable and document whether new writes use only v2 IDs or perform lazy migration.
+Non-goals: do not change the Prompt 6A response schema/thresholds, scanner retry selection, or catalog mutation behavior.
 
-Make fallback title IDs derive from canonical resolved OMDb metadata in every path: normalized resolved title, canonical year semantics, and source media type. RSS and reparse must produce the same fallback ID when IMDb ID is absent.
+Work: preserve the already completed model capability preflight and header boundary, replace direct time.sleep/time sources with injectable dependencies, and keep logs bounded and secret-free.
 
-Align fake and Firestore repository behavior: defensive copies or immutable decisions must prevent dry-run mutation, and bulk upserts must honor the same merge contract as single upserts. Add round-trip serialization, ID collision, cross-mode ID, observation timestamp, merge, and dry-run tests. Do not redesign retry selection yet.
+Tests: timeout-then-success, 429/5xx retry exhaustion, forbidden response, enforced delay/cooldown, response-size limit, header-only key transport, and accurate statistics.
+
+Done when: transport tests run without sleeping or live API calls, retry classes are documented, and narrow plus full backend tests pass.
 ```
 
-## Prompt 5: Repair Parse-Log Reprocessing
+## Prompt 7A: Define AuditProposal Storage
 
 ```text
-Goal: turn reparse-unfound into a bounded retry workflow that preserves provenance and honors manual corrections.
+Goal: create an idempotent review-proposal contract before changing audit behavior.
 
-Replace the broad list_unmapped behavior with explicit retryable/terminal state, attempt count, last attempt, resolution metadata, and paginated repository methods. Only genuinely retryable parse/OMDb outcomes may enter reprocessing; exclusions, parse-only records, confirmed type/year rejection, and already resolved records must not. Retention must not delete unresolved retry work merely because it is seven days old.
+Scope: AuditProposal model, fake and Firestore repositories, serialization/tests, Firestore indexes if required, and docs/ai/DATA_CONTRACTS.md. Document collection path `/auditProposals/{proposalId}`, allowed status transitions, occurrence-level validation metadata location, maximum evidence size of 32 KiB, and secret-redaction rules before implementing persistence.
 
-Before calling Gemini, resolve any manual mapping against the retained source context. A successful manual or AI/OMDb resolution must update the original log to terminal/resolved state and recreate the occurrence with its original feed entry ID, URL, feed type, timestamps, and deterministic ID. A failed attempt must update attempt state without creating a duplicate log. Deduplicate by source identity, not case-sensitive raw title.
+Contract: a proposal identifies sourceTitleId, exact occurrence IDs/raw-title cluster, current metadata, proposed resolved metadata, deterministic/AI evidence, numeric confidence, policy version, created/updated timestamps, and status. Use deterministic IDs derived from source title, cluster identity, and policy version. Allowed transitions are pending -> approved/rejected, approved -> applying, applying -> applied/failed, and failed -> pending; applied/rejected are terminal unless a documented new policy version creates a new proposal.
 
-Remove the hard-coded feed_type=movie and pass the stored type or unknown. Make --parse-only a run-level early exit and reject/normalize incompatible combinations such as --parse-only --mode all so no OMDb or Gemini call is possible.
+Non-goals: do not change recheck-existing, move occurrences, apply proposals, or add frontend approval UI.
 
-Add fake and Firestore repository contract tests plus scanner tests for manual mapping after an RSS item disappears, series retry, success resolution, retry failure, pagination, retention, provenance preservation, and parse-only/all. Keep AI schema validation itself for Prompt 6.
+Work: validate bounds and redaction at the repository boundary, implement fake/Firestore parity, and add only indexes demanded by actual queries.
+
+Tests: serialization round trips, deterministic reruns, status-transition rejection, evidence bounds/redaction, fake/Firestore repository contract, and required index/query behavior.
+
+Done when: proposal persistence is independently green and the contract is complete enough for Prompt 7B to write proposals without inventing fields.
 ```
 
-## Prompt 6: Harden Gemini Contracts and Rate Control
+## Prompt 7B: Audit Occurrence Clusters
 
 ```text
-Goal: make all AI outputs explicit, complete, confidence-aware, and fail-closed.
+Goal: replace title-level audit decisions with idempotent occurrence-level review.
 
-Create one validation layer for batch_extract_titles, batch_validate_omdb_matches, and batch_recheck_matches. For every request, require exactly one response for each requested ID, no unknown/duplicate IDs, all required fields with correct types/ranges, and a supported confidence value. Add numeric confidence to the audit schema. Convert malformed, partial, low-confidence, blocked, or empty responses into typed AI failure/needs_review outcomes; callers must never use permissive .get(..., True) defaults.
+Scope: recheck-existing orchestration, occurrence validation metadata, AuditProposal integration, focused scanner tests, and directly affected docs. Group occurrences by a documented meaningful source/raw-title identity and evaluate every cluster independently; never infer all occurrences from the first one. Valid clusters receive validation metadata and policy version. Ambiguous or mismatched clusters create/update pending proposals and never move or delete catalog data.
 
-Define the exact confidence type and thresholds, for example a finite numeric value in the inclusive 0..1 range, with operation-specific minimums documented in the contract. Treat raw titles and OMDb text as data rather than instructions, bound their size, cap response-body size, and validate schema-compliant but semantically invalid output. Make the standalone files in `backend/src/movies_feed/prompts/` or the inline templates one documented source of truth, not two divergent prompt implementations. Send the Gemini key through a header rather than a URL query parameter.
+Contract: a title is aggregate-validated only when every current cluster is valid under the current policy version. Adding or changing an occurrence invalidates that aggregate state. Titles without occurrences follow the explicit orphan `needs_review` policy. `audit_days` uses observation recency, not publication time. Counters distinguish clusters checked, valid clusters, proposals, retryable failures, and orphans.
 
-Revise prompts to state that a series raw year can be a later season year, while OMDb's year is commonly the first broadcast year. The model must not invalidate a series solely for that difference. Let the deterministic match policy decide known type/year cases; call AI only for genuinely ambiguous title identity.
+Non-goals: do not apply approved proposals, delete titles, move occurrences, or redesign proposal state transitions.
 
-Enforce configured inter-request delay and a clear retry/cooldown policy through injectable clock/sleep dependencies so tests remain fast. Distinguish retryable 429/5xx/timeouts from terminal authentication/model errors, and expose accurate call/item statistics.
+Work: keep the phase idempotent, preserve source context in evidence, and ensure a repeated audit updates the same proposal rather than duplicating it.
 
-Add tests for missing, duplicate, extra, and wrong-type IDs; low confidence; series season years; timeout then success; quota exhaustion; forbidden response; enforced delay; and caller fail-closed behavior. Keep prompts concise and structured to control Flash token usage.
+Tests: mixed-validity clusters, multiple seasons, new-occurrence invalidation, orphan titles, idempotent reruns, policy-version changes, observation-based audit-days, and catalog immutability.
+
+Done when: each occurrence cluster is independently classified, proposals are stable across reruns, and narrow plus full backend tests pass.
 ```
 
-## Prompt 7: Audit Occurrence Clusters into Proposals
+## Prompt 8A: Implement the Proposal Application Service
 
 ```text
-Goal: replace title-level destructive audit with idempotent, occurrence-level review proposals.
+Goal: add a backend-only, recoverable executor using repository interfaces and fake repositories first.
 
-Introduce an AuditProposal model and repository implementations for fake and Firestore storage. A proposal should identify the source title, exact occurrence IDs/raw-title cluster, current metadata, proposed resolved metadata, deterministic/AI evidence, confidence, policy version, timestamps, and status such as pending, approved, rejected, applying, applied, or failed. Use deterministic IDs so reruns update the same proposal instead of duplicating it.
+Scope: application service, proposal state machine abstractions, fake-repository tests, and directly affected contract documentation. Re-read and verify source title, named occurrence IDs, policy version, and approved target before writing. Move only named occurrences, preserve source identity/timestamps, merge into an existing target using repository semantics, and remove the old title only when it has no remaining occurrences.
 
-Document the proposal collection path, allowed status transitions, indexes, maximum evidence size, secret-redaction rules, and the exact location of occurrence-level validation metadata in `docs/ai/DATA_CONTRACTS.md` before writing the repository.
+Contract: approved -> applying -> applied or failed is idempotent; stale source data returns to review/failed without applying old evidence. Dry-run produces a plan with zero repository mutation. Confirmed rejection changes only proposal state. Same source/target is a no-op with an explicit result. A repeated or interrupted application must be recoverable.
 
-Change recheck-existing to group a title's occurrences by meaningful source/raw-title identity and evaluate each cluster independently. Never infer the validity of all occurrences from the first one. Valid clusters receive occurrence-level validation metadata and policy version. Ambiguous or mismatched clusters create/update pending proposals without moving or deleting catalog records. A title is aggregate-validated only when every current cluster is valid under the current policy version; adding/changing an occurrence invalidates that aggregate state.
+Non-goals: do not add frontend UI, Firestore-specific leases, or destructive production enablement in this stage.
 
-Titles without occurrences must follow an explicit orphan needs_review policy. The audit_days filter must use observation recency, not publication time. Ensure the phase is idempotent and its counters distinguish checked clusters, valid clusters, proposals, retryable failures, and orphans.
+Work: make the service return explicit planned/applied/skipped/failed outcomes and keep failure details bounded and secret-free.
 
-Add mixed-validity, multiple-season, new-occurrence invalidation, orphan, idempotent rerun, policy-version, and audit-days tests. Do not implement application of approved proposals yet.
+Tests: partial cluster moves, target already exists, same source/target, stale proposal, repeated/interrupted execution, last-occurrence cleanup, batch-like failure, confirmed rejection, and dry-run.
+
+Done when: fake-repository application behavior is complete and deterministic, with no Firestore or live-service dependency in the tests.
 ```
 
-## Prompt 8: Apply Approved Repairs Safely
+## Prompt 8B: Add Firestore Concurrency and Operator Controls
 
 ```text
-Goal: add a recoverable executor for explicitly approved audit proposals.
+Goal: make approved-repair execution safe under concurrency and platform limits.
 
-Implement a backend-only application service and CLI mode/command that processes approved AuditProposal records. It must re-read and verify the proposal's source title, occurrence IDs, policy version, and approved target before writing. Use an idempotent state transition (approved -> applying -> applied or failed), and make rerunning after interruption safe.
+Scope: Firestore proposal repository/application adapter, CLI command or mode, emulator tests, operational documentation, and no frontend files. Use a compare-and-set/lease transition for applying, define stale-lease recovery, and prevent two proposals from moving the same occurrence concurrently. Document exact failure-point behavior for writes crossing Firestore batch limits.
 
-Use a compare-and-set/lease transition for `applying`, define recovery for stale applications, and prevent two proposals from moving the same occurrence concurrently. Document the exact failure point behavior for writes that span Firestore batch limits. Require an operator-visible backup/export or equivalent recovery checkpoint before enabling destructive application in production.
+Contract: require an operator-visible backup/export or equivalent recovery checkpoint before production destructive execution. The CLI must expose dry-run, confirmed rejection, bounded error reporting, and the documented exit status. A stale proposal must return to review/failed rather than apply old evidence.
 
-Move only the occurrences named by the proposal. Preserve their source identity and timestamps. Merge into the canonical target title using repository merge semantics. Remove the old title only when it has no remaining occurrences; otherwise retain and recompute its aggregate validation state. Use Firestore batches/transactions within platform limits and record enough failure detail for retry without exposing secrets. A stale proposal whose source changed must return to pending/failed review rather than applying old evidence.
+Non-goals: do not change proposal meaning, occurrence-cluster audit logic, or add browser approval UI.
 
-Dry-run must produce a plan with zero repository mutation. Confirmed rejection must leave catalog data untouched and only change proposal state. Add tests for partial cluster moves, target already exists, same source/target, stale proposal, interrupted/repeated application, last-occurrence cleanup, batch failure, and dry-run. Do not add frontend approval UI in this stage.
+Tests: emulator CAS/lease races, stale recovery, concurrent occurrence protection, batch-limit failure/retry, CLI dry-run, stale proposal, target merge, last-occurrence cleanup, and no-secret failure details.
+
+Done when: fake and emulator behavior agree, operator recovery is documented, and the complete backend suite plus emulator contract tests pass.
 ```
 
-## Prompt 9: Refine Parser and Single-Pass Ingestion
+## Prompt 9A: Make RSS Ingestion Single-Pass
 
 ```text
-Goal: use the bounded fetcher from Prompt 0C, parse each accepted RSS entry exactly once, and improve the known regex failures.
+Goal: use FeedFetcher and parse each accepted RSS entry once.
 
-Do not reimplement networking here. Integrate the FeedFetcher from Prompt 0C and ensure configured Firestore URLs cannot bypass its code-owned policy.
+Scope: scanner RSS ingestion, a typed parsed-entry context, focused fetcher/scanner tests, and directly affected docs. Do not reimplement networking; configured URLs must continue through the code-owned FeedFetcher. Apply force_days before title parsing when a source date exists, create one parsed context per source item, and reuse it for cache prefetch and processing. Remove the duplicate prefetch parse path.
 
-Create one parsed entry context per source item. Apply force_days before title parsing when a source date exists, then parse once and reuse the same result for cache prefetch and processing. Remove the duplicate prefetch parse path.
+Contract: each accepted entry is parsed exactly once; the same parsed context drives cache prefetch and processing, and force_days can prevent parsing when the source date is outside the window.
 
-Refine the parser around recognized trailing metadata instead of splitting/removing arbitrary text: preserve embedded title slashes such as Face/Off, preserve meaningful parentheses, require letters for a Latin candidate, validate a realistic year range, and avoid substring-only series detection. Return confidence/reason diagnostics and send low-confidence cases to retry/review rather than guessing.
+Non-goals: do not change parser heuristics, resolver behavior, retry selection, or the FeedFetcher security policy.
 
-Add table-driven parser corpus tests and fetcher tests for redirects, private IPs, oversized responses, timeout, bad status/content type, bozo feeds, entry limits, local fixtures, force_days, and one parse call per entry. Keep the existing valid fixtures passing.
+Work: make parse errors and source metadata travel with the single context, while preserving current valid fixture behavior and parse-only isolation.
+
+Tests: force_days before parse, one parse call per entry, same parsed result used for prefetch/processing, source publication handling, redirects/private IP/size/timeout/status/content-type/bozo/entry-limit fixtures, and parse-only no-API behavior.
+
+Done when: each accepted entry has one parse result, no untrusted URL bypasses FeedFetcher, and narrow plus full backend tests pass.
 ```
 
-## Prompt 10: Converge Modes, Metrics, and Operations
+## Prompt 9B: Refine Parser Heuristics and Confidence
 
 ```text
-Goal: finish with ScannerService as orchestration over the shared components and make operational behavior truthful.
+Goal: fix known title-parser failures without mixing parser work with networking.
 
-Remove remaining duplicate matching, validation, lookup, and persistence branches now that the shared policy, resolver, source context, retry workflow, AI contracts, and audit services exist. Keep mode handlers small and explicit. For mode=all, snapshot each phase's eligible input at run start or define another deterministic boundary so RSS/audit failures created during the run are not immediately reprocessed or recreated by a later phase unless explicitly requested.
+Scope: backend/src/movies_feed/rutracker_parser.py, parser result types, the smallest affected scanner/retry adapter, corpus tests, and parser documentation. Parse around recognized trailing metadata instead of arbitrary slash splitting/removal. Preserve embedded title slashes such as Face/Off, meaningful parentheses, and valid multi-language titles; require letters for a Latin candidate, validate a realistic year range, and avoid substring-only series detection.
 
-Add phase-level status and counters for attempted/completed/skipped/failed work, cache hits, actual HTTP calls, AI calls/items, retries, proposals, and applied repairs. Any stopped AI/OMDb phase or incomplete batch must prevent a succeeded status. Ensure dry-run and fake-repo counters describe planned creates/updates/moves rather than claiming every item is new.
+Contract: return parse confidence and stable reason diagnostics. Low-confidence or ambiguous parses go to retry/review rather than silently guessing. Keep configured known feed type authoritative and preserve existing valid fixtures.
 
-Update scripts/run_scanner.ps1, scripts/run_scanner.sh, LOCAL_DEVELOPMENT.md, DEPLOYMENT.md, docs/ai/*.md, and the active GitHub workflow to use the package CLI, valid arguments, explicit emulator project IDs, documented exit codes, and current model catalog. Clearly mark legacy execution unsupported or remove only references proven unused; do not silently delete user data or unrelated legacy artifacts.
+Non-goals: do not reimplement FeedFetcher, change OMDb resolver/cache behavior, redesign AI schemas, or change audit/proposal application.
 
-Define the phase boundary for mode=all concretely: snapshot audit/reparse eligibility at the beginning of each phase, tag writes with the current run ID, and exclude logs/titles created by the same run unless an explicit option requests same-run chaining. A phase that is skipped, stopped, incomplete, or blocked must be visible in counters, ScanRun status, and the process exit code.
+Tests: table-driven corpus for embedded slashes, parentheses, numeric-only candidates, invalid years, series markers in the wrong place, multilingual titles, quality/rip tags, confidence/reasons, and low-confidence routing.
 
-Run the complete backend suite and add one end-to-end fake-repository test for each mode plus all. Check that no production test performs live network calls. Summarize any intentionally deferred migration, frontend review UI, or Firestore index/rules work.
+Done when: the parser corpus is green, existing valid fixtures remain green, and no network or catalog-repair code was refactored unnecessarily.
+```
+
+## Prompt 10A: Converge Phase Boundaries and Metrics
+
+```text
+Goal: finish ScannerService as orchestration over shared components and make run status truthful.
+
+Scope: scanner/CLI run models and orchestration, phase-focused tests, and docs/ai contracts. Remove remaining duplicate matching, validation, lookup, and persistence branches only where the shared policy/resolver/source-context/retry/AI/proposal services already own the behavior. Keep mode handlers small and explicit.
+
+Contract: mode=all snapshots each phase's eligible input at that phase's start, tags writes with the current run ID, and excludes same-run writes from later phases unless an explicit option enables chaining. Phase status and counters expose attempted/completed/skipped/failed work, cache hits, actual HTTP calls, AI calls/items, retries, proposals, and applied repairs. Any stopped/incomplete AI or OMDb phase prevents succeeded. Dry-run counters describe planned creates/updates/moves rather than claiming every item is new.
+
+Non-goals: do not modify shell scripts, deployment documentation, workflow YAML, or frontend approval UI.
+
+Work: add phase boundaries and counters without changing catalog decisions, and preserve the process exit-code contract.
+
+Tests: one end-to-end fake-repository test for rss, recheck-existing, reparse-unfound, apply-proposals, and all; same-run exclusion; stopped-phase status; actual HTTP/cache/AI counters; and truthful dry-run plans. Assert no production test uses live services.
+
+Done when: all modes expose truthful phase results, mode=all is deterministic, and the full backend suite is green.
+```
+
+## Prompt 10B: Align Operations, Scripts, and Documentation
+
+```text
+Goal: make local/CI operations use the active package backend and match the verified contracts.
+
+Scope: scripts/run_scanner.ps1, scripts/run_scanner.sh, LOCAL_DEVELOPMENT.md, DEPLOYMENT.md, docs/ai/*.md, the active GitHub workflow, and deterministic workflow/command tests. Use the package CLI, valid arguments, explicit emulator project IDs, documented exit codes, current Gemini model catalog, and the completed phase/resolver/retry/proposal contracts. Clearly mark legacy execution unsupported or remove only references proven unused; never silently delete data.
+
+Contract: every documented command must match the active CLI and verified exit-code/configuration contracts; operational examples must not expose secrets or imply that legacy execution is supported.
+
+Non-goals: do not add new scanner business logic, change proposal semantics, or modify unrelated legacy artifacts.
+
+Work: update commands and examples, add static validation for workflow/argument drift, document intentionally deferred migrations/frontend review UI/indexes, and verify that no operational example exposes secrets or uses a live service in tests.
+
+Tests: script argument checks, workflow static checks, package CLI smoke tests with fake/emulator dependencies, full backend suite, and the repository's frontend/rules checks when available. Run git diff --check for this documentation/workflow stage and use actionlint when installed.
+
+Done when: documented commands are executable, CI and local commands agree, all required checks pass, and remaining risks are explicitly recorded.
 ```
 
 ## Suggested Checkpoint After Each Prompt
 
-1. Review the diff for unrelated changes.
-2. Run the narrow tests named by the stage.
-3. Run `python -m unittest discover -s backend/tests -v`.
-4. Update `docs/BACKEND_PARSING_PIPELINES.md` when behavior changes.
-5. Run `git diff --check`; when workflow files change, run an available YAML/workflow linter or a deterministic static validation script.
-6. Update the owning `docs/ai` contract in the same stage for every new field, ID version, status, index, or migration rule.
-7. Start the next prompt only with a green suite or a documented environment-only blocker.
+1. Confirm the prerequisite, scope, and `Non-goals`; state the local hypothesis and cheap discriminating check.
+2. Add or update focused tests for the contract before broad implementation where practical.
+3. Review the diff for unrelated changes and verify that only the named files plus directly affected contract documentation changed.
+4. Run the narrow tests named by the stage first; repair that slice before widening validation.
+5. Run `python -m unittest discover -s backend/tests -v` from the repository root after narrow tests pass.
+6. Update `docs/BACKEND_PARSING_PIPELINES.md` and the owning `docs/ai` contract for every behavior, field, ID version, status, index, or migration rule.
+7. Run `git diff --check`; for workflow stages, run an available YAML/workflow linter or the repository's deterministic static validation script.
+8. Mark the stage complete only when its `Done when` criteria pass. Start the next stage only with a green suite or a documented environment-only blocker.
