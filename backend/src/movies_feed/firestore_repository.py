@@ -17,11 +17,17 @@ from .repository import (
 )
 
 
-def get_firestore_client(project_id: str = "demo-project") -> firestore.firestore.Client:
+def get_firestore_client(
+    project_id: str = "demo-project", database_id: Optional[str] = None
+) -> firestore.firestore.Client:
     """Initializes and returns a Firestore client.
 
     Supports the local Firestore emulator if FIRESTORE_EMULATOR_HOST is set.
     """
+    raw_db_id = database_id or os.environ.get("FIRESTORE_DATABASE_ID") or os.environ.get("FIREBASE_DATABASE_ID")
+    # If the user or env sets "(default)", "%28default%29", or empty string, treat it as default database
+    db_id = raw_db_id if raw_db_id and raw_db_id not in ("(default)", "%28default%29") else None
+
     if not firebase_admin._apps:
         if os.environ.get("FIRESTORE_EMULATOR_HOST"):
             if not os.environ.get("GCLOUD_PROJECT"):
@@ -53,6 +59,9 @@ def get_firestore_client(project_id: str = "demo-project") -> firestore.firestor
             firebase_admin.initialize_app(cred, {"projectId": project_id})
         else:
             firebase_admin.initialize_app()
+
+    if db_id:
+        return firestore.client(database_id=db_id)
     return firestore.client()
 
 
