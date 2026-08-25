@@ -6,7 +6,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    envPrefix: ['VITE_', 'OMDB_API_KEY'],
+    envPrefix: 'VITE_',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {

@@ -43,6 +43,7 @@ describe("MoviesFeed Firestore Rules", () => {
       await db.collection("allowlist").doc(uid).set({
         enabled: true,
         email,
+        role: "reader",
       });
     });
     return testEnv.authenticatedContext(uid, { email }).firestore();
@@ -54,6 +55,19 @@ describe("MoviesFeed Firestore Rules", () => {
       await db.collection("allowlist").doc(uid).set({
         enabled: false,
         email,
+        role: "reader",
+      });
+    });
+    return testEnv.authenticatedContext(uid, { email }).firestore();
+  };
+
+  const setupAdminUser = async (uid: string, email: string) => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      await db.collection("allowlist").doc(uid).set({
+        enabled: true,
+        email,
+        role: "admin",
       });
     });
     return testEnv.authenticatedContext(uid, { email }).firestore();
@@ -62,6 +76,18 @@ describe("MoviesFeed Firestore Rules", () => {
   describe("Unauthenticated access", () => {
     it("denies catalog read", async () => {
       await assertFails(unauthDb().collection("titles").doc("tt123").get());
+    });
+
+    it("denies settings and manual-mapping writes", async () => {
+      await assertFails(unauthDb().collection("titles").doc("settings_config").set({
+        updatedBy: "anonymous",
+      }));
+      await assertFails(unauthDb().collection("manualMappings").doc("mapping-1").set({
+        rawTitle: "The Matrix",
+        imdbId: "tt0133093",
+        createdAt: new Date(),
+        createdBy: "anonymous",
+      }));
     });
     
     it("denies allowlist read", async () => {
@@ -78,6 +104,19 @@ describe("MoviesFeed Firestore Rules", () => {
     it("denies disabled user catalog read", async () => {
       const db = await setupDisabledUser("user-123", "user@example.com");
       await assertFails(db.collection("titles").doc("tt123").get());
+    });
+
+    it("denies disabled user settings and manual-mapping writes", async () => {
+      const db = await setupDisabledUser("user-123", "user@example.com");
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        updatedBy: "user-123",
+      }));
+      await assertFails(db.collection("manualMappings").doc("mapping-1").set({
+        rawTitle: "The Matrix",
+        imdbId: "tt0133093",
+        createdAt: new Date(),
+        createdBy: "user-123",
+      }));
     });
   });
 
@@ -100,11 +139,50 @@ describe("MoviesFeed Firestore Rules", () => {
   });
 
   describe("Client writes denied (catalog/cache/scan)", () => {
-    it("denies write to titles but allows settings_config", async () => {
+    it("denies catalog and settings writes for a reader", async () => {
       const db = await setupAllowlistedUser("user-456", "admin@example.com");
       await assertFails(db.collection("titles").doc("tt123").set({ title: "Hack" }));
-      await assertSucceeds(db.collection("titles").doc("settings_config").set({ config: "test" }));
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        rssFeeds: {},
+        excludedGenres: [],
+        excludedCountries: [],
+        minMovieRating: 0,
+        minSeriesRating: 0,
+        minImdbVotes: 0,
+        updatedBy: "user-456",
+      }));
       await assertFails(db.collection("titles").doc("tt123").collection("occurrences").doc("occ1").set({ rawTitle: "Hack" }));
+    });
+
+    it("allows an admin to write valid settings", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      await assertSucceeds(db.collection("titles").doc("settings_config").set({
+        rssFeeds: {
+          movies: { url: "https://feed.example.test/movies.atom", type: "movie" },
+        },
+        excludedGenres: ["Horror"],
+        excludedCountries: ["India"],
+        minMovieRating: 6.5,
+        minSeriesRating: 7,
+        minImdbVotes: 0,
+        updatedBy: "admin-456",
+      }));
+    });
+
+    it("rejects malformed and extra settings fields", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const valid = {
+        rssFeeds: {},
+        excludedGenres: [],
+        excludedCountries: [],
+        minMovieRating: 0,
+        minSeriesRating: 0,
+        minImdbVotes: 0,
+        updatedBy: "admin-456",
+      };
+      await assertFails(db.collection("titles").doc("settings_config").set({ ...valid, extra: true }));
+      await assertFails(db.collection("titles").doc("settings_config").set({ ...valid, minMovieRating: 11 }));
+      await assertFails(db.collection("titles").doc("settings_config").set({ ...valid, updatedBy: "other-user" }));
     });
     
     it("denies write to omdbCache", async () => {
@@ -115,6 +193,43 @@ describe("MoviesFeed Firestore Rules", () => {
     it("denies write to scanRuns", async () => {
       const db = await setupAllowlistedUser("user-456", "admin@example.com");
       await assertFails(db.collection("scanRuns").doc("run1").set({ status: "running" }));
+    });
+
+    it("allows readers to read but not write manual mappings", async () => {
+      const db = await setupAllowlistedUser("user-456", "admin@example.com");
+      await assertFails(db.collection("manualMappings").doc("mapping-1").set({
+        rawTitle: "The Matrix",
+        imdbId: "tt0133093",
+        createdAt: new Date(),
+        createdBy: "user-456",
+      }));
+    });
+
+    it("allows admins to create and delete valid manual mappings", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const mapping = db.collection("manualMappings").doc("mapping-1");
+      await assertSucceeds(mapping.set({
+        rawTitle: "The Matrix",
+        imdbId: "tt0133093",
+        createdAt: new Date(),
+        parsedTitle: "The Matrix",
+        parsedYear: 1999,
+        createdBy: "admin-456",
+      }));
+      await assertSucceeds(mapping.delete());
+    });
+
+    it("rejects malformed, extra-field, and foreign-owner mappings", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const base = {
+        rawTitle: "The Matrix",
+        imdbId: "tt0133093",
+        createdAt: new Date(),
+        createdBy: "admin-456",
+      };
+      await assertFails(db.collection("manualMappings").doc("bad-id").set({ ...base, imdbId: "not-an-imdb-id" }));
+      await assertFails(db.collection("manualMappings").doc("extra-field").set({ ...base, extra: true }));
+      await assertFails(db.collection("manualMappings").doc("foreign-owner").set({ ...base, createdBy: "other-user" }));
     });
   });
 

@@ -34,6 +34,9 @@ SUPPORTED_MODES = frozenset({"rss", "recheck-existing", "reparse-unfound", "all"
 AI_MODES = frozenset({"recheck-existing", "reparse-unfound", "all"})
 OMDB_MODES = frozenset({"rss", "recheck-existing", "reparse-unfound", "all"})
 MAX_SCANNER_DAYS = 30
+MAX_SETTINGS_FEEDS = 20
+MAX_SETTINGS_LIST_ITEMS = 100
+MAX_SETTINGS_TEXT_LENGTH = 500
 
 EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
@@ -125,6 +128,79 @@ def _sanitize_diagnostic(message: Any, environment: Optional[Mapping[str, str]] 
             result = result.replace(secret, "[REDACTED]")
     return re.sub(r"([?&](?:key|apikey|api_key)=)[^&\s]+", r"\1[REDACTED]", result, flags=re.IGNORECASE)
 
+
+def validate_settings_document(data: Any) -> Dict[str, Any]:
+    """Validate untrusted Firestore scanner settings before they affect a run."""
+    if not isinstance(data, dict):
+        raise ConfigurationError("Firestore settings must be an object")
+
+    allowed_fields = {
+        "rssFeeds",
+        "excludedGenres",
+        "excludedCountries",
+        "minMovieRating",
+        "minSeriesRating",
+        "minImdbVotes",
+        "updatedBy",
+    }
+    if set(data) - allowed_fields:
+        raise ConfigurationError("Firestore settings contain unsupported fields")
+
+    feeds = data.get("rssFeeds")
+    if feeds is not None:
+        if not isinstance(feeds, dict) or len(feeds) > MAX_SETTINGS_FEEDS:
+            raise ConfigurationError("Firestore settings contain too many RSS feeds")
+        for feed_name, feed in feeds.items():
+            if (
+                not isinstance(feed_name, str)
+                or not feed_name.strip()
+                or len(feed_name) > MAX_SETTINGS_TEXT_LENGTH
+                or not isinstance(feed, dict)
+                or set(feed) != {"url", "type"}
+                or not isinstance(feed["url"], str)
+                or not 1 <= len(feed["url"]) <= 2048
+                or feed["type"] not in ("movie", "series")
+            ):
+                raise ConfigurationError("Firestore settings contain an invalid RSS feed")
+
+    for field_name in ("excludedGenres", "excludedCountries"):
+        values = data.get(field_name)
+        if values is not None:
+            if not isinstance(values, list) or len(values) > MAX_SETTINGS_LIST_ITEMS:
+                raise ConfigurationError(f"Firestore settings contain an invalid {field_name} list")
+            if any(
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > MAX_SETTINGS_TEXT_LENGTH
+                for value in values
+            ):
+                raise ConfigurationError(f"Firestore settings contain an invalid {field_name} value")
+
+    for field_name in ("minMovieRating", "minSeriesRating"):
+        value = data.get(field_name)
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not 0 <= value <= 10
+        ):
+            raise ConfigurationError(f"Firestore settings contain an invalid {field_name}")
+
+    min_votes = data.get("minImdbVotes")
+    if min_votes is not None and (
+        isinstance(min_votes, bool)
+        or not isinstance(min_votes, int)
+        or not 0 <= min_votes <= 1_000_000_000
+    ):
+        raise ConfigurationError("Firestore settings contain an invalid minImdbVotes")
+
+    updated_by = data.get("updatedBy")
+    if updated_by is not None and (
+        not isinstance(updated_by, str) or not 0 < len(updated_by) <= 128
+    ):
+        raise ConfigurationError("Firestore settings contain an invalid updatedBy")
+
+    return dict(data)
+
 def load_config(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -177,13 +253,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             doc_snap = doc_ref.get()
             if doc_snap.exists:
                 data = doc_snap.to_dict()
-                logger.info("Loaded custom configuration from Firestore 'titles/settings_config'.")
-                if "rssFeeds" in data:
-                    rss_feeds = data["rssFeeds"]
-                if "excludedCountries" in data:
-                    excluded_countries = data["excludedCountries"]
-                if "excludedGenres" in data:
-                    excluded_genres = data["excludedGenres"]
+                try:
+                    validated_settings = validate_settings_document(data)
+                except ConfigurationError as exc:
+                    logger.warning(
+                        "Ignoring invalid Firestore settings (%s); using local configuration",
+                        type(exc).__name__,
+                    )
+                else:
+                    logger.info("Loaded custom configuration from Firestore 'titles/settings_config'.")
+                    if "rssFeeds" in validated_settings:
+                        rss_feeds = validated_settings["rssFeeds"]
+                    if "excludedCountries" in validated_settings:
+                        excluded_countries = validated_settings["excludedCountries"]
+                    if "excludedGenres" in validated_settings:
+                        excluded_genres = validated_settings["excludedGenres"]
         except Exception as e:
             logger.warning(
                 "Could not load custom settings from Firestore titles/settings_config "

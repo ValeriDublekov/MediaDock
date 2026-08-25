@@ -10,6 +10,8 @@ service cloud.firestore {
       return isAuthenticated() &&
              exists(/databases/$(database)/documents/allowlist/$(request.auth.uid)) &&
              get(/databases/$(database)/documents/allowlist/$(request.auth.uid)).data.enabled == true &&
+             (!('role' in get(/databases/$(database)/documents/allowlist/$(request.auth.uid)).data) ||
+              get(/databases/$(database)/documents/allowlist/$(request.auth.uid)).data.role in ['reader', 'admin']) &&
              (
                !("email" in request.auth.token) || 
                request.auth.token.email == null || 
@@ -17,9 +19,56 @@ service cloud.firestore {
              );
     }
 
+    function isAdmin() {
+      return isAllowlisted() &&
+             get(/databases/$(database)/documents/allowlist/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function validSettings(data) {
+      return data.keys().hasOnly([
+               'rssFeeds',
+               'excludedGenres',
+               'excludedCountries',
+               'minMovieRating',
+               'minSeriesRating',
+               'minImdbVotes',
+               'updatedBy'
+             ]) &&
+             data.rssFeeds is map && data.rssFeeds.keys().size() <= 20 &&
+             data.excludedGenres is list && data.excludedGenres.size() <= 100 &&
+             data.excludedCountries is list && data.excludedCountries.size() <= 100 &&
+             data.minMovieRating is number && data.minMovieRating >= 0 && data.minMovieRating <= 10 &&
+             data.minSeriesRating is number && data.minSeriesRating >= 0 && data.minSeriesRating <= 10 &&
+             data.minImdbVotes is number && data.minImdbVotes >= 0 && data.minImdbVotes <= 1000000000 &&
+             data.updatedBy is string && data.updatedBy.size() > 0 && data.updatedBy.size() <= 128;
+    }
+
+    function validManualMapping(data) {
+      return data.keys().hasOnly([
+               'rawTitle',
+               'imdbId',
+               'createdAt',
+               'parsedTitle',
+               'parsedYear',
+               'createdBy'
+             ]) &&
+             data.rawTitle is string && data.rawTitle.size() > 0 && data.rawTitle.size() <= 500 &&
+             data.imdbId is string && data.imdbId.matches('^tt[0-9]{7,10}$') &&
+             data.createdAt is timestamp &&
+             (!('parsedTitle' in data) || data.parsedTitle == null ||
+              (data.parsedTitle is string && data.parsedTitle.size() <= 500)) &&
+             (!('parsedYear' in data) || data.parsedYear == null ||
+              (data.parsedYear is number && data.parsedYear >= 1880 && data.parsedYear <= 2200)) &&
+             data.createdBy is string && data.createdBy.size() > 0 && data.createdBy.size() <= 128;
+    }
+
     match /titles/{titleId} {
       allow read: if isAllowlisted();
-      allow write: if isAllowlisted() && titleId == 'settings_config';
+      allow create, update: if titleId == 'settings_config' &&
+                              isAdmin() &&
+                              validSettings(request.resource.data) &&
+                              request.resource.data.updatedBy == request.auth.uid;
+      allow delete: if false;
       
       match /occurrences/{occurrenceId} {
         allow read: if isAllowlisted();
@@ -41,7 +90,15 @@ service cloud.firestore {
     }
 
     match /manualMappings/{mappingId} {
-      allow read, write: if isAllowlisted();
+      allow read: if isAllowlisted();
+      allow create: if isAdmin() &&
+                    validManualMapping(request.resource.data) &&
+                    request.resource.data.createdBy == request.auth.uid;
+      allow update: if isAdmin() &&
+                    validManualMapping(request.resource.data) &&
+                    resource.data.createdBy == request.auth.uid &&
+                    request.resource.data.createdBy == resource.data.createdBy;
+      allow delete: if isAdmin();
     }
     
     match /allowlist/{userId} {

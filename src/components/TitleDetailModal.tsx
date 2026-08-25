@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Title, Occurrence, CatalogRepository } from '../domain/catalog';
 import { firestoreCatalogAdapter } from '../adapters/firestoreCatalogAdapter';
-import { updateTitleWithOmdb, saveTitleManualMapping } from '../adapters/omdbAdapter';
+import { saveTitleManualMapping } from '../adapters/omdbAdapter';
 import { PosterImage } from './PosterImage';
 import {
   Star,
@@ -10,7 +10,6 @@ import {
   Award,
   Clock,
   Globe,
-  RefreshCw,
   Edit2,
   Check,
   X,
@@ -22,7 +21,6 @@ import {
   Layers,
   Sparkles,
   EyeOff,
-  Key,
   CheckCircle2,
 } from 'lucide-react';
 
@@ -56,8 +54,6 @@ export const TitleDetailModal: React.FC<TitleDetailModalProps> = ({
   const [editImdbId, setEditImdbId] = useState(title.imdbId || '');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const [inlineOmdbKey, setInlineOmdbKey] = useState('');
-  const [showKeyInput, setShowKeyInput] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -65,7 +61,6 @@ export const TitleDetailModal: React.FC<TitleDetailModalProps> = ({
     setEditImdbId(title.imdbId || '');
     setRefreshError(null);
     setSuccessMessage(null);
-    setShowKeyInput(false);
   }, [title]);
 
   // Handle ESC key press to close modal
@@ -106,56 +101,6 @@ export const TitleDetailModal: React.FC<TitleDetailModalProps> = ({
 
   if (!isOpen) return null;
 
-  const getClientApiKey = () => {
-    return (
-      localStorage.getItem('movies_feed_omdb_api_key') ||
-      import.meta.env.VITE_OMDB_API_KEY ||
-      import.meta.env.OMDB_API_KEY ||
-      ''
-    );
-  };
-
-  const handleRefreshOmdb = async (targetImdbId?: string, explicitApiKey?: string) => {
-    const apiKey = explicitApiKey || getClientApiKey();
-    const idToUse = targetImdbId || editImdbId || currentTitle.imdbId;
-
-    if (!apiKey) {
-      setShowKeyInput(true);
-      setRefreshError('Missing OMDb API Key. Set it in Scanner Settings or enter below.');
-      return;
-    }
-
-    if (!idToUse) {
-      setRefreshError('No IMDb ID available to refresh.');
-      return;
-    }
-
-    setIsRefreshing(true);
-    setRefreshError(null);
-    setSuccessMessage(null);
-    try {
-      const updatedTitleData = await updateTitleWithOmdb(currentTitle, idToUse, apiKey);
-      if (updatedTitleData) {
-        setCurrentTitle(updatedTitleData);
-      }
-      setIsEditingId(false);
-      setShowKeyInput(false);
-      setSuccessMessage('Метаданните бяха успешно обновени от OMDb!');
-    } catch (err: any) {
-      setRefreshError(err.message || 'Failed to update from OMDb');
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
-
-  const handleSaveKeyAndRefresh = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const key = inlineOmdbKey.trim();
-    if (!key) return;
-    localStorage.setItem('movies_feed_omdb_api_key', key);
-    await handleRefreshOmdb(editImdbId, key);
-  };
-
   const handleSaveMappingOnly = async () => {
     const idToUse = editImdbId.trim() || currentTitle.imdbId;
     if (!idToUse) return;
@@ -166,7 +111,6 @@ export const TitleDetailModal: React.FC<TitleDetailModalProps> = ({
     try {
       await saveTitleManualMapping(currentTitle, idToUse);
       setIsEditingId(false);
-      setShowKeyInput(false);
       setSuccessMessage(`IMDb ID (${idToUse}) беше запазен като мапинг в Firestore! Скенерът в GitHub Actions ще извлече метаданните при следващото сканиране.`);
     } catch (err: any) {
       setRefreshError(err.message || 'Грешка при запис на мапинга.');
@@ -324,22 +268,6 @@ export const TitleDetailModal: React.FC<TitleDetailModalProps> = ({
                     <span>Edit IMDb ID</span>
                   </button>
 
-                  {currentTitle.imdbId && (
-                    <button
-                      type="button"
-                      onClick={() => handleRefreshOmdb()}
-                      disabled={isRefreshing}
-                      className="min-h-[40px] px-3 py-2 text-xs font-medium rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border border-neutral-700 flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
-                      title="Refresh metadata from OMDb"
-                    >
-                      {isRefreshing ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
-                      ) : (
-                        <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
-                      )}
-                      <span>Refresh</span>
-                    </button>
-                  )}
                 </div>
 
                 {isEditingId && (
@@ -354,7 +282,7 @@ export const TitleDetailModal: React.FC<TitleDetailModalProps> = ({
                         className="flex-1 px-2.5 py-1.5 bg-neutral-900 border border-neutral-700 rounded-lg text-xs font-mono text-neutral-100"
                       />
                       <button
-                        onClick={() => handleRefreshOmdb(editImdbId)}
+                        onClick={handleSaveMappingOnly}
                         disabled={!editImdbId || isRefreshing}
                         className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-neutral-950 rounded-lg text-xs font-semibold flex items-center gap-1"
                       >
@@ -371,46 +299,8 @@ export const TitleDetailModal: React.FC<TitleDetailModalProps> = ({
                 )}
 
                 {refreshError && (
-                  <div className="text-xs text-red-400 bg-red-950/50 p-2.5 rounded-xl border border-red-900/60 space-y-2">
-                    <div>{refreshError}</div>
-
-                    {showKeyInput && (
-                      <div className="pt-2 border-t border-red-900/40 space-y-2">
-                        <form onSubmit={handleSaveKeyAndRefresh} className="space-y-1.5">
-                          <label className="block text-[10px] text-neutral-300 font-semibold">
-                            Въведете OMDb API Key за вашия браузър:
-                          </label>
-                          <div className="flex gap-1.5">
-                            <input
-                              type="text"
-                              value={inlineOmdbKey}
-                              onChange={(e) => setInlineOmdbKey(e.target.value)}
-                              placeholder="OMDb API key..."
-                              className="flex-1 px-2 py-1 bg-neutral-900 border border-neutral-700 rounded text-xs font-mono text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-amber-500"
-                            />
-                            <button
-                              type="submit"
-                              disabled={!inlineOmdbKey.trim() || isRefreshing}
-                              className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-semibold rounded disabled:opacity-50"
-                            >
-                              Запази и обнови
-                            </button>
-                          </div>
-                        </form>
-
-                        <div className="flex items-center justify-between pt-1">
-                          <span className="text-[10px] text-neutral-400">или запишете без ключ:</span>
-                          <button
-                            type="button"
-                            onClick={handleSaveMappingOnly}
-                            disabled={isRefreshing}
-                            className="text-[11px] text-amber-400 hover:underline cursor-pointer"
-                          >
-                            Запази като мапинг за скенера
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                  <div className="text-xs text-red-400 bg-red-950/50 p-2.5 rounded-xl border border-red-900/60">
+                    {refreshError}
                   </div>
                 )}
 

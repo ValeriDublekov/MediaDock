@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Title, Occurrence, CatalogRepository } from '../domain/catalog';
 import { firestoreCatalogAdapter } from '../adapters/firestoreCatalogAdapter';
-import { updateTitleWithOmdb } from '../adapters/omdbAdapter';
 import { PosterImage } from './PosterImage';
 import { TitleDetailModal } from './TitleDetailModal';
-import { Star, ExternalLink, Download, Film, Layers, Award, Clock, Globe, RefreshCw, Edit2, Check, X, Loader2, Info, EyeOff } from 'lucide-react';
+import { Star, ExternalLink, Download, Film, Layers, Award, Clock, Globe, Info, EyeOff } from 'lucide-react';
 
 interface TitleCardProps {
   title: Title;
@@ -29,15 +28,10 @@ export const TitleCard: React.FC<TitleCardProps> = ({
   const [occurrences, setOccurrences] = useState<Occurrence[] | undefined>(initialOccurrences);
   const [isLoadingOccurrences, setIsLoadingOccurrences] = useState(false);
   const [showOccurrences, setShowOccurrences] = useState(false);
-  const [isEditingId, setIsEditingId] = useState(false);
-  const [editImdbId, setEditImdbId] = useState(title.imdbId || '');
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
 
   useEffect(() => {
     setCurrentTitle(title);
-    setEditImdbId(title.imdbId || '');
   }, [title]);
 
   useEffect(() => {
@@ -63,33 +57,6 @@ export const TitleCard: React.FC<TitleCardProps> = ({
       isMounted = false;
     };
   }, [initialOccurrences, repository, showOccurrences, currentTitle.id, occurrences]);
-
-  const handleRefreshOmdb = async (targetImdbId?: string) => {
-    const apiKey = localStorage.getItem('movies_feed_omdb_api_key') || import.meta.env.VITE_OMDB_API_KEY || import.meta.env.OMDB_API_KEY;
-    if (!apiKey) {
-      setRefreshError('Missing OMDb API Key. Set it in Scanner Settings.');
-      return;
-    }
-    const idToUse = targetImdbId || currentTitle.imdbId;
-    if (!idToUse) {
-      setRefreshError('No IMDb ID available to refresh.');
-      return;
-    }
-
-    setIsRefreshing(true);
-    setRefreshError(null);
-    try {
-      const updatedTitleData = await updateTitleWithOmdb(currentTitle, idToUse, apiKey);
-      if (updatedTitleData) {
-        setCurrentTitle(updatedTitleData);
-      }
-      setIsEditingId(false);
-    } catch (err: any) {
-      setRefreshError(err.message || 'Failed to update from OMDb');
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
 
   // Format media type label and badge style
   const formatMediaType = (type: string) => {
@@ -348,36 +315,6 @@ export const TitleCard: React.FC<TitleCardProps> = ({
                 <span className="flex-1 text-[11px] text-neutral-500 italic py-2">No IMDb Link</span>
               )}
 
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsEditingId(!isEditingId);
-                }}
-                className="w-11 h-11 flex items-center justify-center rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-neutral-200 border border-neutral-700 transition-colors"
-                title="Edit IMDb ID"
-              >
-                <Edit2 className="w-4 h-4" />
-              </button>
-              
-              {currentTitle.imdbId && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleRefreshOmdb();
-                  }}
-                  disabled={isRefreshing}
-                  className="w-11 h-11 flex items-center justify-center rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-neutral-200 border border-neutral-700 transition-colors disabled:opacity-50"
-                  title="Refresh from OMDb"
-                >
-                  {isRefreshing && !isEditingId ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <RefreshCw className="w-4 h-4" />
-                  )}
-                </button>
-              )}
             </div>
 
             {/* Torrent / Occurrences Trigger Button */}
@@ -398,40 +335,6 @@ export const TitleCard: React.FC<TitleCardProps> = ({
               </button>
             )}
           </div>
-
-          {/* Inline Edit Form */}
-          {isEditingId && (
-            <div className="flex items-center gap-2 mt-2 pt-2 border-t border-neutral-800" onClick={(e) => e.stopPropagation()}>
-              <input
-                type="text"
-                value={editImdbId}
-                onChange={(e) => setEditImdbId(e.target.value)}
-                placeholder="tt1234567"
-                className="flex-1 px-3 py-2 bg-neutral-950 border border-neutral-700 rounded-lg text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none focus:border-amber-500 font-mono"
-              />
-              <button
-                onClick={() => handleRefreshOmdb(editImdbId)}
-                disabled={!editImdbId || isRefreshing}
-                className="px-3 py-2 bg-amber-500 hover:bg-amber-400 text-neutral-950 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
-              >
-                {isRefreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                Save
-              </button>
-              <button
-                onClick={() => setIsEditingId(false)}
-                className="px-3 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded-lg text-sm font-medium transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-
-          {/* Refresh Error */}
-          {refreshError && (
-            <div className="text-xs text-red-400 mt-1 bg-red-950/40 p-2 rounded border border-red-900/50">
-              {refreshError}
-            </div>
-          )}
 
           {/* Occurrences / Torrent Downloads List */}
           {showOccurrences && (

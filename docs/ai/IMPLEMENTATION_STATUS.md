@@ -14,15 +14,17 @@ MVP wiring is present; production hardening is not complete.
 - P15: Integration and documentation audit identified open backend, workflow, authorization, and client-secret risks.
 - AI matcher: Gemini extraction/validation exists with inline prompts and a current default of `gemini-3.1-flash-lite`; see [`GEMINI_MODELS.md`](../GEMINI_MODELS.md).
 - Prompt 0A: Scanner workflow inputs, mode-aware CLI preflight, process exit codes, parse-only isolation, explicit emulator project IDs, and locked backend CI dependencies are implemented.
+- Prompt 0B: Reader/admin rules, validated scanner settings and manual mappings, authenticated `createdBy`/`updatedBy`, and removal of browser scanner credentials are implemented.
 
 ## Next Prompt
 
-Run Prompt 0B in `docs/BACKEND_REFACTORING_PROMPTS.md`, then 0C.
+Run Prompt 0C in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 
 - Firebase project identifiers and an authorized user account must be configured for production.
 - Browser-secret removal, role enforcement, and bounded RSS fetching remain open before production launch.
+- The Firestore rules emulator could not run in this local environment because Java is unavailable; CI installs Java 21 and runs the same rules test.
 
 
 ## Residual Risks

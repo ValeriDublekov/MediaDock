@@ -12,10 +12,9 @@
 This document contains the current storage contract. The implementation still
 has known legacy gaps that later stages must change explicitly: the cache key is
 currently type-less, parse logs do not yet carry complete source/retry context,
-there is no audit-proposal collection, and the documented allowlist role is not
-yet enforced by the current rules. A stage that changes any of these contracts
-must update this file, add emulator/fake compatibility tests, and document
-backward-read and migration behavior in the same change.
+and there is no audit-proposal collection. A stage that changes any of these
+contracts must update this file, add emulator/fake compatibility tests, and
+document backward-read and migration behavior in the same change.
 
 ## `titles/{titleId}`
 
@@ -45,6 +44,25 @@ ID rule:
 3. The fallback algorithm/version must have a unit test and must not silently change.
 
 The backend may merge refreshed metadata but must preserve `firstSeenAt`.
+
+## `titles/settings_config`
+
+This backward-compatible document stores scanner settings read by the backend.
+It is not a catalog title despite its location under `titles`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `rssFeeds` | map | At most 20 named entries; each entry has only a string `url` and `type` of `movie` or `series`, with URL length at most 2048. |
+| `excludedGenres`, `excludedCountries` | list of strings | At most 100 entries; each non-empty value is at most 500 characters. |
+| `minMovieRating`, `minSeriesRating` | number | Inclusive range `0..10`. |
+| `minImdbVotes` | integer | Inclusive range `0..1000000000`. |
+| `updatedBy` | string | Authenticated UID of the admin who wrote the document, at most 128 characters. |
+
+Allowlisted readers may read this document. Only allowlisted admins may create
+or update it, and the rules require `updatedBy == request.auth.uid`. Deletes are
+denied. The backend validates the same shape before applying an override; URL
+scheme, host, redirect, and IP policy belongs to the bounded fetcher in Prompt
+0C.
 
 ## `titles/{titleId}/occurrences/{occurrenceId}`
 
@@ -112,7 +130,7 @@ Prompt 5 introduces explicit terminal/retryable retention semantics.
 
 ## `manualMappings/{mappingId}`
 
-Manual IMDb ID override mappings provided by allowlisted users for unfound titles.
+Manual IMDb ID override mappings provided by admins for unfound titles.
 The current implementation deletes a mapping after a successful IMDb query; the
 target workflow consumes it only after filtering and durable catalog persistence
 succeed.
@@ -124,7 +142,12 @@ succeed.
 | `createdAt` | Timestamp | Creation timestamp |
 | `parsedTitle` | string or null | Parsed title if available |
 | `parsedYear` | number or null | Parsed year if available |
-| `createdBy` | string or null | UID or email of creator |
+| `createdBy` | string | Authenticated UID of the admin who created the mapping |
+
+Allowlisted readers may read mappings. Only allowlisted admins may create,
+update, or delete them. New writes require the exact field allowlist, an IMDb ID
+matching `^tt[0-9]{7,10}$`, bounded text fields, and `createdBy` bound to the
+authenticated UID. Existing documents remain readable for compatibility.
 
 ## `allowlist/{uid}`
 
@@ -132,7 +155,7 @@ succeed.
 | --- | --- | --- |
 | `email` | string | Auditable expected email |
 | `enabled` | boolean | Access switch |
-| `role` | string | Initially `reader`; reserved for explicit future roles |
+| `role` | string | `reader` or `admin`; a missing role is treated as a backward-compatible `reader` |
 
 Rules require authentication, matching UID, `enabled == true`, and an email match
 against the authenticated token where available. Allowlist writes are server-only.
@@ -183,6 +206,6 @@ this contract when introduced.
 | `omdbCache/**` | Denied | Denied | Allowed |
 | `scanRuns/**` | Denied by default | Denied | Allowed |
 | `parseLogs/**` | Allowlisted | Denied | Allowed |
-| `manualMappings/**` | Allowlisted | Allowlisted | Allowed |
+| `manualMappings/**` | Allowlisted | Admin only | Allowed |
 | `allowlist/**` | Own access check only | Denied | Allowed |
 | `users/{uid}/**` | Own validated paths | Future own validated paths | Optional |

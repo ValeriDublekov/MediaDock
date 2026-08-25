@@ -11,6 +11,7 @@ from movies_feed.cli import (
     _sanitize_diagnostic,
     exit_code_for_status,
     main,
+    validate_settings_document,
     validate_runtime_configuration,
 )
 from movies_feed.models import ScanRun
@@ -101,6 +102,29 @@ class TestCliConfiguration(unittest.TestCase):
         self.assertNotIn(secret, diagnostic)
         self.assertNotIn(f"?key={secret}", diagnostic)
         self.assertIn("[REDACTED]", diagnostic)
+
+    def test_firestore_settings_are_validated_before_use(self) -> None:
+        valid = {
+            "rssFeeds": {
+                "movies": {"url": "https://feed.example.test/movies.atom", "type": "movie"},
+            },
+            "excludedGenres": ["Horror"],
+            "excludedCountries": ["India"],
+            "minMovieRating": 6.5,
+            "minSeriesRating": 7,
+            "minImdbVotes": 0,
+            "updatedBy": "admin-456",
+        }
+        self.assertEqual(validate_settings_document(valid), valid)
+
+        for invalid in (
+            {**valid, "extra": True},
+            {**valid, "minMovieRating": 11},
+            {**valid, "rssFeeds": {"movies": {"url": "https://feed.example.test/movies.atom", "type": "invalid"}}},
+            {**valid, "excludedGenres": [""]},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(ConfigurationError):
+                validate_settings_document(invalid)
 
     def test_main_returns_status_exit_code(self) -> None:
         now = datetime.datetime.now(datetime.timezone.utc)

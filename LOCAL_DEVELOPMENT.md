@@ -16,10 +16,13 @@ Create a local environment file from the template:
 cp .env.example .env
 ```
 Populate `.env` with:
-- `OMDB_API_KEY`: Your OMDb API key for backend scanner.
+- `OMDB_API_KEY`: Your OMDb API key for the backend scanner only; never use a
+	`VITE_` variant.
 - `GEMINI_API_KEY`: Optional for RSS-only work; required for AI scanner modes.
 - `GEMINI_MODEL`: Optional approved model override; see [docs/GEMINI_MODELS.md](docs/GEMINI_MODELS.md).
 - `VITE_FIREBASE_*`: Your Firebase web project configuration.
+- `VITE_GITHUB_OWNER`, `VITE_GITHUB_REPO`, `VITE_GITHUB_WORKFLOW`: Public values
+	used only to link to the protected Actions page.
 
 ### 2. Frontend & Emulator Setup
 Install the root Node dependencies which include the frontend dependencies and rules testing packages:

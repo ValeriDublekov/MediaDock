@@ -9,7 +9,7 @@ import {
   DocumentData,
   QueryDocumentSnapshot,
 } from 'firebase/firestore';
-import { getDb } from './firebaseApp';
+import { getAuth, getDb } from './firebaseApp';
 import { ManualMapping, ManualMappingRepository } from '../domain/manualMapping';
 
 function toDate(val: unknown): Date {
@@ -60,18 +60,24 @@ export class FirestoreManualMappingAdapter implements ManualMappingRepository {
 
   async saveManualMapping(mapping: Omit<ManualMapping, 'createdAt'>): Promise<void> {
     const db = this.getDbInstance();
+    const userId = getAuth().currentUser?.uid;
+    if (!userId) {
+      throw new Error('Authentication required to save a manual mapping.');
+    }
+    const imdbId = mapping.imdbId.trim();
+    if (!/^tt[0-9]{7,10}$/.test(imdbId)) {
+      throw new Error('A valid IMDb ID is required.');
+    }
     const docRef = doc(db, 'manualMappings', mapping.id);
 
     const payload: Record<string, unknown> = {
       rawTitle: mapping.rawTitle,
-      imdbId: mapping.imdbId,
+      imdbId,
       createdAt: Timestamp.now(),
       parsedTitle: mapping.parsedTitle,
       parsedYear: mapping.parsedYear,
+      createdBy: userId,
     };
-    if (mapping.createdBy) {
-      payload.createdBy = mapping.createdBy;
-    }
 
     await setDoc(docRef, payload, { merge: true });
   }

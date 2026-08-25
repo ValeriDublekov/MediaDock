@@ -48,9 +48,9 @@ Authentication Authorized Domains. For a project site, the host is typically
 
 After the user has signed in once and the UID is known, create the documented
 `allowlist/{uid}` record with matching email, `enabled: true`, and an explicitly
-chosen role. Do not key the document by mutable display name. Until Prompt 0B is
-complete, do not assume the current rules enforce the documented `reader` role
-for settings or manual-mapping writes.
+chosen role (`reader` or `admin`). Do not key the document by mutable display
+name. Readers can view scanner settings and mappings but only admins can write
+them; the deployed rules and emulator tests enforce this boundary.
 
 ### 4. Deploy rules and indexes
 
@@ -88,6 +88,11 @@ Firestore, or parse-log write operation.
 Store public Firebase web configuration using the `VITE_*` names expected by the
 frontend as **Repository Variables** (not Secrets). Do not add `OMDB_API_KEY`, private keys, or Admin project credentials to
 the Pages build job.
+
+The Pages build may set public `VITE_GITHUB_OWNER`, `VITE_GITHUB_REPO`, and
+`VITE_GITHUB_WORKFLOW` values so the browser can link to GitHub's protected
+Actions page. Never add a GitHub PAT or OMDb key to Vite variables, localStorage,
+or the Pages job.
 
 `GEMINI_MODEL` is a non-secret repository variable only if model selection is
 intentionally controlled there; otherwise keep it in the scanner environment.

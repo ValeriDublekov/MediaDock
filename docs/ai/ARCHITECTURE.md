@@ -56,18 +56,15 @@ and permits later user-data write adapters without coupling presentation code.
 | --- | --- |
 | Anonymous browser | Authentication flow only; no Firestore data access |
 | Authenticated non-allowlisted user | No catalog access |
-| Allowlisted browser user | Read catalog data; no server-managed writes |
+| Allowlisted reader | Read catalog, parse logs, and settings; write only own user preferences |
+| Allowlisted admin | Reader access plus validated scanner-settings and manual-mapping writes |
 | Future owner client | Validated CRUD only in own `users/{uid}` namespace |
 | Scanner service account | Catalog/cache/scan writes through Admin SDK |
 
-Do not introduce blanket authenticated writes. Future admin editing requires an
-explicit role claim/document, dedicated repository methods, validation, and rule
-tests; it must not reuse owner-data permissions.
-
-The target boundary above is stricter than the current rules: today an
-allowlisted browser can still write `titles/settings_config` and
-`manualMappings`. Treat that as an open security finding until Prompt 0B and its
-emulator tests are complete.
+Do not introduce blanket authenticated writes. Admin editing uses the explicit
+`allowlist/{uid}.role == "admin"` document field, dedicated validated paths, and
+rules tests; it does not reuse owner-data permissions. A missing role remains a
+backward-compatible reader, while unknown roles are denied access.
 
 ## Deployment Topology
 
@@ -108,6 +105,12 @@ These exist in local ignored environment/credential storage or GitHub Secrets.
 - Auth domain
 - Project ID
 - Storage/app/messaging identifiers when required
+- GitHub repository owner, repository, and workflow filename for the protected
+        Actions link
+
+The browser has no OMDb key, GitHub PAT, Firebase Admin credential, or scanner
+control token. Manual dispatch takes place in GitHub's authenticated Actions UI;
+manual title correction writes an admin-protected mapping for the scanner.
 
 Public Firebase configuration is built through `VITE_` variables. Authorization
 still depends on Authentication and Firestore rules.
