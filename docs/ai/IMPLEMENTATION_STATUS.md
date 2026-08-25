@@ -16,10 +16,11 @@ MVP wiring is present; production hardening is not complete.
 - Prompt 0A: Scanner workflow inputs, mode-aware CLI preflight, process exit codes, parse-only isolation, explicit emulator project IDs, and locked backend CI dependencies are implemented.
 - Prompt 0B: Reader/admin rules, validated scanner settings and manual mappings, authenticated `createdBy`/`updatedBy`, and removal of browser scanner credentials are implemented.
 - Prompt 0C: Bounded HTTPS RSS fetching, public DNS and redirect validation, response/entry limits, bozo rejection, and explicit `--feed-file` fixture input are implemented.
+- Prompt 1: Existing-title audit is fail-closed and review-only; incomplete AI/OMDb evidence cannot delete or migrate catalog records, and fake repositories are defensive-copy safe for dry-run.
 
 ## Next Prompt
 
-Run Prompt 1 in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+Run Prompt 2 in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 

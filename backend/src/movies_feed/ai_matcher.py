@@ -385,9 +385,26 @@ class AiMatcher:
         if not result or not isinstance(result, list):
             return {}
 
+        requested_ids = [item.get("id") for item in items]
+        if (
+            any(type(item_id) is not int for item_id in requested_ids)
+            or len(set(requested_ids)) != len(requested_ids)
+            or len(result) != len(requested_ids)
+        ):
+            return {}
+
         out = {}
         for entry in result:
-            if isinstance(entry, dict) and "id" in entry:
-                out[entry["id"]] = entry
+            if (
+                not isinstance(entry, dict)
+                or type(entry.get("id")) is not int
+                or entry["id"] not in requested_ids
+                or entry["id"] in out
+                or type(entry.get("is_valid_match")) is not bool
+            ):
+                return {}
+            out[entry["id"]] = entry
+        if set(out) != set(requested_ids):
+            return {}
         logger.info(f"[AiMatcher] Audited {len(out)}/{len(items)} database titles.")
         return out

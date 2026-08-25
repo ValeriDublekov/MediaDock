@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+import copy
 import datetime
 from typing import Any, Dict, List, Optional
 
@@ -224,20 +225,21 @@ class FakeTitleRepository(TitleRepository):
         self._store: Dict[str, Title] = {}
 
     def get(self, title_id: str) -> Optional[Title]:
-        return self._store.get(title_id)
+        return copy.deepcopy(self._store.get(title_id))
 
     def upsert(self, title_id: str, title: Title) -> None:
         existing = self._store.get(title_id)
+        incoming = copy.deepcopy(title)
         if existing:
-            self._store[title_id] = merge_titles(existing, title)
+            self._store[title_id] = merge_titles(existing, incoming)
         else:
-            self._store[title_id] = title
+            self._store[title_id] = incoming
 
     def list_all(self) -> List[Title]:
-        return list(self._store.values())
+        return copy.deepcopy(list(self._store.values()))
 
     def list_all_ids_and_titles(self) -> List[tuple[str, Title]]:
-        return list(self._store.items())
+        return [(title_id, copy.deepcopy(title)) for title_id, title in self._store.items()]
 
     def delete(self, title_id: str) -> None:
         if title_id in self._store:
@@ -249,19 +251,20 @@ class FakeOccurrenceRepository(OccurrenceRepository):
         self._store: Dict[str, Dict[str, Occurrence]] = {}
 
     def get(self, title_id: str, occurrence_id: str) -> Optional[Occurrence]:
-        return self._store.get(title_id, {}).get(occurrence_id)
+        return copy.deepcopy(self._store.get(title_id, {}).get(occurrence_id))
 
     def upsert(self, title_id: str, occurrence_id: str, occurrence: Occurrence) -> None:
         if title_id not in self._store:
             self._store[title_id] = {}
         existing = self._store[title_id].get(occurrence_id)
+        incoming = copy.deepcopy(occurrence)
         if existing:
-            self._store[title_id][occurrence_id] = merge_occurrences(existing, occurrence)
+            self._store[title_id][occurrence_id] = merge_occurrences(existing, incoming)
         else:
-            self._store[title_id][occurrence_id] = occurrence
+            self._store[title_id][occurrence_id] = incoming
 
     def list_by_title(self, title_id: str) -> List[Occurrence]:
-        return list(self._store.get(title_id, {}).values())
+        return copy.deepcopy(list(self._store.get(title_id, {}).values()))
 
     def delete(self, title_id: str, occurrence_id: str) -> None:
         if title_id in self._store and occurrence_id in self._store[title_id]:
@@ -277,10 +280,10 @@ class FakeOmdbCacheRepository(OmdbCacheRepository):
         self._store: Dict[str, OmdbCacheEntry] = {}
 
     def get(self, cache_key: str) -> Optional[OmdbCacheEntry]:
-        return self._store.get(cache_key)
+        return copy.deepcopy(self._store.get(cache_key))
 
     def set(self, cache_key: str, entry: OmdbCacheEntry) -> None:
-        self._store[cache_key] = entry
+        self._store[cache_key] = copy.deepcopy(entry)
 
 
 class FakeScanRunRepository(ScanRunRepository):
@@ -288,13 +291,13 @@ class FakeScanRunRepository(ScanRunRepository):
         self._store: Dict[str, ScanRun] = {}
 
     def get(self, run_id: str) -> Optional[ScanRun]:
-        return self._store.get(run_id)
+        return copy.deepcopy(self._store.get(run_id))
 
     def upsert(self, run_id: str, run: ScanRun) -> None:
-        self._store[run_id] = run
+        self._store[run_id] = copy.deepcopy(run)
 
     def list_all(self) -> List[ScanRun]:
-        return list(self._store.values())
+        return copy.deepcopy(list(self._store.values()))
 
 
 class FakeParseLogRepository(ParseLogRepository):
@@ -302,7 +305,7 @@ class FakeParseLogRepository(ParseLogRepository):
         self._store: Dict[str, ParseLog] = {}
 
     def add(self, log: ParseLog) -> None:
-        self._store[log.id] = log
+        self._store[log.id] = copy.deepcopy(log)
 
     def prune_older_than(self, cutoff: datetime.datetime) -> int:
         to_delete = [log_id for log_id, log in self._store.items() if log.processed_at < cutoff]
@@ -312,7 +315,7 @@ class FakeParseLogRepository(ParseLogRepository):
 
     def list_recent(self, limit: int = 100) -> List[ParseLog]:
         sorted_logs = sorted(self._store.values(), key=lambda l: l.processed_at, reverse=True)
-        return sorted_logs[:limit]
+        return copy.deepcopy(sorted_logs[:limit])
 
     def list_unmapped(self, limit: int = 200) -> List[ParseLog]:
         unmapped = [
@@ -320,10 +323,10 @@ class FakeParseLogRepository(ParseLogRepository):
             if l.omdb_status in ("not_found", "error", "not_parsed", "skipped") or l.ignored
         ]
         sorted_unmapped = sorted(unmapped, key=lambda l: l.processed_at, reverse=True)
-        return sorted_unmapped[:limit]
+        return copy.deepcopy(sorted_unmapped[:limit])
 
     def get_all(self) -> List[ParseLog]:
-        return list(self._store.values())
+        return copy.deepcopy(list(self._store.values()))
 
 
 class ManualMappingRepository(ABC):
@@ -348,10 +351,10 @@ class FakeManualMappingRepository(ManualMappingRepository):
         self._store: Dict[str, ManualMapping] = {}
 
     def get_all(self) -> List[ManualMapping]:
-        return list(self._store.values())
+        return copy.deepcopy(list(self._store.values()))
 
     def set(self, mapping: ManualMapping) -> None:
-        self._store[mapping.id] = mapping
+        self._store[mapping.id] = copy.deepcopy(mapping)
 
     def delete(self, mapping_id: str) -> None:
         if mapping_id in self._store:

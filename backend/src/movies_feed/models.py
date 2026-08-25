@@ -175,6 +175,7 @@ class ParseLog:
     processed_at: datetime.datetime
     error_message: Optional[str] = None
     trace_details: Optional[Dict[str, Any]] = None
+    decision: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the ParseLog model to a camelCase Firestore dictionary."""
@@ -194,6 +195,8 @@ class ParseLog:
             res["errorMessage"] = self.error_message
         if self.trace_details is not None:
             res["traceDetails"] = self.trace_details
+        if self.decision is not None:
+            res["decision"] = self.decision
         return res
 
 

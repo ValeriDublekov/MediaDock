@@ -1,5 +1,7 @@
+import copy
 import datetime
 import logging
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -12,6 +14,7 @@ from .models import ManualMapping, Occurrence, OmdbCacheEntry, ParseLog, ScanRun
 from .omdb_client import (
     OmdbClient,
     OmdbLimitReachedError,
+    OmdbMovieResult,
     OmdbNoMatchError,
     OmdbTransportError,
 )
@@ -114,6 +117,262 @@ class ScannerService:
         run.error_count += 1
         if message not in run.error_summary:
             run.error_summary.append(message)
+
+    @staticmethod
+    def _is_valid_recheck_result(result: Any, expected_id: int) -> bool:
+        if not isinstance(result, dict):
+            return False
+        if "id" in result and (type(result["id"]) is not int or result["id"] != expected_id):
+            return False
+        if type(result.get("is_valid_match")) is not bool:
+            return False
+
+        confidence = result.get("confidence")
+        if confidence is not None:
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+                return False
+            confidence_value = float(confidence)
+            if not math.isfinite(confidence_value) or not 0.0 <= confidence_value <= 1.0:
+                return False
+            if confidence_value < 0.7:
+                return False
+
+        if "reason" in result and result["reason"] is not None and not isinstance(result["reason"], str):
+            return False
+
+        for field_name in ("corrected_title", "corrected_media_type"):
+            value = result.get(field_name)
+            if value is not None and not isinstance(value, str):
+                return False
+        corrected_title = result.get("corrected_title")
+        if corrected_title is not None and not corrected_title.strip():
+            return False
+
+        corrected_year = result.get("corrected_year")
+        if corrected_year is not None and type(corrected_year) is not int:
+            return False
+        corrected_media_type = result.get("corrected_media_type")
+        if corrected_media_type is not None and corrected_media_type not in ("movie", "series"):
+            return False
+
+        if result["is_valid_match"] and any(
+            result.get(field_name) is not None
+            for field_name in ("corrected_title", "corrected_year", "corrected_media_type")
+        ):
+            return False
+        return True
+
+    def _validate_recheck_batch(
+        self,
+        items: List[Dict[str, Any]],
+        results: Any,
+    ) -> bool:
+        if not isinstance(results, dict):
+            return False
+        expected_ids = {item["id"] for item in items}
+        if set(results.keys()) != expected_ids:
+            return False
+
+        embedded_ids = [result.get("id") for result in results.values() if isinstance(result, dict) and "id" in result]
+        if embedded_ids and (
+            len(embedded_ids) != len(results)
+            or len(set(embedded_ids)) != len(embedded_ids)
+            or set(embedded_ids) != expected_ids
+        ):
+            return False
+
+        return all(
+            self._is_valid_recheck_result(results[item_id], item_id)
+            for item_id in expected_ids
+        )
+
+    def _record_recheck_needs_review(
+        self,
+        title_id: str,
+        title_record: Title,
+        occurrences: List[Occurrence],
+        raw_title: str,
+        feed_name: str,
+        audit_outcome: str,
+        reason: str,
+        omdb_status: str = "skipped",
+        parsed_title: Optional[str] = None,
+        parsed_year: Optional[int] = None,
+        trace_details: Optional[Dict[str, Any]] = None,
+        section_timings: Optional[Dict[str, float]] = None,
+    ) -> None:
+        details: Dict[str, Any] = {
+            "titleId": title_id,
+            "occurrenceCount": len(occurrences),
+            "auditOutcome": audit_outcome,
+        }
+        if trace_details:
+            details.update(copy.deepcopy(trace_details))
+        self._log_parse_entry(
+            raw_title=raw_title,
+            feed_name=feed_name,
+            parsed_successfully=bool(occurrences),
+            parsed_title=parsed_title,
+            parsed_year=parsed_year,
+            omdb_status=omdb_status,
+            ignored=True,
+            ignore_reason="audit_needs_review",
+            error_message=f"Audit needs review: {reason}",
+            section_timings=section_timings,
+            trace_details=details,
+            decision="needs_review",
+            log_key=f"recheck:{title_id}:{audit_outcome}",
+        )
+
+    def _inspect_recheck_suggestion(
+        self,
+        raw_title: str,
+        corrected_title: Optional[str],
+        corrected_year: Optional[int],
+        corrected_media_type: Optional[str],
+        run: Optional[ScanRun],
+        section_timings: Optional[Dict[str, float]],
+    ) -> Dict[str, Any]:
+        outcome: Dict[str, Any] = {
+            "omdb_status": "skipped",
+            "omdb_outcome": "missing_corrected_title",
+            "candidate_outcome": "not_evaluated",
+            "retryable": False,
+        }
+        if not corrected_title:
+            return outcome
+
+        lookup_title = corrected_title.strip()
+        if not lookup_title:
+            outcome["omdb_outcome"] = "invalid_request"
+            outcome["candidate_outcome"] = "not_evaluated"
+            return outcome
+
+        t0 = time.perf_counter()
+        try:
+            omdb_result = self.omdb_client.get_movie_info(
+                lookup_title,
+                str(corrected_year) if corrected_year is not None else None,
+                media_type=corrected_media_type,
+            )
+        except OmdbNoMatchError:
+            outcome["omdb_status"] = "not_found"
+            outcome["omdb_outcome"] = "confirmed_not_found"
+            return outcome
+        except OmdbLimitReachedError:
+            outcome["omdb_status"] = "error"
+            outcome["omdb_outcome"] = "quota_exhausted"
+            outcome["retryable"] = True
+            self._record_phase_error(run, "OMDb phase incomplete during recheck")
+            return outcome
+        except OmdbTransportError:
+            outcome["omdb_status"] = "error"
+            outcome["omdb_outcome"] = "transport_error"
+            outcome["retryable"] = True
+            self._record_phase_error(run, "OMDb phase incomplete during recheck")
+            return outcome
+        except ValueError:
+            outcome["omdb_status"] = "error"
+            outcome["omdb_outcome"] = "invalid_request"
+            outcome["retryable"] = False
+            self._record_phase_error(run, "OMDb phase failed during recheck")
+            return outcome
+        except Exception:
+            outcome["omdb_status"] = "error"
+            outcome["omdb_outcome"] = "unexpected_error"
+            outcome["retryable"] = True
+            self._record_phase_error(run, "OMDb phase incomplete during recheck")
+            return outcome
+        finally:
+            if section_timings is not None:
+                section_timings.setdefault("omdb_api", 0.0)
+                section_timings["omdb_api"] += time.perf_counter() - t0
+
+        if (
+            not isinstance(omdb_result, OmdbMovieResult)
+            or not isinstance(omdb_result.title, str)
+            or not omdb_result.title.strip()
+            or omdb_result.year is not None and type(omdb_result.year) is not int
+            or omdb_result.media_type not in ("movie", "series", "documentary", "short")
+            or not isinstance(omdb_result.countries, list)
+            or not isinstance(omdb_result.genres, list)
+        ):
+            outcome["omdb_status"] = "error"
+            outcome["omdb_outcome"] = "malformed_result"
+            outcome["retryable"] = True
+            self._record_phase_error(run, "OMDb phase incomplete during recheck")
+            return outcome
+
+        outcome["omdb_status"] = "found"
+        if self.is_excluded(omdb_result.countries, omdb_result.genres):
+            outcome["candidate_outcome"] = "excluded"
+            return outcome
+        if (
+            corrected_media_type
+            and corrected_media_type in ("movie", "series")
+            and omdb_result.media_type != corrected_media_type
+        ):
+            outcome["candidate_outcome"] = "type_mismatch"
+            return outcome
+        if (
+            omdb_result.media_type in ("movie", "documentary")
+            and corrected_year is not None
+            and omdb_result.year is not None
+            and abs(omdb_result.year - corrected_year) > 1
+        ):
+            outcome["candidate_outcome"] = "year_mismatch"
+            return outcome
+
+        outcome["candidate_outcome"] = "valid_suggestion"
+        if not (
+            self.ai_matcher
+            and self.ai_matcher.is_available
+            and clean_title_for_comparison(lookup_title)
+            != clean_title_for_comparison(omdb_result.title)
+        ):
+            return outcome
+
+        try:
+            validation_results = self.ai_matcher.batch_validate_omdb_matches([{
+                "id": 0,
+                "raw_title": raw_title,
+                "feed_type": corrected_media_type,
+                "omdb_title": omdb_result.title,
+                "omdb_year": omdb_result.year,
+                "omdb_type": omdb_result.media_type,
+            }])
+        except Exception:
+            validation_results = None
+
+        candidate_validation = (
+            validation_results.get(0)
+            if isinstance(validation_results, dict)
+            and set(validation_results.keys()) == {0}
+            else None
+        )
+        if not isinstance(candidate_validation, dict) or type(candidate_validation.get("is_match")) is not bool:
+            outcome["candidate_outcome"] = "ai_validation_incomplete"
+            outcome["retryable"] = True
+            self._record_phase_error(run, "AI candidate validation incomplete during recheck")
+            return outcome
+
+        confidence = candidate_validation.get("confidence")
+        if confidence is not None:
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+                outcome["candidate_outcome"] = "ai_validation_incomplete"
+                outcome["retryable"] = True
+                self._record_phase_error(run, "AI candidate validation incomplete during recheck")
+                return outcome
+            confidence_value = float(confidence)
+            if not math.isfinite(confidence_value) or not 0.0 <= confidence_value <= 1.0 or confidence_value < 0.7:
+                outcome["candidate_outcome"] = "ai_validation_low_confidence"
+                outcome["retryable"] = True
+                self._record_phase_error(run, "AI candidate validation incomplete during recheck")
+                return outcome
+
+        if not candidate_validation["is_match"]:
+            outcome["candidate_outcome"] = "ai_rejected"
+        return outcome
 
     def _load_manual_mappings(self) -> None:
         if not self.manual_mapping_repo:
@@ -258,10 +517,14 @@ class ScannerService:
         torrent_url: Optional[str] = None,
         section_timings: Optional[Dict[str, float]] = None,
         trace_details: Optional[Dict[str, Any]] = None,
+        decision: Optional[str] = None,
+        log_key: Optional[str] = None,
     ) -> None:
         if not self.parse_log_repo or self.config.is_dry_run:
             return
-        if feed_entry_id or torrent_url:
+        if log_key is not None:
+            log_id = get_occurrence_id(None, log_key)
+        elif feed_entry_id or torrent_url:
             log_id = get_occurrence_id(feed_entry_id, torrent_url)
         else:
             log_id = get_occurrence_id(None, raw_title + str(self.now.timestamp()))
@@ -279,6 +542,7 @@ class ScannerService:
             processed_at=self.now,
             error_message=error_message,
             trace_details=trace_details,
+            decision=decision,
         )
         self._pending_parse_logs.append(log)
 
@@ -474,12 +738,7 @@ class ScannerService:
         section_timings: Optional[Dict[str, float]] = None,
         audit_days: Optional[int] = None,
     ) -> Dict[str, int]:
-        """
-        Audits existing database titles and their occurrences with AI.
-        Detects mismatches, queries OMDb for corrected titles, verifies candidates.
-        If valid: upserts corrected Title/Occurrences, removes obsolete old Title/Occurrences.
-        If invalid/not found: marks as not found in parseLogs and deletes the erroneous Title/Occurrences from database.
-        """
+        """Audit existing titles without applying replacement or deletion decisions."""
         if audit_days is None:
             audit_days = self.config.audit_days
 
@@ -488,6 +747,10 @@ class ScannerService:
             "mismatches_found": 0,
             "repaired": 0,
             "removed": 0,
+            "validated": 0,
+            "needs_review": 0,
+            "ai_failures": 0,
+            "omdb_failures": 0,
         }
 
         all_titles = self.title_repo.list_all_ids_and_titles()
@@ -548,10 +811,25 @@ class ScannerService:
 
             for idx, (title_id, title_record) in enumerate(chunk):
                 occs = self.occurrence_repo.list_by_title(title_id)
-                raw_title = occs[0].raw_title if occs else title_record.title
-                feed_name = occs[0].source_feed_name if occs else "database"
+                if not occs:
+                    stats["needs_review"] += 1
+                    self._record_recheck_needs_review(
+                        title_id=title_id,
+                        title_record=title_record,
+                        occurrences=occs,
+                        raw_title=title_record.title,
+                        feed_name="database",
+                        audit_outcome="orphan",
+                        reason="Title has no occurrences to audit",
+                        section_timings=section_timings,
+                    )
+                    continue
+
+                raw_title = occs[0].raw_title
+                feed_name = occs[0].source_feed_name
+                ai_id = len(items_to_audit)
                 items_to_audit.append({
-                    "id": idx,
+                    "id": ai_id,
                     "raw_title": raw_title,
                     "feed_name": feed_name,
                     "current_omdb_title": title_record.title,
@@ -559,158 +837,95 @@ class ScannerService:
                     "current_omdb_type": title_record.media_type,
                     "current_imdb_id": title_record.imdb_id,
                 })
-                chunk_context.append((title_id, title_record, occs, raw_title, feed_name))
+                chunk_context.append((ai_id, title_id, title_record, occs, raw_title, feed_name))
 
             stats["titles_checked"] += len(chunk)
 
-            audit_results = {}
+            if not items_to_audit:
+                self._flush_parse_logs(section_timings)
+                continue
+
+            audit_results: Any = {}
+            batch_failure_reason = "AI matcher is unavailable"
             if self.ai_matcher and self.ai_matcher.is_available:
                 try:
                     audit_results = self.ai_matcher.batch_recheck_matches(items_to_audit)
+                    batch_failure_reason = "AI response was empty, incomplete, or malformed"
                 except Exception as e:
-                    logger.warning(f"AI batch_recheck_matches exception: {e}")
+                    batch_failure_reason = f"AI matcher call failed ({type(e).__name__})"
+                    logger.warning(f"AI batch_recheck_matches failed: {type(e).__name__}")
 
-            if items_to_audit and not audit_results:
+            if not self._validate_recheck_batch(items_to_audit, audit_results):
+                stats["ai_failures"] += 1
                 self._record_phase_error(run, "AI recheck phase incomplete")
                 logger.error(
-                    f"[AI Recheck] AI matcher failed or returned no results on batch {batch_idx}/{total_batches} "
-                    f"(rate limit or API error). Stopping remaining recheck processing immediately."
+                    f"[AI Recheck] {batch_failure_reason} on batch {batch_idx}/{total_batches}. "
+                    "Stopping remaining recheck processing immediately."
                 )
+                for _, title_id, title_record, occs, raw_title, feed_name in chunk_context:
+                    stats["needs_review"] += 1
+                    self._record_recheck_needs_review(
+                        title_id=title_id,
+                        title_record=title_record,
+                        occurrences=occs,
+                        raw_title=raw_title,
+                        feed_name=feed_name,
+                        audit_outcome="ai_batch_incomplete",
+                        reason=batch_failure_reason,
+                        section_timings=section_timings,
+                    )
+                self._flush_parse_logs(section_timings)
                 break
 
-            if len(audit_results) < len(items_to_audit):
-                self._record_phase_error(run, "AI recheck phase returned incomplete results")
-
-            for idx, (title_id, title_record, occs, raw_title, feed_name) in enumerate(chunk_context):
-                if idx not in audit_results:
-                    continue
-                ai_res = audit_results.get(idx, {})
-                if ai_res.get("is_valid_match", True):
-                    # Valid match: mark as AI-validated and persist to DB
-                    title_record.ai_validated = True
-                    title_record.ai_checked_at = self.now
+            for ai_id, title_id, title_record, occs, raw_title, feed_name in chunk_context:
+                ai_res = audit_results[ai_id]
+                if ai_res["is_valid_match"] is True:
+                    validated_title = copy.deepcopy(title_record)
+                    validated_title.ai_validated = True
+                    validated_title.ai_checked_at = self.now
                     if not self.config.is_dry_run:
-                        self.title_repo.upsert(title_id, title_record)
+                        self.title_repo.upsert(title_id, validated_title)
+                    stats["validated"] += 1
                 else:
-                    # Mismatch detected
                     stats["mismatches_found"] += 1
+                    stats["needs_review"] += 1
                     corr_title = ai_res.get("corrected_title")
                     corr_year = ai_res.get("corrected_year")
                     corr_media_type = ai_res.get("corrected_media_type")
-                    reason = ai_res.get("reason", "AI detected mismatch")
+                    reason = ai_res.get("reason") or "AI detected a mismatch"
                     logger.info(f"Mismatch for title '{title_record.title}' (raw: '{raw_title}'): {reason}")
-
-                    new_omdb_result = None
-                    if corr_title:
-                        try:
-                            new_omdb_result = self.omdb_client.get_movie_info(
-                                corr_title,
-                                str(corr_year) if corr_year else None,
-                                media_type=corr_media_type,
-                            )
-                        except (OmdbNoMatchError, OmdbLimitReachedError, OmdbTransportError) as ex:
-                            if isinstance(ex, (OmdbLimitReachedError, OmdbTransportError)):
-                                self._record_phase_error(run, "OMDb phase incomplete during recheck")
-                            logger.info(f"OMDb lookup for '{corr_title}' yielded no match or error: {ex}")
-                            new_omdb_result = None
-
-                    is_valid_candidate = False
-                    if new_omdb_result:
-                        is_valid_candidate = True
-                        if self.is_excluded(new_omdb_result.countries, new_omdb_result.genres):
-                            is_valid_candidate = False
-                        elif corr_media_type and (new_omdb_result.media_type != corr_media_type) and (corr_media_type in ("movie", "series")):
-                            is_valid_candidate = False
-                        elif new_omdb_result.media_type in ("movie", "documentary") and corr_year and abs(new_omdb_result.year - corr_year) > 1:
-                            is_valid_candidate = False
-                        elif self.ai_matcher and self.ai_matcher.is_available:
-                            clean_corr = clean_title_for_comparison(corr_title)
-                            clean_cand = clean_title_for_comparison(new_omdb_result.title)
-                            if clean_corr != clean_cand:
-                                try:
-                                    v_res = self.ai_matcher.batch_validate_omdb_matches([{
-                                        "id": 0,
-                                        "raw_title": raw_title,
-                                        "feed_type": corr_media_type,
-                                        "omdb_title": new_omdb_result.title,
-                                        "omdb_year": new_omdb_result.year,
-                                        "omdb_type": new_omdb_result.media_type,
-                                    }]).get(0)
-                                    if v_res and not v_res.get("is_match", True):
-                                        is_valid_candidate = False
-                                except Exception as e:
-                                    logger.warning(f"AI candidate validation check failed: {e}")
-
-                    if new_omdb_result and is_valid_candidate:
-                        norm_lookup_title = normalize_title(new_omdb_result.title)
-                        new_title_id = get_title_id(new_omdb_result.imdb_id, norm_lookup_title, new_omdb_result.year, new_omdb_result.media_type)
-
-                        new_title_record = Title(
-                            title=new_omdb_result.title,
-                            normalized_title=norm_lookup_title,
-                            year=new_omdb_result.year,
-                            media_type=new_omdb_result.media_type,
-                            first_seen_at=title_record.first_seen_at or self.now,
-                            last_seen_at=self.now,
-                            updated_at=self.now,
-                            imdb_id=new_omdb_result.imdb_id,
-                            imdb_rating=new_omdb_result.rating,
-                            imdb_votes=new_omdb_result.votes,
-                            metascore=new_omdb_result.metascore,
-                            genres=new_omdb_result.genres,
-                            countries=new_omdb_result.countries,
-                            director=new_omdb_result.director,
-                            plot=new_omdb_result.plot,
-                            poster_url=new_omdb_result.poster_url,
-                            runtime=new_omdb_result.runtime,
-                            awards=new_omdb_result.awards,
-                            box_office=new_omdb_result.box_office,
-                            ratings=new_omdb_result.ratings,
-                            ai_validated=True,
-                            ai_checked_at=self.now,
-                        )
-
-                        if not self.config.is_dry_run:
-                            self.title_repo.upsert(new_title_id, new_title_record)
-                            for occ in occs:
-                                occ_id = get_occurrence_id(occ.feed_entry_id, occ.torrent_url)
-                                self.occurrence_repo.upsert(new_title_id, occ_id, occ)
-                            if new_title_id != title_id:
-                                self.title_repo.delete(title_id)
-                                self.occurrence_repo.delete_by_title(title_id)
-
-                        self._log_parse_entry(
-                            raw_title=raw_title,
-                            feed_name=feed_name,
-                            parsed_successfully=True,
-                            parsed_title=corr_title,
-                            parsed_year=corr_year,
-                            omdb_status="found",
-                            ignored=False,
-                            ignore_reason=None,
-                            section_timings=section_timings,
-                        )
-                        stats["repaired"] += 1
-                        if run:
-                            run.titles_created += 1
-                    else:
-                        if not self.config.is_dry_run:
-                            self.title_repo.delete(title_id)
-                            self.occurrence_repo.delete_by_title(title_id)
-
-                        self._log_parse_entry(
-                            raw_title=raw_title,
-                            feed_name=feed_name,
-                            parsed_successfully=True,
-                            parsed_title=corr_title or title_record.title,
-                            parsed_year=corr_year or title_record.year,
-                            omdb_status="not_found",
-                            ignored=True,
-                            ignore_reason="ai_mismatch_removed",
-                            error_message=f"Removed invalid match: {reason}",
-                            section_timings=section_timings,
-                        )
-                        stats["removed"] += 1
+                    suggestion = self._inspect_recheck_suggestion(
+                        raw_title=raw_title,
+                        corrected_title=corr_title,
+                        corrected_year=corr_year,
+                        corrected_media_type=corr_media_type,
+                        run=run,
+                        section_timings=section_timings,
+                    )
+                    if suggestion["omdb_status"] == "error":
+                        stats["omdb_failures"] += 1
+                    trace_details = {
+                        "aiReason": reason,
+                        "suggestedTitle": corr_title,
+                        "suggestedYear": corr_year,
+                        "suggestedMediaType": corr_media_type,
+                        "omdbOutcome": suggestion["omdb_outcome"],
+                        "candidateOutcome": suggestion["candidate_outcome"],
+                    }
+                    self._record_recheck_needs_review(
+                        title_id=title_id,
+                        title_record=title_record,
+                        occurrences=occs,
+                        raw_title=raw_title,
+                        feed_name=feed_name,
+                        audit_outcome="mismatch_retained",
+                        reason=reason,
+                        omdb_status=suggestion["omdb_status"],
+                        parsed_title=corr_title,
+                        parsed_year=corr_year,
+                        trace_details=trace_details,
+                        section_timings=section_timings,
+                    )
 
             self._flush_parse_logs(section_timings)
 

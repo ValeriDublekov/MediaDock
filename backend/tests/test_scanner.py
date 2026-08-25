@@ -123,6 +123,57 @@ class TestScanner(unittest.TestCase):
             feed_fetcher=StaticTestFeedFetcher(),
         )
 
+    def add_recheck_occurrence(self, title_id: str, raw_title: str = "Stored Film 2020 1080p") -> None:
+        self.occ_repo.upsert(
+            title_id,
+            f"{title_id}-occurrence",
+            Occurrence(
+                source_feed_id="test-feed",
+                source_feed_name="Test Feed",
+                feed_entry_id=f"{title_id}-entry",
+                torrent_url=f"https://example.test/{title_id}",
+                raw_title=raw_title,
+                quality="1080p",
+                rip_type="WEB-DL",
+                first_seen_at=self.now,
+                last_seen_at=self.now,
+            ),
+        )
+
+    def seed_recheck_title(self, title_id: str = "t1", title: str = "Stored Film", year: int = 2020) -> Title:
+        title_record = Title(
+            title=title,
+            normalized_title=title.lower(),
+            year=year,
+            media_type="movie",
+            first_seen_at=self.now,
+            last_seen_at=self.now,
+            updated_at=self.now,
+            ai_validated=False,
+        )
+        self.title_repo.upsert(title_id, title_record)
+        self.add_recheck_occurrence(title_id, f"{title} {year} 1080p")
+        return title_record
+
+    def make_recheck_scanner(
+        self,
+        ai_response: Dict[int, Dict[str, Any]],
+        omdb_client: OmdbClient = None,
+        is_dry_run: bool = False,
+    ):
+        config = ScannerConfig(
+            trigger="manual",
+            mode="recheck-existing",
+            is_dry_run=is_dry_run,
+        )
+        scanner = self.create_scanner(config, omdb_client or MockOmdbClient({}))
+        from unittest.mock import MagicMock
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        mock_ai.batch_recheck_matches.return_value = ai_response
+        scanner.ai_matcher = mock_ai
+        return scanner, mock_ai
+
     def test_parse_logs_creation_and_pruning(self):
         rss_feeds = {
             "test_feed": {
@@ -467,6 +518,7 @@ class TestScanner(unittest.TestCase):
         )
         self.title_repo.upsert("t1", t1)
         self.title_repo.upsert("t2", t2)
+        self.add_recheck_occurrence("t2", "Inception 2010 1080p")
 
         config = ScannerConfig(trigger="manual", mode="recheck-existing")
         omdb = MockOmdbClient({})
@@ -496,6 +548,8 @@ class TestScanner(unittest.TestCase):
         )
         self.title_repo.upsert("t1", t1)
         self.title_repo.upsert("t2", t2)
+        self.add_recheck_occurrence("t1", "Film 1 2020 1080p")
+        self.add_recheck_occurrence("t2", "Film 2 2021 1080p")
 
         config = ScannerConfig(trigger="manual", mode="recheck-existing")
         omdb = MockOmdbClient({})
@@ -526,6 +580,8 @@ class TestScanner(unittest.TestCase):
         )
         self.title_repo.upsert("t_old", t_old)
         self.title_repo.upsert("t_recent", t_recent)
+        self.add_recheck_occurrence("t_old", "Old Film 2020 1080p")
+        self.add_recheck_occurrence("t_recent", "Recent Film 2023 1080p")
 
         config = ScannerConfig(trigger="manual", mode="recheck-existing")
         omdb = MockOmdbClient({})
@@ -548,6 +604,217 @@ class TestScanner(unittest.TestCase):
         # With audit_days=0 (unlimited), both t_recent and t_old should be audited
         res_unlimited = scanner.recheck_existing_titles(audit_days=0)
         self.assertEqual(res_unlimited["titles_checked"], 2)
+
+    def test_recheck_missing_ai_item_id_is_non_destructive_and_partial(self):
+        self.seed_recheck_title("t1", "Stored Film 1", 2020)
+        self.seed_recheck_title("t2", "Stored Film 2", 2021)
+        before_titles = dict(self.title_repo.list_all_ids_and_titles())
+        before_occurrences = {
+            title_id: self.occ_repo.list_by_title(title_id)
+            for title_id in ("t1", "t2")
+        }
+        scanner, _ = self.make_recheck_scanner({0: {"is_valid_match": True}})
+
+        run = scanner.run("recheck_missing_id")
+
+        self.assertEqual(run.status, "partial")
+        self.assertGreater(run.error_count, 0)
+        self.assertEqual(before_titles, dict(self.title_repo.list_all_ids_and_titles()))
+        for title_id, occurrences in before_occurrences.items():
+            self.assertEqual(occurrences, self.occ_repo.list_by_title(title_id))
+        logs = self.parse_log_repo.get_all()
+        self.assertEqual(len(logs), 2)
+        self.assertTrue(all(log.decision == "needs_review" for log in logs))
+        self.assertTrue(all(log.trace_details["auditOutcome"] == "ai_batch_incomplete" for log in logs))
+
+    def test_recheck_missing_ai_fields_is_non_destructive(self):
+        self.seed_recheck_title()
+        before_title = self.title_repo.get("t1")
+        before_occurrences = self.occ_repo.list_by_title("t1")
+        scanner, _ = self.make_recheck_scanner({0: {}})
+
+        run = scanner.run("recheck_missing_field")
+
+        self.assertEqual(run.status, "partial")
+        self.assertEqual(before_title, self.title_repo.get("t1"))
+        self.assertEqual(before_occurrences, self.occ_repo.list_by_title("t1"))
+        self.assertEqual(self.parse_log_repo.get_all()[0].decision, "needs_review")
+
+    def test_recheck_empty_ai_batch_is_non_destructive(self):
+        self.seed_recheck_title()
+        before_title = self.title_repo.get("t1")
+        before_occurrences = self.occ_repo.list_by_title("t1")
+        scanner, mock_ai = self.make_recheck_scanner({})
+
+        run = scanner.run("recheck_empty_batch")
+
+        self.assertEqual(run.status, "partial")
+        self.assertEqual(mock_ai.batch_recheck_matches.call_count, 1)
+        self.assertEqual(before_title, self.title_repo.get("t1"))
+        self.assertEqual(before_occurrences, self.occ_repo.list_by_title("t1"))
+        self.assertEqual(self.parse_log_repo.get_all()[0].decision, "needs_review")
+
+    def test_recheck_low_confidence_ai_result_is_non_destructive(self):
+        self.seed_recheck_title()
+        before_title = self.title_repo.get("t1")
+        before_occurrences = self.occ_repo.list_by_title("t1")
+        scanner, _ = self.make_recheck_scanner({0: {"is_valid_match": True, "confidence": 0.2}})
+
+        run = scanner.run("recheck_low_confidence")
+
+        self.assertEqual(run.status, "partial")
+        self.assertEqual(before_title, self.title_repo.get("t1"))
+        self.assertEqual(before_occurrences, self.occ_repo.list_by_title("t1"))
+        self.assertEqual(self.parse_log_repo.get_all()[0].decision, "needs_review")
+
+    def test_recheck_orphan_is_not_sent_to_ai_and_needs_review(self):
+        title_record = Title(
+            title="Orphan Film",
+            normalized_title="orphan film",
+            year=2020,
+            media_type="movie",
+            first_seen_at=self.now,
+            last_seen_at=self.now,
+            updated_at=self.now,
+            ai_validated=False,
+        )
+        self.title_repo.upsert("orphan", title_record)
+        before_title = self.title_repo.get("orphan")
+        scanner, mock_ai = self.make_recheck_scanner({0: {"is_valid_match": True}})
+
+        run = scanner.run("recheck_orphan")
+
+        self.assertEqual(run.status, "succeeded")
+        mock_ai.batch_recheck_matches.assert_not_called()
+        self.assertEqual(before_title, self.title_repo.get("orphan"))
+        self.assertEqual(self.occ_repo.list_by_title("orphan"), [])
+        log = self.parse_log_repo.get_all()[0]
+        self.assertEqual(log.decision, "needs_review")
+        self.assertEqual(log.trace_details["auditOutcome"], "orphan")
+
+    def test_recheck_missing_corrected_title_is_review_only(self):
+        self.seed_recheck_title()
+        before_title = self.title_repo.get("t1")
+        before_occurrences = self.occ_repo.list_by_title("t1")
+        omdb = MockOmdbClient({"replacement": self.valid_movie})
+        scanner, _ = self.make_recheck_scanner(
+            {0: {"is_valid_match": False, "reason": "Stored match is unrelated"}},
+            omdb,
+        )
+
+        run = scanner.run("recheck_missing_correction")
+
+        self.assertEqual(run.status, "succeeded")
+        self.assertEqual(omdb.request_count, 0)
+        self.assertEqual(before_title, self.title_repo.get("t1"))
+        self.assertEqual(before_occurrences, self.occ_repo.list_by_title("t1"))
+        log = self.parse_log_repo.get_all()[0]
+        self.assertEqual(log.decision, "needs_review")
+        self.assertEqual(log.trace_details["omdbOutcome"], "missing_corrected_title")
+
+    def test_recheck_omdb_outcomes_are_distinguishable_and_non_destructive(self):
+        cases = (
+            ("timeout", OmdbTransportError("timeout"), "transport_error", "partial"),
+            ("quota", OmdbLimitReachedError("quota"), "quota_exhausted", "partial"),
+            ("no_match", None, "confirmed_not_found", "succeeded"),
+            ("malformed", "malformed payload", "malformed_result", "partial"),
+        )
+        for name, omdb_error, expected_outcome, expected_status in cases:
+            with self.subTest(name=name):
+                self.setUp()
+                self.seed_recheck_title()
+                before_title = self.title_repo.get("t1")
+                before_occurrences = self.occ_repo.list_by_title("t1")
+                responses = {"replacement": omdb_error} if omdb_error else {}
+                scanner, _ = self.make_recheck_scanner(
+                    {
+                        0: {
+                            "is_valid_match": False,
+                            "corrected_title": "Replacement",
+                            "corrected_year": 2020,
+                            "corrected_media_type": "movie",
+                        }
+                    },
+                    MockOmdbClient(responses),
+                )
+
+                run = scanner.run(f"recheck_omdb_{name}")
+
+                self.assertEqual(run.status, expected_status)
+                self.assertEqual(before_title, self.title_repo.get("t1"))
+                self.assertEqual(before_occurrences, self.occ_repo.list_by_title("t1"))
+                log = self.parse_log_repo.get_all()[0]
+                self.assertEqual(log.decision, "needs_review")
+                self.assertEqual(log.trace_details["omdbOutcome"], expected_outcome)
+
+    def test_recheck_valid_replacement_suggestion_is_retained(self):
+        self.seed_recheck_title()
+        before_title = self.title_repo.get("t1")
+        before_occurrences = self.occ_repo.list_by_title("t1")
+        scanner, mock_ai = self.make_recheck_scanner(
+            {
+                0: {
+                    "is_valid_match": False,
+                    "corrected_title": "Replacement",
+                    "corrected_year": 1999,
+                    "corrected_media_type": "movie",
+                    "reason": "Stored match is unrelated",
+                }
+            },
+            MockOmdbClient({"replacement": self.valid_movie}),
+        )
+        mock_ai.batch_validate_omdb_matches.return_value = {
+            0: {"is_match": True, "confidence": 0.9}
+        }
+
+        run = scanner.run("recheck_replacement_suggestion")
+
+        self.assertEqual(run.status, "succeeded")
+        self.assertEqual(run.error_count, 0)
+        self.assertEqual(before_title, self.title_repo.get("t1"))
+        self.assertEqual(before_occurrences, self.occ_repo.list_by_title("t1"))
+        self.assertEqual(len(self.title_repo.list_all_ids_and_titles()), 1)
+        log = self.parse_log_repo.get_all()[0]
+        self.assertEqual(log.decision, "needs_review")
+        self.assertEqual(log.trace_details["candidateOutcome"], "valid_suggestion")
+
+    def test_recheck_dry_run_does_not_mutate_shared_fake_models(self):
+        original_title = Title(
+            title="Dry Run Film",
+            normalized_title="dry run film",
+            year=2020,
+            media_type="movie",
+            first_seen_at=self.now,
+            last_seen_at=self.now,
+            updated_at=self.now,
+            ai_validated=False,
+        )
+        original_occurrence = Occurrence(
+            source_feed_id="test-feed",
+            source_feed_name="Test Feed",
+            feed_entry_id="dry-run-entry",
+            torrent_url="https://example.test/dry-run",
+            raw_title="Dry Run Film 2020 1080p",
+            quality="1080p",
+            rip_type="WEB-DL",
+            first_seen_at=self.now,
+            last_seen_at=self.now,
+        )
+        self.title_repo.upsert("dry-run", original_title)
+        self.occ_repo.upsert("dry-run", "dry-run-occurrence", original_occurrence)
+        before_title = self.title_repo.get("dry-run")
+        before_occurrences = self.occ_repo.list_by_title("dry-run")
+        scanner, _ = self.make_recheck_scanner(
+            {0: {"is_valid_match": True}},
+            is_dry_run=True,
+        )
+
+        run = scanner.run("recheck_dry_run")
+
+        self.assertEqual(run.status, "succeeded")
+        self.assertFalse(original_title.ai_validated)
+        self.assertEqual(before_title, self.title_repo.get("dry-run"))
+        self.assertEqual(before_occurrences, self.occ_repo.list_by_title("dry-run"))
 
     def test_parse_log_trace_details_and_diagnostics(self):
         rss_feeds = {

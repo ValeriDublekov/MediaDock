@@ -159,6 +159,7 @@ def parse_log_from_dict(d: dict, doc_id: Optional[str] = None) -> ParseLog:
         processed_at=d.get("processedAt") or datetime.datetime.now(datetime.timezone.utc),
         error_message=d.get("errorMessage"),
         trace_details=d.get("traceDetails"),
+        decision=d.get("decision"),
     )
 
 

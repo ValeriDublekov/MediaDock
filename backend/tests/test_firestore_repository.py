@@ -280,12 +280,14 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
             ignored=False,
             ignore_reason=None,
             processed_at=self.base_time,
+            decision="needs_review",
         )
 
         repo.add(log)
         recent = repo.list_recent()
         self.assertEqual(len(recent), 1)
         self.assertEqual(recent[0].raw_title, "The Matrix 1999 1080p BDRip")
+        self.assertEqual(recent[0].decision, "needs_review")
 
         # Test pruning
         cutoff = self.base_time + datetime.timedelta(hours=1)

@@ -141,9 +141,20 @@ Prompt 5 introduces explicit terminal/retryable retention semantics.
 | `parsedYear` | number or null | Extracted year if present |
 | `omdbStatus` | string | `found`, `not_found`, `skipped`, `error`, `not_parsed` |
 | `ignored` | boolean | True if entry was filtered/skipped |
-| `ignoreReason` | string or null | `no_title`, `parse_error`, `entry_error`, `omdb_not_found`, `excluded_country_or_genre`, `omdb_limit_reached`, `omdb_error`, `empty_title`, `parse_only`, or null |
+| `ignoreReason` | string or null | `no_title`, `parse_error`, `entry_error`, `omdb_not_found`, `excluded_country_or_genre`, `omdb_limit_reached`, `omdb_error`, `audit_needs_review`, `empty_title`, `parse_only`, or null |
 | `errorMessage` | string or null | Error or exception details if an error occurred |
+| `decision` | string or null | Stable audit decision; the temporary recheck contract uses `needs_review` and never infers it from `errorMessage` |
+| `traceDetails` | map or null | Bounded diagnostics. Recheck review logs use `auditOutcome` (`orphan`, `ai_batch_incomplete`, `mismatch_retained`), `omdbOutcome` (`missing_corrected_title`, `confirmed_not_found`, `quota_exhausted`, `transport_error`, `invalid_request`, `unexpected_error`, or `malformed_result`), and `candidateOutcome` where applicable |
 | `processedAt` | Timestamp | Time when entry was processed |
+
+The existing-title audit is review-only in the current stage. A complete batch
+must contain exactly one result for every requested ID, and each result must
+contain an explicit boolean `is_valid_match`. Only an explicit valid result may
+set `titles/{titleId}.aiValidated=true`; missing, malformed, incomplete, or
+low-confidence results leave the title unchanged. Mismatch suggestions are
+retained in the review log and never move occurrences or delete a title.
+Titles with no occurrences are persisted as `decision=needs_review` with
+`auditOutcome=orphan` and are never compared with their stored title.
 
 ## `manualMappings/{mappingId}`
 

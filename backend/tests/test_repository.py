@@ -276,6 +276,44 @@ class RepositoryAndIdTests(unittest.TestCase):
         self.assertEqual(fetched.first_seen_at, self.base_time)
         self.assertEqual(fetched.last_seen_at, self.later_time)
 
+    def test_fake_repositories_use_defensive_copies(self) -> None:
+        title_repo = FakeTitleRepository()
+        title = Title(
+            title="Copied Film",
+            normalized_title="copied film",
+            year=2020,
+            media_type="movie",
+            first_seen_at=self.base_time,
+            last_seen_at=self.base_time,
+            updated_at=self.base_time,
+            ai_validated=False,
+        )
+        title_repo.upsert("copied-title", title)
+        title.ai_validated = True
+        fetched_title = title_repo.get("copied-title")
+        self.assertFalse(fetched_title.ai_validated)
+        fetched_title.title = "Mutated outside repository"
+        self.assertEqual(title_repo.get("copied-title").title, "Copied Film")
+
+        occurrence_repo = FakeOccurrenceRepository()
+        occurrence = Occurrence(
+            source_feed_id="feed1",
+            source_feed_name="Feed One",
+            feed_entry_id="entry1",
+            torrent_url="https://torrent1.com",
+            raw_title="Copied Film 2020",
+            quality="1080p",
+            rip_type="WEB-DL",
+            first_seen_at=self.base_time,
+            last_seen_at=self.base_time,
+        )
+        occurrence_repo.upsert("copied-title", "copied-occurrence", occurrence)
+        occurrence.raw_title = "Mutated outside repository"
+        self.assertEqual(
+            occurrence_repo.get("copied-title", "copied-occurrence").raw_title,
+            "Copied Film 2020",
+        )
+
     def test_fake_omdb_cache_repository(self) -> None:
         repo = FakeOmdbCacheRepository()
         cache_key = get_cache_key("inception", 2010)

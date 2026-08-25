@@ -127,6 +127,9 @@ still depends on Authentication and Firestore rules.
         feed parsing.
 - OMDb and AI limit/error states are explicit, included in scan counters, and
         produce a non-success process result when the phase is incomplete.
+- Existing-title audit mismatches and uncertain evidence are persisted as
+        `needs_review` outcomes; the audit phase does not delete titles or move
+        occurrences.
 - Scan runs record bounded error summaries without secrets.
 - Repository writes are idempotent so a workflow rerun is safe.
 - Frontend exposes loading, empty, denied, retryable error, and end states.

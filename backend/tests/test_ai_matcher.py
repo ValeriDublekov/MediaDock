@@ -147,6 +147,33 @@ class TestAiMatcher(unittest.TestCase):
         self.assertEqual(res[1]["corrected_year"], 2024)
         self.assertEqual(res[1]["corrected_media_type"], "series")
 
+    @patch.object(AiMatcher, "_call_gemini")
+    def test_batch_recheck_rejects_incomplete_or_unknown_ids(self, mock_call):
+        matcher = AiMatcher(api_key="valid_key")
+        items = [
+            {"id": 0, "raw_title": "Film 1", "current_omdb_title": "Film 1"},
+            {"id": 1, "raw_title": "Film 2", "current_omdb_title": "Film 2"},
+        ]
+
+        for response in (
+            [{"id": 0, "is_valid_match": True}],
+            [
+                {"id": 0, "is_valid_match": True},
+                {"id": 0, "is_valid_match": True},
+            ],
+            [
+                {"id": 0, "is_valid_match": True},
+                {"id": 2, "is_valid_match": True},
+            ],
+            [
+                {"id": 0, "is_valid_match": None},
+                {"id": 1, "is_valid_match": True},
+            ],
+        ):
+            with self.subTest(response=response):
+                mock_call.return_value = response
+                self.assertEqual(matcher.batch_recheck_matches(items), {})
+
     @patch("time.sleep")
     @patch("urllib.request.urlopen")
     def test_call_gemini_error_disables_matcher(self, mock_urlopen, mock_sleep):
