@@ -13,9 +13,9 @@ python -m movies_feed.cli --mode <rss|recheck-existing|reparse-unfound|all>
 The files under `legacy/` are a separate, file-based implementation and are not used by the GitHub Actions scanner. The local `scripts/run_scanner.*` wrappers still target that old entry point; see the findings below.
 
 This is a current-state and risk document, not a production-readiness claim.
-Workflow hardening, browser trust boundaries, and the bounded RSS network
-boundary are prerequisites tracked in `docs/BACKEND_REFACTORING_PROMPTS.md`
-(Prompts 0A-0C) and `DEPLOYMENT.md`.
+Workflow hardening and browser trust-boundary work from Prompts 0A-0B are
+implemented. The bounded RSS network boundary remains a prerequisite tracked in
+`docs/BACKEND_REFACTORING_PROMPTS.md` (Prompt 0C) and `DEPLOYMENT.md`.
 
 ## Building Blocks
 
@@ -141,14 +141,18 @@ map to a non-zero CLI exit code.
 	parse-log writes; CI uses the explicit `demo-mediadock` emulator project.
 - CI and local backend checks install the reviewed `backend/requirements.lock`
 	set before the editable package.
+- Allowlisted readers are read-only for scanner settings and manual mappings;
+	only explicit allowlisted admins can write validated documents, with actor
+	UIDs bound in both rules and adapters. Browser builds contain no scanner
+	credentials or dispatch token.
 
 ## Inconsistencies and Bugs
 
 | Priority | Finding | Impact | Recommended fix |
 | --- | --- | --- | --- |
 | Resolved | Workflow dispatch input handling and scanner process exit semantics. | Prompt 0A validates inputs outside shell source, uses an argument array, and maps `succeeded/partial/failed` to `0/2/1`. | Keep the workflow static regression test and documented exit-code contract green. |
-| High | Allowlist membership currently grants access to settings and manual-mapping writes without enforcing the documented `role`. | A reader account can alter privileged scanner inputs or mappings. | Add an explicit admin policy, validate fields and lengths in rules/backend, and test reader/admin/disabled cases. |
-| High | Client configuration exposes a path for scanner credentials/control through browser storage and Vite env configuration. | XSS or a compromised dependency can steal a PAT or OMDb key and trigger privileged operations. | Remove private scanner credentials from the browser and use GitHub's protected dispatch or a server-side control plane. |
+| Resolved | Allowlist membership previously granted settings and manual-mapping writes without enforcing the documented `role`. | Prompt 0B restricts those writes to explicit admins and validates document shape/ownership. | Keep the rules emulator suite green. |
+| Resolved | Client configuration previously exposed scanner credentials/control through browser storage and Vite env configuration. | Prompt 0B removes PAT/OMDb credentials and uses GitHub's protected Actions UI. | Keep the bundle/config regression test green. |
 | High | The implementation and status documents disagree about Gemini model handling: the code defaults to `gemini-3.1-flash-lite`, remaps valid `gemini-2.5-flash*` IDs, and the status mentions Gemini 3.7. | A model setting can be silently changed or use a generation payload incompatible with the selected model. | Use `docs/GEMINI_MODELS.md`, stop silently remapping valid IDs, validate `generateContent` capability, and test model-specific generation settings. |
 | Critical | AI audit is fail-open: a missing item/result defaults to `is_valid_match=True`; candidate validation also accepts missing/failed AI responses. | Partial or malformed AI output can validate wrong data, followed by destructive moves/deletes. | Validate complete response ID coverage and required fields; fail closed; require a confidence threshold; quarantine proposals instead of deleting immediately. |
 | Critical | DB audit judges a title from only its first occurrence, then moves or deletes every occurrence. | One unrepresentative occurrence can corrupt the entire title aggregate. | Audit each distinct raw-title cluster, split incorrect occurrences, and keep the existing title while any occurrence still validates. |
