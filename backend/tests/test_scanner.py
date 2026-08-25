@@ -1,5 +1,6 @@
 import datetime
 import unittest
+from pathlib import Path
 from typing import Any, Dict
 
 from movies_feed.models import ManualMapping, OmdbCacheEntry, Title, Occurrence, ScanRun
@@ -13,6 +14,26 @@ from movies_feed.repository import (
     FakeManualMappingRepository,
 )
 from movies_feed.scanner import ScannerConfig, ScannerService
+from movies_feed.feed_fetcher import FeedFetcher
+
+
+class StaticTestFeedFetcher:
+    def __init__(self):
+        self.validator = FeedFetcher(
+            allowed_hosts={"feed.example.test"},
+            dns_resolver=lambda host, port: ["8.8.8.8"],
+        )
+
+    def fetch(self, url: str) -> bytes:
+        if url.lstrip().startswith("<"):
+            return url.encode("utf-8")
+        return Path(url).read_bytes()
+
+    def fetch_file(self, path: str) -> bytes:
+        return Path(path).read_bytes()
+
+    def validate_parsed_feed(self, feed: Any):
+        return self.validator.validate_parsed_feed(feed)
 
 class MockOmdbClient(OmdbClient):
     def __init__(self, responses: Dict[str, Any]):
@@ -98,7 +119,8 @@ class TestScanner(unittest.TestCase):
             run_repo=self.run_repo,
             parse_log_repo=self.parse_log_repo,
             manual_mapping_repo=self.manual_mapping_repo,
-            now=self.now
+            now=self.now,
+            feed_fetcher=StaticTestFeedFetcher(),
         )
 
     def test_parse_logs_creation_and_pruning(self):

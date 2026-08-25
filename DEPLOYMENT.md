@@ -2,8 +2,9 @@
 
 This is the target deployment runbook for Cloud Firestore, Firebase Authentication,
 the daily GitHub Actions scanner, and the React GitHub Pages site. The MVP
-workflows exist, but production launch remains gated on the hardening stages in
-`docs/BACKEND_REFACTORING_PROMPTS.md` (Prompts 0A-0C and the later repair stages).
+workflows and prerequisite hardening stages 0A-0C are implemented; production
+launch remains gated on the later repair stages in
+`docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Deployment Model
 
@@ -25,6 +26,8 @@ GitHub Pages cannot run the Python scanner.
 - GitHub repository with Actions and Pages enabled.
 - A rotated OMDb API key; a Gemini API key is also required for AI modes.
 - An explicitly approved Gemini model ID with the required API capability; see [`docs/GEMINI_MODELS.md`](docs/GEMINI_MODELS.md).
+- Configured RSS feeds must use the bounded fetcher's code-owned HTTPS host
+  allowlist; local verification uses the explicit `--feed-file` option.
 - At least one Google account selected for the access allowlist.
 
 Record project names and regions outside source code where appropriate. Never put

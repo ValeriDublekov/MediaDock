@@ -61,8 +61,25 @@ It is not a catalog title despite its location under `titles`.
 Allowlisted readers may read this document. Only allowlisted admins may create
 or update it, and the rules require `updatedBy == request.auth.uid`. Deletes are
 denied. The backend validates the same shape before applying an override; URL
-scheme, host, redirect, and IP policy belongs to the bounded fetcher in Prompt
-0C.
+scheme, host, redirect, and IP policy belongs to the bounded fetcher and is not
+expanded by this document.
+
+### RSS network boundary
+
+Configured `rssFeeds.*.url` values are network references only. The scanner
+passes them to `FeedFetcher`, which accepts HTTPS URLs only when the normalized
+host is in the code-owned `feed.rutracker.cc` allowlist. It rejects credentials,
+local/file schemes, and DNS results that are private, loopback, link-local,
+reserved, unspecified, multicast, or IPv4-mapped private addresses. Every
+redirect repeats the same URL and DNS validation; redirects are limited to 3
+hops.
+
+The transport verifies TLS, uses a 5-second connect timeout and 20-second read
+timeout, requires an RSS/Atom/XML content type and a 2xx status, and limits the
+decompressed body to 4 MiB. Parsed feeds are limited to 500 entries. A bozo or
+otherwise incomplete parse rejects the entire feed before persistence; entries
+are never silently truncated. Local fixtures are separate from configured
+network URLs and require the explicit CLI `--feed-file` option.
 
 ## `titles/{titleId}/occurrences/{occurrenceId}`
 

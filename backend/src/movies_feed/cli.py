@@ -78,6 +78,7 @@ def validate_runtime_configuration(
     audit_days: Any,
     parse_only: bool = False,
     fake_repos: bool = False,
+    feed_file: Optional[str] = None,
     environment: Optional[Mapping[str, str]] = None,
 ) -> tuple[int, int]:
     """Validate mode, bounded inputs, and secrets without exposing secret values."""
@@ -85,6 +86,8 @@ def validate_runtime_configuration(
         raise ConfigurationError("mode is not supported")
     if parse_only and mode != "rss":
         raise ConfigurationError("parse-only mode is supported only with --mode rss")
+    if feed_file and mode != "rss":
+        raise ConfigurationError("--feed-file is supported only with --mode rss")
 
     parsed_force_days = _parse_bounded_days(force_days, "force_days")
     parsed_audit_days = _parse_bounded_days(audit_days, "audit_days")
@@ -216,6 +219,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--force-days", type=str, default="0", help="Force scan entries N days back")
     parser.add_argument("--audit-days", type=str, default="0", help="Audit existing records N days back (0 = unlimited)")
     parser.add_argument("--mode", type=str, default="rss", choices=["rss", "recheck-existing", "reparse-unfound", "all"], help="Scan mode: 'rss' (feed scan), 'recheck-existing' (AI check stored titles), 'reparse-unfound' (AI reparse unmapped titles), or 'all'")
+    parser.add_argument("--feed-file", type=str, default=None, help="Read one explicit local RSS/Atom fixture instead of configured network feeds")
+    parser.add_argument("--feed-type", type=str, choices=["movie", "series"], default=None, help="Configured type for --feed-file (default: movie)")
     
     parser.add_argument("--trigger", type=str, default=None, choices=["schedule", "manual", "local"], help="Trigger type (schedule, manual, local)")
     
@@ -228,6 +233,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             audit_days=args.audit_days,
             parse_only=args.parse_only,
             fake_repos=args.fake_repos,
+            feed_file=args.feed_file,
         )
     except ConfigurationError as exc:
         logger.error("Configuration error: %s", _sanitize_diagnostic(exc))
@@ -244,6 +250,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     filters = config_data.get("filters", {})
     excluded_countries = filters.get("excluded_countries", [])
     excluded_genres = filters.get("excluded_genres", [])
+    feed_file_type = args.feed_type or "movie"
 
     # Override with custom settings from Firestore if available
     if not args.fake_repos and not args.parse_only:
@@ -319,6 +326,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         force_days=args.force_days,
         audit_days=args.audit_days,
         mode=args.mode,
+        feed_file=args.feed_file,
+        feed_file_type=feed_file_type,
     )
 
     if args.fake_repos or args.parse_only:

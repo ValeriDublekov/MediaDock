@@ -2,10 +2,10 @@
 
 ## Status
 
-This describes the target architecture. Bootstrap (P00/M0) and the MVP wiring
-are present, but production hardening is still open. The prerequisite security
-and operational work is tracked in `docs/BACKEND_REFACTORING_PROMPTS.md`
-(Prompts 0A-0C).
+This describes the target architecture. Bootstrap (P00/M0), the MVP wiring,
+workflow/client hardening, and the bounded RSS boundary from Prompts 0A-0C are
+present. The remaining refactoring work is tracked in
+`docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Components
 
@@ -26,6 +26,11 @@ FeedFetcher  OMDb/AI adapters  Firestore Admin adapters
 
 Business logic must not initialize Firebase, read process arguments, or perform
 HTTP requests directly. Tests replace outbound adapters with fakes.
+
+`FeedFetcher` owns the code-defined HTTPS host allowlist, public DNS and
+redirect validation, TLS transport, response/entry bounds, and explicit local
+fixture reads. `ScannerService` receives feed bytes from that adapter and is the
+only active caller of `feedparser`.
 
 ### Frontend
 

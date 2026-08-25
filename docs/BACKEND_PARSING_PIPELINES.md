@@ -13,15 +13,16 @@ python -m movies_feed.cli --mode <rss|recheck-existing|reparse-unfound|all>
 The files under `legacy/` are a separate, file-based implementation and are not used by the GitHub Actions scanner. The local `scripts/run_scanner.*` wrappers still target that old entry point; see the findings below.
 
 This is a current-state and risk document, not a production-readiness claim.
-Workflow hardening and browser trust-boundary work from Prompts 0A-0B are
-implemented. The bounded RSS network boundary remains a prerequisite tracked in
-`docs/BACKEND_REFACTORING_PROMPTS.md` (Prompt 0C) and `DEPLOYMENT.md`.
+Workflow hardening, browser trust-boundary work, and the bounded RSS network
+boundary from Prompts 0A-0C are implemented. The remaining refactoring stages
+are tracked in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Building Blocks
 
 | Component | Current responsibility |
 | --- | --- |
 | `cli.py` | Validates bounded CLI inputs and mode-specific configuration, loads JSON/Firestore settings, selects repositories and mode, creates one `ScannerService`, and maps `ScanRun` status to a process exit code. |
+| `feed_fetcher.py` | Fetches allowlisted HTTPS RSS/Atom feeds through bounded, redirect-validated transport, and reads explicitly selected local fixture files. |
 | `rutracker_parser.py` | Regex/heuristic extraction of title, year, movie/series flag, quality, and rip type. |
 | `omdb_client.py` | Exact OMDb lookup, fallback lookup, series-period checks, and payload normalization. |
 | `ai_matcher.py` | Gemini batch title extraction, OMDb candidate validation, and stored-match audit. The active prompt strings are currently inline; the files under `prompts/` are not loaded by the current implementation. |
@@ -79,12 +80,12 @@ errors.
 ### 1. Standard RSS scan (`--mode rss`)
 
 1. Load feeds and filters from JSON, optionally overridden by `titles/settings_config` in Firestore.
-2. Fetch each feed with `feedparser.parse()`.
+2. Fetch each configured feed through `FeedFetcher`, validate HTTPS host/IP/redirect policy, limits, status, and content type, then pass the returned bytes to `feedparser.parse()`. A bozo/partial parse or an entry count over the configured bound rejects the whole feed before cache, catalog, or parse-log work begins.
 3. Regex-parse every entry once to prefetch OMDb cache keys.
 4. Process each entry and regex-parse it a second time.
 5. If `force_days > 0`, silently skip entries older than the cutoff.
 6. Reject empty or unparseable titles and create a parse log.
-7. In `--parse-only`, each RSS entry stops after parsing. Parse-only is valid only with `--mode rss`; the CLI rejects combinations such as `--parse-only --mode all` and the scanner also exits before any AI phase. No Firestore, OMDb, Gemini, or parse-log write is performed.
+7. In `--parse-only`, each RSS entry stops after parsing. Parse-only is valid only with `--mode rss`; the CLI rejects combinations such as `--parse-only --mode all` and the scanner also exits before any AI phase. No Firestore, OMDb, Gemini, or parse-log write is performed. An explicitly supplied `--feed-file` is read as bytes through the fixture path and is never passed as a URL to `feedparser`.
 8. Resolve a manual mapping by log/occurrence ID, raw title, or normalized parsed title. A successful IMDb lookup bypasses automatic type/year validation.
 9. Otherwise read the `(normalized title, year)` cache. Positive entries live for 30 days by default; negative entries live for up to two days.
 10. On a cache miss, call OMDb with a series hint when the parser says series, or with the configured feed type.
@@ -139,6 +140,11 @@ map to a non-zero CLI exit code.
 	values, and scan status now controls the process exit code.
 - Parse-only is an RSS-only early-exit mode with no OMDb, Gemini, Firestore, or
 	parse-log writes; CI uses the explicit `demo-mediadock` emulator project.
+- RSS input uses a code-owned `feed.rutracker.cc` HTTPS allowlist, validates
+	public DNS results and every redirect, verifies TLS, bounds connect/read time,
+	decompressed bytes and entries, checks status/content type, and rejects bozo
+	feeds before any persistence. Local fixtures require the explicit
+	`--feed-file` RSS option.
 - CI and local backend checks install the reviewed `backend/requirements.lock`
 	set before the editable package.
 - Allowlisted readers are read-only for scanner settings and manual mappings;
@@ -169,7 +175,7 @@ map to a non-zero CLI exit code.
 | High | Audit/reparse bypass OMDb cache, soft request limit, request counters, and OMDb timing. Quota errors are swallowed as ordinary no-match results. | Excess API traffic, misleading run metrics, and repeated calls after quota exhaustion. | Route every lookup through one cached, budget-aware resolver and propagate global quota exhaustion. |
 | High | Most OMDb `Response=False` errors other than text containing `limit reached` become `OmdbNoMatchError`. RSS then stores a negative title cache entry. | Authentication, malformed-request, or service errors can suppress a valid title for two days; audit may turn the same classification into deletion. | Parse OMDb error categories explicitly and cache only confirmed title-not-found outcomes. |
 | High | Cache key omits media type. | Same-title, same-year movie and series requests can share an invalid positive/negative cache entry. | Version the key and include normalized media type; migrate or naturally expire old keys. |
-| High | Feed URLs are passed directly to `feedparser` with no scheme/host validation, timeout, size limit, entry cap, or `bozo`/HTTP check. | SSRF/local-file reads, hangs, amplification, and silent partial feeds are possible. | Add a bounded HTTPS `FeedFetcher`, host allowlist, redirect/IP checks, response limits, and explicit parse-error handling. |
+| Resolved | Feed URLs are passed directly to `feedparser` with no scheme/host validation, timeout, size limit, entry cap, or `bozo`/HTTP check. | SSRF/local-file reads, hangs, amplification, and silent partial feeds were possible. | `FeedFetcher` now owns the allowlist, redirect/IP checks, response limits, and explicit parse-error handling; fixture reads require `--feed-file`. |
 | High | RSS writes the source publication timestamp into both `firstSeenAt` and `lastSeenAt`. Audit filtering prefers this old `lastSeenAt` over the newer `updatedAt`. | A release rescanned today can be excluded by `audit_days` because it was published months ago. | Store `sourcePublishedAt` separately; set observed `firstSeenAt`/`lastSeenAt` from scanner time and define audit recency against an explicit field. |
 | High | Manual mappings are used only while processing a live RSS entry, not while reprocessing parse logs. | A correction remains unused when the source entry has left the feed, while Gemini keeps retrying it. | Resolve manual mappings before AI in the shared retry pipeline and persist enough source context to complete the occurrence. |
 | High | A title without occurrences is audited by using its own stored title as the raw source text. | Orphaned or partially written titles can self-validate without any source evidence. | Treat missing provenance as `needs_review` or remove it through a separate orphan-reconciliation policy; never AI-validate a self-comparison. |

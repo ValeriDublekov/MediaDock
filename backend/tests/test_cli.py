@@ -46,6 +46,16 @@ class TestCliConfiguration(unittest.TestCase):
                 environment={},
             )
 
+    def test_feed_file_is_restricted_to_rss_mode(self) -> None:
+        with self.assertRaisesRegex(ConfigurationError, "--feed-file"):
+            validate_runtime_configuration(
+                mode="all",
+                force_days="0",
+                audit_days="0",
+                feed_file="fixture.atom",
+                environment={},
+            )
+
     def test_mode_specific_secrets_are_required(self) -> None:
         with self.assertRaisesRegex(ConfigurationError, "OMDB_API_KEY"):
             validate_runtime_configuration(
@@ -149,6 +159,32 @@ class TestCliConfiguration(unittest.TestCase):
                         expected_code,
                     )
 
+    def test_main_passes_fixture_as_separate_scanner_input(self) -> None:
+        fixture_path = "backend/tests/fixtures/movies_feed.atom"
+        run = ScanRun(
+            started_at=datetime.datetime.now(datetime.timezone.utc),
+            finished_at=datetime.datetime.now(datetime.timezone.utc),
+            status="succeeded",
+            trigger="local",
+        )
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "movies_feed.cli.load_config", return_value={}
+        ), patch("movies_feed.cli.ScannerService") as scanner_type:
+            scanner_type.return_value.run.return_value = run
+            self.assertEqual(
+                main([
+                    "--fake-repos",
+                    "--parse-only",
+                    "--feed-file",
+                    fixture_path,
+                ]),
+                EXIT_SUCCESS,
+            )
+
+        scanner_config = scanner_type.call_args.kwargs["config"]
+        self.assertEqual(scanner_config.feed_file, fixture_path)
+        self.assertEqual(scanner_config.rss_feeds, {})
+
 
 class TestParseOnlyExecution(unittest.TestCase):
     def test_parse_only_does_not_call_omdb_or_ai(self) -> None:
@@ -179,13 +215,8 @@ class TestParseOnlyExecution(unittest.TestCase):
         now = datetime.datetime.now(datetime.timezone.utc)
         scanner = ScannerService(
             config=ScannerConfig(
-                rss_feeds={
-                    "fixture": {
-                        "name": "fixture",
-                        "url": "backend/tests/fixtures/movies_feed.atom",
-                        "type": "movie",
-                    }
-                },
+                rss_feeds={},
+                feed_file="backend/tests/fixtures/movies_feed.atom",
                 is_parse_only=True,
                 mode="rss",
             ),

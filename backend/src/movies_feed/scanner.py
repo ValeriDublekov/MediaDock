@@ -27,6 +27,7 @@ from .repository import (
 )
 from .rutracker_parser import ParsedTitle, iter_feed_definitions, parse_rutracker_title
 from .ai_matcher import AiMatcher
+from .feed_fetcher import FeedFetcher
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,9 @@ class ScannerConfig:
     force_days: int = 0
     audit_days: int = 0  # 0 = unlimited
     mode: str = "rss"  # "rss", "recheck-existing", "reparse-unfound", "all"
+    feed_file: Optional[str] = None
+    feed_file_name: str = "fixture"
+    feed_file_type: Optional[str] = "movie"
 
 
 def _get_entry_datetime(entry: Any) -> Optional[datetime.datetime]:
@@ -68,6 +72,7 @@ class ScannerService:
         manual_mapping_repo: Optional[ManualMappingRepository] = None,
         ai_matcher: Optional[AiMatcher] = None,
         now: Optional[datetime.datetime] = None,
+        feed_fetcher: Optional[FeedFetcher] = None,
     ):
         self.config = config
         self.omdb_client = omdb_client
@@ -79,7 +84,17 @@ class ScannerService:
         self.manual_mapping_repo = manual_mapping_repo
         self.ai_matcher = ai_matcher
         self.now = now or datetime.datetime.now(datetime.timezone.utc)
+        self.feed_fetcher = feed_fetcher or FeedFetcher()
         self._reset_session_caches()
+
+    def _iter_scan_feed_definitions(self) -> List[Dict[str, Optional[str]]]:
+        if self.config.feed_file:
+            return [{
+                "name": self.config.feed_file_name,
+                "url": None,
+                "type": self.config.feed_file_type,
+            }]
+        return list(iter_feed_definitions(self.config.rss_feeds))
 
     def _reset_session_caches(self) -> None:
         self._session_cache_entries: Dict[str, Optional[OmdbCacheEntry]] = {}
@@ -314,14 +329,21 @@ class ScannerService:
             # 1. RSS Feed Processing (if mode is "rss" or "all")
             if self.config.mode in ("rss", "all"):
                 logger.info("--> [Phase 1/3] Processing RSS feeds...")
-                for feed_def in iter_feed_definitions(self.config.rss_feeds):
+                for feed_def in self._iter_scan_feed_definitions():
                     run.feeds_processed += 1
                     try:
                         t0_feed = time.perf_counter()
-                        feed = feedparser.parse(feed_def["url"])
+                        if self.config.feed_file:
+                            feed_bytes = self.feed_fetcher.fetch_file(self.config.feed_file)
+                        else:
+                            feed_url = feed_def.get("url")
+                            if not isinstance(feed_url, str):
+                                raise ValueError("configured feed URL is missing")
+                            feed_bytes = self.feed_fetcher.fetch(feed_url)
+                        feed = feedparser.parse(feed_bytes)
                         t_feed = time.perf_counter() - t0_feed
                         section_timings["feed_fetch"] += t_feed
-                        entries = getattr(feed, "entries", [])
+                        entries = self.feed_fetcher.validate_parsed_feed(feed)
                         entries_cnt = len(entries)
                         logger.info(
                             f"Section [feed_fetch]: Feed '{feed_def['name']}' fetched in {t_feed:.4f}s ({entries_cnt} entries)"

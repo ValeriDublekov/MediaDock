@@ -54,13 +54,16 @@ firebase emulators:start --project demo-mediadock
 ```
 
 ### Backend Scanner (Dry Run)
-The current CLI reads the configured RSS feeds and can parse them without OMDb or
-Firestore writes. Do not pass a fixture path as a positional argument; an
-explicit fixture option is part of the later parser/fetcher work in
-`docs/BACKEND_REFACTORING_PROMPTS.md`:
+The CLI reads configured RSS feeds through the bounded HTTPS fetcher and can
+parse them without OMDb or Firestore writes. The production configuration is
+restricted to the code-owned feed host allowlist. For an offline local fixture,
+use the explicit RSS file option:
 ```bash
-python -m movies_feed.cli --config legacy/config.json --mode rss --parse-only
+python -m movies_feed.cli --config legacy/config.json --mode rss --parse-only --feed-file backend/tests/fixtures/movies_feed.atom
 ```
+
+`--feed-file` is separate from configured network URLs, is valid only with RSS
+mode, and passes fixture bytes to the parser rather than a local path.
 
 Use the Firebase emulator and synthetic fixtures for automated tests. The
 scanner's `--dry-run` still permits external API calls; `--parse-only` is the

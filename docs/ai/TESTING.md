@@ -50,7 +50,7 @@ workflow validation from `git diff` alone.
 | Layer | Purpose | Network policy |
 | --- | --- | --- |
 | Backend unit | Parser, normalization, filtering, orchestration | No live network |
-| Backend adapter | OMDb response handling through mocked transport | No live network |
+| Backend adapter | Bounded RSS and OMDb response handling through mocked transports | No live network |
 | Repository integration | Firestore persistence and idempotency | Emulator only |
 | Rules | Authentication and operation permission matrix | Emulator only |
 | Workflow/security static checks | Input injection, secret exposure, exit codes, and action configuration | No production services |
@@ -74,5 +74,8 @@ workflow validation from `git diff` alone.
 - Unit tests must not read real `.env` or production credentials.
 - Emulator tests must use an explicit demo/local project ID.
 - Test fixtures must contain synthetic or already-public feed samples only.
+- RSS tests must inject a mocked transport or use the explicit fixture-file
+	path; no test may pass a local path or fixture text as a configured network URL
+	to the production `FeedFetcher`.
 - Never snapshot service-account data, API keys, or private catalog records.
 - Never test by calling live RSS, OMDb, Gemini, or production Firestore.

@@ -15,15 +15,16 @@ MVP wiring is present; production hardening is not complete.
 - AI matcher: Gemini extraction/validation exists with inline prompts and a current default of `gemini-3.1-flash-lite`; see [`GEMINI_MODELS.md`](../GEMINI_MODELS.md).
 - Prompt 0A: Scanner workflow inputs, mode-aware CLI preflight, process exit codes, parse-only isolation, explicit emulator project IDs, and locked backend CI dependencies are implemented.
 - Prompt 0B: Reader/admin rules, validated scanner settings and manual mappings, authenticated `createdBy`/`updatedBy`, and removal of browser scanner credentials are implemented.
+- Prompt 0C: Bounded HTTPS RSS fetching, public DNS and redirect validation, response/entry limits, bozo rejection, and explicit `--feed-file` fixture input are implemented.
 
 ## Next Prompt
 
-Run Prompt 0C in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+Run Prompt 1 in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 
 - Firebase project identifiers and an authorized user account must be configured for production.
-- Browser-secret removal, role enforcement, and bounded RSS fetching remain open before production launch.
+- Production launch still requires the later non-destructive audit, resolver, retry, and proposal stages.
 - The Firestore rules emulator could not run in this local environment because Java is unavailable; CI installs Java 21 and runs the same rules test.
 
 
