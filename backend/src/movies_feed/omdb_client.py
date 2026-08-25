@@ -3,6 +3,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from .match_policy import (
+    BroadcastRange,
+    classify_media,
+    is_year_in_series_period,
+    parse_broadcast_range,
+)
+
 
 class OmdbError(Exception):
     """Base exception for all OMDb client errors."""
@@ -43,6 +50,9 @@ class OmdbMovieResult:
     box_office: Optional[str]
     ratings: List[Dict[str, str]] = field(default_factory=list)
     raw_payload: Dict[str, Any] = field(default_factory=dict)
+    source_type: Optional[str] = None
+    content_kind: Optional[str] = None
+    broadcast_range: Optional[BroadcastRange] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the normalized result to a dictionary with camelCase fields suitable for Firestore."""
@@ -51,6 +61,12 @@ class OmdbMovieResult:
             "year": self.year,
             "mediaType": self.media_type,
         }
+        if self.source_type is not None:
+            res["sourceType"] = self.source_type
+        if self.content_kind is not None:
+            res["contentKind"] = self.content_kind
+        if self.broadcast_range is not None:
+            res["broadcastRange"] = self.broadcast_range.to_dict()
         if self.imdb_id is not None:
             res["imdbId"] = self.imdb_id
         if self.rating is not None:
@@ -112,24 +128,6 @@ def _parse_year(year_str: Optional[str]) -> Optional[int]:
     return None
 
 
-def is_year_in_series_period(raw_year_str: Optional[str], target_year: int) -> bool:
-    if not raw_year_str or raw_year_str == "N/A":
-        return True
-    normalized = raw_year_str.replace("–", "-").replace("—", "-").strip()
-    years = [int(y) for y in re.findall(r"\b\d{4}\b", normalized)]
-    if not years:
-        return True
-    start_year = years[0]
-    if "-" in normalized:
-        if len(years) >= 2:
-            end_year = years[1]
-        else:
-            end_year = 9999
-    else:
-        end_year = start_year
-    return start_year <= target_year <= end_year
-
-
 def _parse_float(val: Optional[str]) -> Optional[float]:
     if not val or val == "N/A":
         return None
@@ -170,13 +168,7 @@ def _parse_string(val: Optional[str]) -> Optional[str]:
 
 
 def determine_media_type(omdb_type: str, genres: List[str]) -> str:
-    if any(g.lower() == "documentary" for g in genres):
-        return "documentary"
-    if any(g.lower() == "short" for g in genres):
-        return "short"
-    if omdb_type == "series":
-        return "series"
-    return "movie"
+    return classify_media(omdb_type, genres).media_type
 
 
 def _sanitize_string(text: str, api_key: Optional[str]) -> str:
@@ -262,15 +254,7 @@ class OmdbClient:
         if media_type and media_type.lower() == "series":
             data = self._make_request(title, media_type="series")
             if data.get("Response") == "True":
-                resp_type = data.get("Type", "").lower()
-                if resp_type == "series":
-                    req_year = _parse_year(year) if year else None
-                    if req_year is None or is_year_in_series_period(data.get("Year"), req_year):
-                        payload = data
-                    else:
-                        raise OmdbNoMatchError(
-                            f"OMDb lookup failed: series broadcasting period '{data.get('Year')}' does not match requested year '{year}'"
-                        )
+                payload = data
             else:
                 err_msg = data.get("Error", "")
                 if "limit reached" in err_msg.lower():
@@ -278,16 +262,12 @@ class OmdbClient:
                 raise OmdbNoMatchError(f"OMDb lookup failed: {err_msg}")
 
         if payload is None and (not media_type or media_type.lower() != "series"):
-            req_year = _parse_year(year) if year else None
-
             # 1. Primary lookup: Title + Year + Media Type (if year is specified)
             if year:
                 try:
                     data = self._make_request(title, year, media_type)
                     if data.get("Response") == "True":
-                        resp_type = data.get("Type", "").lower()
-                        if not media_type or media_type.lower() not in ("movie", "series") or resp_type == media_type.lower():
-                            payload = data
+                        payload = data
                     else:
                         err_msg = data.get("Error", "")
                         if "limit reached" in err_msg.lower():
@@ -299,14 +279,7 @@ class OmdbClient:
             if payload is None and media_type and media_type.lower() in ("movie", "series"):
                 data = self._make_request(title, media_type=media_type)
                 if data.get("Response") == "True":
-                    resp_type = data.get("Type", "").lower()
-                    if resp_type == media_type.lower():
-                        res_year = _parse_year(data.get("Year"))
-                        # If a specific year was requested for a movie, enforce ±1 year tolerance
-                        if req_year is not None and res_year is not None and abs(res_year - req_year) > 1:
-                            pass  # Year mismatch exceeds tolerance, reject
-                        else:
-                            payload = data
+                    payload = data
                 else:
                     err_msg = data.get("Error", "")
                     if "limit reached" in err_msg.lower():
@@ -316,11 +289,7 @@ class OmdbClient:
             if payload is None and not media_type:
                 data = self._make_request(title)
                 if data.get("Response") == "True":
-                    res_year = _parse_year(data.get("Year"))
-                    if req_year is not None and res_year is not None and abs(res_year - req_year) > 1:
-                        pass
-                    else:
-                        payload = data
+                    payload = data
                 else:
                     err_msg = data.get("Error", "")
                     if "limit reached" in err_msg.lower():
@@ -364,7 +333,13 @@ class OmdbClient:
                         "Value": r["Value"]
                     })
 
-        media_type = determine_media_type(raw_type, genres)
+        classification = classify_media(raw_type, genres)
+        media_type = classification.media_type
+        broadcast_range = (
+            parse_broadcast_range(raw_year)
+            if classification.source_type == "series"
+            else None
+        )
 
         return OmdbMovieResult(
             title=title,
@@ -384,4 +359,7 @@ class OmdbClient:
             box_office=box_office,
             ratings=ratings,
             raw_payload=data,
+            source_type=classification.source_type,
+            content_kind=classification.content_kind,
+            broadcast_range=broadcast_range,
         )

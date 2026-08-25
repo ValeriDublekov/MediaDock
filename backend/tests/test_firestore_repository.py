@@ -23,14 +23,44 @@ from movies_feed import (
     get_title_id,
     get_occurrence_id,
     get_cache_key,
+    BroadcastRange,
 )
 from movies_feed.firestore_repository import (
     manual_mapping_from_dict,
     parse_log_from_dict,
+    title_from_dict,
 )
 
 
 class DictDeserializationTests(unittest.TestCase):
+    def test_title_type_fields_round_trip_and_legacy_derivation(self) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        broadcast_range = BroadcastRange(start_year=2007, end_year=2015, raw="2007-2015")
+        title = Title(
+            title="Mad Men",
+            normalized_title="mad men",
+            year=2007,
+            media_type="series",
+            first_seen_at=now,
+            last_seen_at=now,
+            updated_at=now,
+            source_type="series",
+            content_kind="standard",
+            broadcast_range=broadcast_range,
+        )
+
+        restored = title_from_dict(title.to_dict())
+        self.assertEqual(restored.source_type, "series")
+        self.assertEqual(restored.content_kind, "standard")
+        self.assertEqual(restored.broadcast_range, broadcast_range)
+
+        legacy = title_from_dict({
+            "title": "Planet Earth",
+            "mediaType": "documentary",
+        })
+        self.assertEqual(legacy.source_type, "movie")
+        self.assertEqual(legacy.content_kind, "documentary")
+
     def test_manual_mapping_deserialization_with_and_without_id_key(self) -> None:
         now = datetime.datetime.now(datetime.timezone.utc)
         

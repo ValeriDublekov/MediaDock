@@ -18,6 +18,7 @@ from movies_feed.omdb_client import (
     _parse_int_with_commas,
     is_year_in_series_period,
 )
+from movies_feed.match_policy import evaluate_match
 
 
 class MockHttpTransport(HttpTransport):
@@ -226,6 +227,22 @@ class OmdbClientTests(unittest.TestCase):
         res2 = client2.get_movie_info("Short Film")
         self.assertEqual(res2.media_type, "short")
 
+        # A documentary series keeps its series source type and display media type.
+        documentary_series_resp = {
+            "Response": "True",
+            "Title": "Documentary Series",
+            "Year": "2018–",
+            "Type": "series",
+            "Genre": "Documentary, History"
+        }
+        transport3 = MockHttpTransport([documentary_series_resp])
+        client3 = OmdbClient("secret_key_12345", transport=transport3)
+        res3 = client3.get_movie_info("Documentary Series", media_type="series")
+        self.assertEqual(res3.media_type, "series")
+        self.assertEqual(res3.source_type, "series")
+        self.assertEqual(res3.content_kind, "documentary")
+        self.assertEqual(res3.broadcast_range.end_year, None)
+
     def test_omdb_representation_hides_api_key(self):
         client = OmdbClient("secret_key_12345")
         rep = repr(client)
@@ -290,8 +307,8 @@ class OmdbClientTests(unittest.TestCase):
         self.assertEqual(params["type"], "series")
         self.assertNotIn("y", params)
 
-    def test_series_year_out_of_range_raises_no_match(self):
-        # Searching for Mad Men with year 1990 (outside 2007-2015) raises OmdbNoMatchError
+    def test_series_year_out_of_range_is_returned_for_policy_validation(self):
+        # Lookup returns the series and the shared policy rejects the season year.
         response = {
             "Response": "True",
             "Title": "Mad Men",
@@ -303,8 +320,16 @@ class OmdbClientTests(unittest.TestCase):
         transport = MockHttpTransport([response])
         client = OmdbClient("secret_key_12345", transport=transport)
 
-        with self.assertRaises(OmdbNoMatchError):
-            client.get_movie_info("Mad Men", "1990", media_type="series")
+        result = client.get_movie_info("Mad Men", "1990", media_type="series")
+        decision = evaluate_match(
+            expected_source_type="series",
+            actual_source_type=result.source_type,
+            source_year=1990,
+            resolved_year=result.year,
+            broadcast_range=result.broadcast_range,
+        )
+        self.assertEqual(decision.status, "rejected")
+        self.assertEqual(decision.reason_code, "series_season_year_out_of_range")
 
     def test_get_by_imdb_id_success(self):
         response = {
@@ -334,7 +359,7 @@ class OmdbClientTests(unittest.TestCase):
         with self.assertRaises(OmdbNoMatchError):
             client.get_by_imdb_id("tt0000000")
 
-    def test_movie_fallback_rejects_year_mismatch_exceeding_one_year(self):
+    def test_movie_fallback_returns_year_mismatch_for_policy_validation(self):
         # 1st request with year 2024 fails
         # 2nd fallback request returns a 1980 film with same title -> should be rejected (>1 year diff)
         responses = [
@@ -351,8 +376,15 @@ class OmdbClientTests(unittest.TestCase):
         transport = MockHttpTransport(responses)
         client = OmdbClient("secret_key_12345", transport=transport)
 
-        with self.assertRaises(OmdbNoMatchError):
-            client.get_movie_info("Classic Movie", "2024", media_type="movie")
+        result = client.get_movie_info("Classic Movie", "2024", media_type="movie")
+        decision = evaluate_match(
+            expected_source_type="movie",
+            actual_source_type=result.source_type,
+            source_year=2024,
+            resolved_year=result.year,
+        )
+        self.assertEqual(decision.status, "rejected")
+        self.assertEqual(decision.reason_code, "movie_release_year_mismatch")
 
     def test_movie_fallback_accepts_year_difference_within_one_year(self):
         # 1st request with year 2024 fails

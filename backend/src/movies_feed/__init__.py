@@ -7,6 +7,19 @@ from .ids import (
     get_title_id,
     normalize_title,
 )
+from .match_policy import (
+    BroadcastRange,
+    ContentKind,
+    DecisionStatus,
+    MatchDecision,
+    MediaClassification,
+    SourceType,
+    classify_media,
+    effective_source_type,
+    evaluate_match,
+    normalize_source_type,
+    parse_broadcast_range,
+)
 from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
 from .repository import (
     FakeManualMappingRepository,

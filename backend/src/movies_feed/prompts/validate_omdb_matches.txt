@@ -4,7 +4,7 @@ PRINCIPLE: It is much better to mark an item as NOT a match (is_match=false) tha
 
 Rules:
 1. If torrent is a TV series and OMDb result is a movie (or vice versa), is_match MUST be false.
-2. If movie years differ by more than 1 year, is_match MUST be false.
+2. Apply the one-year release-year tolerance only to movies. A series torrent year can be a later season/release year, while OMDb Year commonly contains the show's first broadcast year; that difference alone is NOT a mismatch.
 3. If titles are completely unrelated (e.g. searching 'Fallout' matched a 1995 documentary 'Fallout'), is_match MUST be false.
 
 Candidate pairs:

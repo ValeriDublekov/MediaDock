@@ -10,6 +10,13 @@ from typing import Any, Dict, List, Optional
 import feedparser
 
 from .ids import clean_title_for_comparison, get_cache_key, get_occurrence_id, get_title_id, normalize_title
+from .match_policy import (
+    MatchDecision,
+    effective_source_type,
+    evaluate_match,
+    get_exclusion_reason as policy_get_exclusion_reason,
+    normalize_source_type,
+)
 from .models import ManualMapping, Occurrence, OmdbCacheEntry, ParseLog, ScanRun, Title
 from .omdb_client import (
     OmdbClient,
@@ -117,6 +124,98 @@ class ScannerService:
         run.error_count += 1
         if message not in run.error_summary:
             run.error_summary.append(message)
+
+    @staticmethod
+    def _expected_source_type(feed_type: Optional[str], series_marker: bool = False) -> Optional[str]:
+        normalized = normalize_source_type(feed_type)
+        if normalized != "unknown":
+            return normalized
+        return "series" if series_marker else None
+
+    def _evaluate_match(
+        self,
+        *,
+        expected_source_type: Optional[str],
+        omdb_result: OmdbMovieResult,
+        source_year: Optional[int],
+        manual_mapping: bool = False,
+    ) -> MatchDecision:
+        return evaluate_match(
+            expected_source_type=expected_source_type,
+            actual_source_type=omdb_result.source_type,
+            actual_media_type=omdb_result.media_type,
+            source_year=source_year,
+            resolved_year=omdb_result.year,
+            broadcast_range=omdb_result.broadcast_range,
+            countries=omdb_result.countries,
+            genres=omdb_result.genres,
+            excluded_countries=self.config.excluded_countries,
+            excluded_genres=self.config.excluded_genres,
+            manual_mapping=manual_mapping,
+        )
+
+    @staticmethod
+    def _match_trace(decision: MatchDecision, omdb_result: OmdbMovieResult) -> Dict[str, Any]:
+        trace: Dict[str, Any] = {
+            "matchDecision": decision.status,
+            "matchReasonCode": decision.reason_code,
+            "matchReason": decision.message,
+            "omdbSourceType": effective_source_type(omdb_result.media_type, omdb_result.source_type),
+            "omdbContentKind": omdb_result.content_kind,
+        }
+        if omdb_result.broadcast_range is not None:
+            trace["omdbBroadcastRange"] = omdb_result.broadcast_range.to_dict()
+        return trace
+
+    @staticmethod
+    def _match_ignore_reason(decision: MatchDecision) -> str:
+        if decision.reason_code in ("excluded_country", "excluded_genre"):
+            return "excluded_country_or_genre"
+        if decision.reason_code == "type_mismatch":
+            return "media_type_mismatch"
+        if "year" in decision.reason_code:
+            return "year_mismatch"
+        return "match_ambiguous"
+
+    @staticmethod
+    def _parse_log_feed_type(log: ParseLog) -> Optional[str]:
+        details = log.trace_details if isinstance(log.trace_details, dict) else {}
+        for key in ("feedType", "sourceType", "feed_type"):
+            normalized = normalize_source_type(details.get(key))
+            if normalized != "unknown":
+                return normalized
+        return None
+
+    def _evaluate_existing_title_match(self, title_record: Title, raw_title: str) -> MatchDecision:
+        expected_source_type = effective_source_type(title_record.media_type, title_record.source_type)
+        parsed_year: Optional[int] = None
+        try:
+            parsed = parse_rutracker_title(
+                raw_title,
+                content_type=expected_source_type if expected_source_type != "unknown" else None,
+                video_settings=self.config.video_settings,
+            )
+            if parsed.year:
+                parsed_year = int(parsed.year)
+        except (TypeError, ValueError):
+            return MatchDecision(
+                "ambiguous",
+                "source_year_unparseable",
+                "The occurrence year could not be parsed for deterministic audit validation.",
+            )
+
+        return evaluate_match(
+            expected_source_type=expected_source_type,
+            actual_source_type=title_record.source_type,
+            actual_media_type=title_record.media_type,
+            source_year=parsed_year,
+            resolved_year=title_record.year,
+            broadcast_range=title_record.broadcast_range,
+            countries=title_record.countries,
+            genres=title_record.genres,
+            excluded_countries=self.config.excluded_countries,
+            excluded_genres=self.config.excluded_genres,
+        )
 
     @staticmethod
     def _is_valid_recheck_result(result: Any, expected_id: int) -> bool:
@@ -232,6 +331,8 @@ class ScannerService:
         corrected_media_type: Optional[str],
         run: Optional[ScanRun],
         section_timings: Optional[Dict[str, float]],
+        expected_source_type: Optional[str] = None,
+        manual_mapping: bool = False,
     ) -> Dict[str, Any]:
         outcome: Dict[str, Any] = {
             "omdb_status": "skipped",
@@ -304,23 +405,24 @@ class ScannerService:
             return outcome
 
         outcome["omdb_status"] = "found"
-        if self.is_excluded(omdb_result.countries, omdb_result.genres):
-            outcome["candidate_outcome"] = "excluded"
-            return outcome
-        if (
-            corrected_media_type
-            and corrected_media_type in ("movie", "series")
-            and omdb_result.media_type != corrected_media_type
-        ):
-            outcome["candidate_outcome"] = "type_mismatch"
-            return outcome
-        if (
-            omdb_result.media_type in ("movie", "documentary")
-            and corrected_year is not None
-            and omdb_result.year is not None
-            and abs(omdb_result.year - corrected_year) > 1
-        ):
-            outcome["candidate_outcome"] = "year_mismatch"
+        match_decision = self._evaluate_match(
+            expected_source_type=expected_source_type or corrected_media_type,
+            omdb_result=omdb_result,
+            source_year=corrected_year,
+            manual_mapping=manual_mapping,
+        )
+        outcome["match_decision"] = match_decision.status
+        outcome["match_reason_code"] = match_decision.reason_code
+        if not match_decision.is_accepted:
+            if match_decision.reason_code in ("excluded_country", "excluded_genre"):
+                outcome["candidate_outcome"] = "excluded"
+            elif match_decision.reason_code == "type_mismatch":
+                outcome["candidate_outcome"] = "type_mismatch"
+            elif "year" in match_decision.reason_code:
+                outcome["candidate_outcome"] = "year_mismatch"
+            else:
+                outcome["candidate_outcome"] = "ambiguous"
+            outcome["retryable"] = match_decision.is_ambiguous
             return outcome
 
         outcome["candidate_outcome"] = "valid_suggestion"
@@ -336,7 +438,7 @@ class ScannerService:
             validation_results = self.ai_matcher.batch_validate_omdb_matches([{
                 "id": 0,
                 "raw_title": raw_title,
-                "feed_type": corrected_media_type,
+                "feed_type": expected_source_type or corrected_media_type or "unknown",
                 "omdb_title": omdb_result.title,
                 "omdb_year": omdb_result.year,
                 "omdb_type": omdb_result.media_type,
@@ -489,15 +591,12 @@ class ScannerService:
             section_timings["db_upsert"] += (time.perf_counter() - t0)
 
     def get_exclusion_reason(self, countries: List[str], genres: List[str]) -> Optional[str]:
-        excluded_country_set = {c.lower() for c in self.config.excluded_countries}
-        if countries and all(c.lower() in excluded_country_set for c in countries):
-            matched = [c for c in countries if c.lower() in excluded_country_set]
-            return f"Филтрирана държава: {', '.join(matched)} (Всички държави: {', '.join(countries)})"
-        excluded_genre_set = {g.lower() for g in self.config.excluded_genres}
-        matched_genres = [g for g in genres if g.lower() in excluded_genre_set]
-        if matched_genres:
-            return f"Филтриран жанр: {', '.join(matched_genres)} (OMDb жанрове: {', '.join(genres)})"
-        return None
+        return policy_get_exclusion_reason(
+            countries,
+            genres,
+            self.config.excluded_countries,
+            self.config.excluded_genres,
+        )
 
     def is_excluded(self, countries: List[str], genres: List[str]) -> bool:
         return self.get_exclusion_reason(countries, genres) is not None
@@ -835,6 +934,13 @@ class ScannerService:
                     "current_omdb_title": title_record.title,
                     "current_omdb_year": title_record.year,
                     "current_omdb_type": title_record.media_type,
+                    "current_omdb_source_type": effective_source_type(title_record.media_type, title_record.source_type),
+                    "current_content_kind": title_record.content_kind,
+                    "current_broadcast_range": (
+                        title_record.broadcast_range.to_dict()
+                        if title_record.broadcast_range is not None
+                        else None
+                    ),
                     "current_imdb_id": title_record.imdb_id,
                 })
                 chunk_context.append((ai_id, title_id, title_record, occs, raw_title, feed_name))
@@ -879,7 +985,8 @@ class ScannerService:
 
             for ai_id, title_id, title_record, occs, raw_title, feed_name in chunk_context:
                 ai_res = audit_results[ai_id]
-                if ai_res["is_valid_match"] is True:
+                deterministic_decision = self._evaluate_existing_title_match(title_record, raw_title)
+                if ai_res["is_valid_match"] is True and not deterministic_decision.is_rejected:
                     validated_title = copy.deepcopy(title_record)
                     validated_title.ai_validated = True
                     validated_title.ai_checked_at = self.now
@@ -892,7 +999,16 @@ class ScannerService:
                     corr_title = ai_res.get("corrected_title")
                     corr_year = ai_res.get("corrected_year")
                     corr_media_type = ai_res.get("corrected_media_type")
-                    reason = ai_res.get("reason") or "AI detected a mismatch"
+                    if ai_res["is_valid_match"] is True:
+                        reason = (
+                            "Deterministic match policy rejected the stored match: "
+                            f"{deterministic_decision.message or deterministic_decision.reason_code}"
+                        )
+                        corr_title = None
+                        corr_year = None
+                        corr_media_type = None
+                    else:
+                        reason = ai_res.get("reason") or "AI detected a mismatch"
                     logger.info(f"Mismatch for title '{title_record.title}' (raw: '{raw_title}'): {reason}")
                     suggestion = self._inspect_recheck_suggestion(
                         raw_title=raw_title,
@@ -901,16 +1017,23 @@ class ScannerService:
                         corrected_media_type=corr_media_type,
                         run=run,
                         section_timings=section_timings,
+                        expected_source_type=(
+                            corr_media_type
+                            or effective_source_type(title_record.media_type, title_record.source_type)
+                        ),
                     )
                     if suggestion["omdb_status"] == "error":
                         stats["omdb_failures"] += 1
                     trace_details = {
                         "aiReason": reason,
+                        "policyReasonCode": deterministic_decision.reason_code,
                         "suggestedTitle": corr_title,
                         "suggestedYear": corr_year,
                         "suggestedMediaType": corr_media_type,
                         "omdbOutcome": suggestion["omdb_outcome"],
                         "candidateOutcome": suggestion["candidate_outcome"],
+                        "candidateMatchDecision": suggestion.get("match_decision"),
+                        "candidateMatchReasonCode": suggestion.get("match_reason_code"),
                     }
                     self._record_recheck_needs_review(
                         title_id=title_id,
@@ -981,7 +1104,11 @@ class ScannerService:
         for batch_idx, i in enumerate(range(0, len(unique_logs), batch_size), start=1):
             chunk = unique_logs[i : i + batch_size]
             items_to_extract = [
-                {"id": idx, "raw_title": log.raw_title, "feed_type": "movie"}
+                {
+                    "id": idx,
+                    "raw_title": log.raw_title,
+                    "feed_type": self._parse_log_feed_type(log) or "unknown",
+                }
                 for idx, log in enumerate(chunk)
             ]
 
@@ -1019,6 +1146,11 @@ class ScannerService:
                 title = ai_data.get("title")
                 year = ai_data.get("year")
                 media_type = ai_data.get("media_type")
+                stored_feed_type = self._parse_log_feed_type(log)
+                ai_source_type = normalize_source_type(media_type)
+                expected_source_type = stored_feed_type or (
+                    ai_source_type if ai_source_type != "unknown" else None
+                )
 
                 if not title:
                     stats["reparsed_failed"] += 1
@@ -1029,7 +1161,7 @@ class ScannerService:
                     omdb_result = self.omdb_client.get_movie_info(
                         title,
                         str(year) if year else None,
-                        media_type=media_type,
+                        media_type=expected_source_type,
                     )
                 except (OmdbNoMatchError, OmdbLimitReachedError, OmdbTransportError) as ex:
                     if isinstance(ex, (OmdbLimitReachedError, OmdbTransportError)):
@@ -1038,14 +1170,13 @@ class ScannerService:
 
                 is_valid = False
                 if omdb_result:
-                    is_valid = True
-                    if self.is_excluded(omdb_result.countries, omdb_result.genres):
-                        is_valid = False
-                    elif media_type and (omdb_result.media_type != media_type) and (media_type in ("movie", "series")):
-                        is_valid = False
-                    elif omdb_result.media_type in ("movie", "documentary") and year and abs(omdb_result.year - year) > 1:
-                        is_valid = False
-                    elif self.ai_matcher and self.ai_matcher.is_available:
+                    match_decision = self._evaluate_match(
+                        expected_source_type=expected_source_type,
+                        omdb_result=omdb_result,
+                        source_year=year if type(year) is int else None,
+                    )
+                    is_valid = match_decision.is_accepted
+                    if is_valid and self.ai_matcher and self.ai_matcher.is_available:
                         clean_rep = clean_title_for_comparison(title)
                         clean_cand = clean_title_for_comparison(omdb_result.title)
                         if clean_rep != clean_cand:
@@ -1053,7 +1184,7 @@ class ScannerService:
                                 v_res = self.ai_matcher.batch_validate_omdb_matches([{
                                     "id": 0,
                                     "raw_title": log.raw_title,
-                                    "feed_type": media_type,
+                                    "feed_type": expected_source_type or "unknown",
                                     "omdb_title": omdb_result.title,
                                     "omdb_year": omdb_result.year,
                                     "omdb_type": omdb_result.media_type,
@@ -1088,6 +1219,9 @@ class ScannerService:
                         awards=omdb_result.awards,
                         box_office=omdb_result.box_office,
                         ratings=omdb_result.ratings,
+                        source_type=effective_source_type(omdb_result.media_type, omdb_result.source_type),
+                        content_kind=omdb_result.content_kind,
+                        broadcast_range=omdb_result.broadcast_range,
                     )
 
                     occ_id = get_occurrence_id(None, log.raw_title)
@@ -1117,6 +1251,22 @@ class ScannerService:
                         ignored=False,
                         ignore_reason=None,
                         section_timings=section_timings,
+                        trace_details={
+                            "feedType": stored_feed_type,
+                            "expectedSourceType": expected_source_type,
+                            "matchDecision": match_decision.status,
+                            "matchReasonCode": match_decision.reason_code,
+                            "omdbSourceType": effective_source_type(
+                                omdb_result.media_type,
+                                omdb_result.source_type,
+                            ),
+                            "omdbContentKind": omdb_result.content_kind,
+                            "omdbBroadcastRange": (
+                                omdb_result.broadcast_range.to_dict()
+                                if omdb_result.broadcast_range is not None
+                                else None
+                            ),
+                        },
                     )
                     stats["reparsed_succeeded"] += 1
                     if run:
@@ -1241,6 +1391,8 @@ class ScannerService:
             "feedName": feed_name,
             "feedType": feed_def.get("type"),
         }
+        expected_source_type = self._expected_source_type(feed_def.get("type"), parsed.is_series)
+        base_trace["expectedSourceType"] = expected_source_type
 
         logger.info(f"[Scanner:Parse] Feed '{feed_name}' | '{raw_title}' -> Title: '{parsed.title}', Year: {lookup_year}, Quality: '{parsed.quality}', Rip: '{parsed.rip_type}', IsSeries: {parsed.is_series}")
 
@@ -1392,7 +1544,7 @@ class ScannerService:
             status = "not_found"
             payload = None
             t0_omdb = time.perf_counter()
-            media_type_hint = "series" if parsed.is_series else (feed_def.get("type") if feed_def.get("type") in ("movie", "series") else None)
+            media_type_hint = expected_source_type
             logger.info(f"[Scanner:OMDb Query] Requesting OMDb for '{parsed.title}', Year: {lookup_year}, Hint: '{media_type_hint}'")
             try:
                 omdb_result = self.omdb_client.get_movie_info(parsed.title, parsed.year, media_type=media_type_hint)
@@ -1475,78 +1627,43 @@ class ScannerService:
             "omdbFoundTitle": omdb_result.title,
             "omdbFoundYear": omdb_result.year,
             "omdbFoundType": omdb_result.media_type,
+            "omdbSourceType": effective_source_type(omdb_result.media_type, omdb_result.source_type),
+            "omdbContentKind": omdb_result.content_kind,
             "omdbImdbId": omdb_result.imdb_id,
             "omdbGenres": omdb_result.genres,
             "omdbCountries": omdb_result.countries,
             "omdbRating": omdb_result.rating,
         }
 
-        # Automated validation checks (bypassed for explicit manual mappings)
-        if not used_manual_mapping:
-            # Check media type consistency against RSS feed type
-            feed_type = (feed_def.get("type") or "").lower()
-            if feed_type in ("movie", "series"):
-                result_is_series = (omdb_result.media_type == "series")
-                expected_is_series = (feed_type == "series")
-                if result_is_series != expected_is_series:
-                    run.ignored_entries += 1
-                    err_msg = f"Разминаване в типа медия: RSS каналът очаква '{feed_type}', а OMDb върна '{omdb_result.media_type}'"
-                    logger.info(f"[Scanner:Validate] '{parsed.title}' -> Type mismatch: expected {feed_type}, OMDb returned {omdb_result.media_type}")
-                    self._log_parse_entry(
-                        raw_title=raw_title,
-                        feed_name=feed_name,
-                        parsed_successfully=True,
-                        parsed_title=parsed.title,
-                        parsed_year=lookup_year,
-                        omdb_status="found",
-                        ignored=True,
-                        ignore_reason="media_type_mismatch",
-                        error_message=err_msg,
-                        feed_entry_id=feed_entry_id,
-                        torrent_url=torrent_url,
-                        section_timings=section_timings,
-                        trace_details={
-                            **base_trace,
-                            **omdb_trace_info,
-                            "decision": "ignored_media_type_mismatch",
-                            "decisionDetails": err_msg,
-                        },
-                    )
-                    return
-
-            # Validate year tolerance for movies (max ±1 year difference)
-            if omdb_result.media_type in ("movie", "documentary", "short") and lookup_year is not None and omdb_result.year is not None:
-                if abs(omdb_result.year - lookup_year) > 1:
-                    run.ignored_entries += 1
-                    err_msg = f"Разминаване в годината: търсена {lookup_year}, OMDb върна {omdb_result.year} (> 1 г. разлика)"
-                    logger.info(f"[Scanner:Validate] '{parsed.title}' -> Year mismatch: expected {lookup_year}, OMDb returned {omdb_result.year}")
-                    self._log_parse_entry(
-                        raw_title=raw_title,
-                        feed_name=feed_name,
-                        parsed_successfully=True,
-                        parsed_title=parsed.title,
-                        parsed_year=lookup_year,
-                        omdb_status="found",
-                        ignored=True,
-                        ignore_reason="year_mismatch",
-                        error_message=err_msg,
-                        feed_entry_id=feed_entry_id,
-                        torrent_url=torrent_url,
-                        section_timings=section_timings,
-                        trace_details={
-                            **base_trace,
-                            **omdb_trace_info,
-                            "decision": "ignored_year_mismatch",
-                            "decisionDetails": err_msg,
-                        },
-                    )
-                    return
-
-        exclusion_reason = self.get_exclusion_reason(omdb_result.countries, omdb_result.genres)
-        if exclusion_reason:
+        match_decision = self._evaluate_match(
+            expected_source_type=expected_source_type,
+            omdb_result=omdb_result,
+            source_year=lookup_year,
+            manual_mapping=used_manual_mapping,
+        )
+        match_trace = self._match_trace(match_decision, omdb_result)
+        omdb_trace_info.update(match_trace)
+        if not match_decision.is_accepted:
             run.ignored_entries += 1
-            err_msg = f"Филтрирано по конфигурация: {exclusion_reason}"
-            logger.info(f"[Scanner:Filter] '{parsed.title}' -> {err_msg}")
+            if match_decision.reason_code in ("excluded_country", "excluded_genre"):
+                err_msg = f"Филтрирано по конфигурация: {match_decision.message}"
+            elif match_decision.reason_code == "type_mismatch":
+                actual_type = effective_source_type(omdb_result.media_type, omdb_result.source_type)
+                err_msg = (
+                    f"Разминаване в типа медия: RSS каналът очаква '{expected_source_type}', "
+                    f"а OMDb върна '{actual_type}'"
+                )
+            elif match_decision.reason_code == "series_season_year_out_of_range":
+                range_text = omdb_result.broadcast_range.raw if omdb_result.broadcast_range else "неизвестен диапазон"
+                err_msg = (
+                    f"Разминаване в годината на сезона: търсена {lookup_year}, "
+                    f"OMDb диапазон '{range_text}'"
+                )
+            elif match_decision.reason_code == "movie_release_year_mismatch":
+                err_msg = f"Разминаване в годината: търсена {lookup_year}, OMDb върна {omdb_result.year} (> 1 г. разлика)"
+            else:
+                err_msg = match_decision.message or "Съвпадението изисква преглед"
+            logger.info(f"[Scanner:Validate] '{parsed.title}' -> {err_msg}")
             self._log_parse_entry(
                 raw_title=raw_title,
                 feed_name=feed_name,
@@ -1555,7 +1672,7 @@ class ScannerService:
                 parsed_year=lookup_year,
                 omdb_status="found",
                 ignored=True,
-                ignore_reason="excluded_country_or_genre",
+                ignore_reason=self._match_ignore_reason(match_decision),
                 error_message=err_msg,
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
@@ -1563,7 +1680,7 @@ class ScannerService:
                 trace_details={
                     **base_trace,
                     **omdb_trace_info,
-                    "decision": "ignored_excluded_country_or_genre",
+                    "decision": f"{match_decision.status}_{match_decision.reason_code}",
                     "decisionDetails": err_msg,
                 },
             )
@@ -1619,6 +1736,9 @@ class ScannerService:
             awards=omdb_result.awards,
             box_office=omdb_result.box_office,
             ratings=omdb_result.ratings,
+            source_type=effective_source_type(omdb_result.media_type, omdb_result.source_type),
+            content_kind=omdb_result.content_kind,
+            broadcast_range=omdb_result.broadcast_range,
         )
 
         occurrence_id = get_occurrence_id(feed_entry_id, torrent_url)

@@ -26,8 +26,8 @@ Required fields:
 | --- | --- | --- |
 | `title` | string | Display title |
 | `normalizedTitle` | string | Case-folded matching/deduplication value |
-| `year` | number or null | Parsed/reported year |
-| `mediaType` | string | `movie`, `series`, `documentary`, or `short` |
+| `year` | number or null | Normalized OMDb year: movie release year or series first broadcast year |
+| `mediaType` | string | Backward-compatible display value: `movie`, `series`, `documentary`, or `short` |
 | `firstSeenAt` | Timestamp | Earliest known occurrence |
 | `lastSeenAt` | Timestamp | Most recent occurrence |
 | `updatedAt` | Timestamp | Last metadata update |
@@ -35,6 +35,53 @@ Required fields:
 Optional normalized OMDb fields include `imdbId`, `imdbRating`, `imdbVotes`,
 `metascore`, `genres`, `countries`, `director`, `plot`, `posterUrl`, `runtime`,
 `awards`, `boxOffice`, and structured external ratings.
+
+Prompt 2 adds optional normalized type fields:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `sourceType` | string | Canonical OMDb source type, `movie` or `series`; drives feed compatibility |
+| `contentKind` | string | `standard`, `documentary`, or `short`; a content facet that never changes `sourceType` |
+| `broadcastRange` | map or null | For series only: `startYear`, nullable `endYear`, and the raw OMDb `Year` value |
+
+`mediaType` remains the display field for backward compatibility. A series with
+the Documentary genre is stored as `mediaType=series`, `sourceType=series`, and
+`contentKind=documentary`. A documentary or short movie remains display
+`mediaType=documentary` or `short` with `sourceType=movie`. Legacy documents
+without the new fields are read by deriving `sourceType` from `mediaType`.
+
+### Match policy compatibility matrix
+
+The shared policy uses the configured feed type as the expected source type when
+it is known. Parser or AI series markers are diagnostics only in a known feed;
+they cannot change that feed's type. An unknown feed type may be inferred from a
+series marker, an extracted type, or the resolved OMDb source type.
+
+| Expected source type | Resolved source type | Result |
+| --- | --- | --- |
+| `movie` | `movie` | Compatible, including documentary and short content kinds |
+| `movie` | `series` | Rejected with `type_mismatch` |
+| `series` | `series` | Compatible, including documentary and short content kinds |
+| `series` | `movie` | Rejected with `type_mismatch` |
+| unknown | known movie/series | Inferred and evaluated |
+| known | unknown | Ambiguous; never silently accepted as the known type |
+
+An explicit manual IMDb mapping bypasses source-type and year checks, but still
+passes through country and genre exclusions. The same decision is used by RSS,
+reparse, and audit candidate checks.
+
+Movie source years are release years and use the existing inclusive +/-1 year
+tolerance. A series source year is a season/release year and is not compared to
+the series first broadcast year in `Title.year`. If `broadcastRange` is closed,
+the season year must be inside it; an open-ended range accepts years from its
+start onward. If the range is unavailable, the season year is not rejected only
+because it differs from the normalized series start year. Unknown years are
+accepted as non-disqualifying with an explicit `*_year_unknown` reason code.
+
+Deterministic decisions have status `accepted`, `rejected`, or `ambiguous` and a
+stable `reasonCode`. Current codes include `type_mismatch`,
+`movie_release_year_mismatch`, `series_season_year_out_of_range`,
+`source_type_unknown`, `excluded_country`, and `excluded_genre`.
 
 ID rule:
 
@@ -141,10 +188,10 @@ Prompt 5 introduces explicit terminal/retryable retention semantics.
 | `parsedYear` | number or null | Extracted year if present |
 | `omdbStatus` | string | `found`, `not_found`, `skipped`, `error`, `not_parsed` |
 | `ignored` | boolean | True if entry was filtered/skipped |
-| `ignoreReason` | string or null | `no_title`, `parse_error`, `entry_error`, `omdb_not_found`, `excluded_country_or_genre`, `omdb_limit_reached`, `omdb_error`, `audit_needs_review`, `empty_title`, `parse_only`, or null |
+| `ignoreReason` | string or null | `no_title`, `parse_error`, `entry_error`, `omdb_not_found`, `excluded_country_or_genre`, `media_type_mismatch`, `year_mismatch`, `match_ambiguous`, `omdb_limit_reached`, `omdb_error`, `audit_needs_review`, `empty_title`, `parse_only`, or null |
 | `errorMessage` | string or null | Error or exception details if an error occurred |
 | `decision` | string or null | Stable audit decision; the temporary recheck contract uses `needs_review` and never infers it from `errorMessage` |
-| `traceDetails` | map or null | Bounded diagnostics. Recheck review logs use `auditOutcome` (`orphan`, `ai_batch_incomplete`, `mismatch_retained`), `omdbOutcome` (`missing_corrected_title`, `confirmed_not_found`, `quota_exhausted`, `transport_error`, `invalid_request`, `unexpected_error`, or `malformed_result`), and `candidateOutcome` where applicable |
+| `traceDetails` | map or null | Bounded diagnostics. Match checks may include `expectedSourceType`, `matchDecision`, `matchReasonCode`, `omdbSourceType`, `omdbContentKind`, and `omdbBroadcastRange`. Recheck review logs use `auditOutcome` (`orphan`, `ai_batch_incomplete`, `mismatch_retained`), `omdbOutcome` (`missing_corrected_title`, `confirmed_not_found`, `quota_exhausted`, `transport_error`, `invalid_request`, `unexpected_error`, or `malformed_result`), and `candidateOutcome` where applicable |
 | `processedAt` | Timestamp | Time when entry was processed |
 
 The existing-title audit is review-only in the current stage. A complete batch

@@ -17,10 +17,11 @@ MVP wiring is present; production hardening is not complete.
 - Prompt 0B: Reader/admin rules, validated scanner settings and manual mappings, authenticated `createdBy`/`updatedBy`, and removal of browser scanner credentials are implemented.
 - Prompt 0C: Bounded HTTPS RSS fetching, public DNS and redirect validation, response/entry limits, bozo rejection, and explicit `--feed-file` fixture input are implemented.
 - Prompt 1: Existing-title audit is fail-closed and review-only; incomplete AI/OMDb evidence cannot delete or migrate catalog records, and fake repositories are defensive-copy safe for dry-run.
+- Prompt 2: Shared typed media/year policy is used by RSS, reparse, and audit candidate checks; source type is stored separately from content kind, and series broadcast ranges preserve later-season semantics.
 
 ## Next Prompt
 
-Run Prompt 2 in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+Run Prompt 3 in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 
@@ -31,9 +32,9 @@ Run Prompt 2 in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Residual Risks
 
-- The OMDb rate limit can halt scanner execution for the day. Cache reuse and partial-run status must be monitored.
+- The OMDb rate limit can halt scanner execution for the day. Cache reuse and partial-run status must be monitored; shared resolver/cache work remains Prompt 3.
 - Allowlist addition requires a manual write to the Firestore database using Firebase Console until an admin control plane exists.
-- The current `AiMatcher` payload needs compatibility review before changing the model to Gemini 3.6/3.7.
+- The current `AiMatcher` payload needs compatibility review before changing the model to Gemini 3.6/3.7; full AI hardening remains Prompt 6.
 - Unpaginated local filtering currently handles all pages loaded into memory, which may become slow if thousands of entries are retained locally.
 
 ## Update Rules

@@ -3,8 +3,9 @@ import unittest
 from pathlib import Path
 from typing import Any, Dict
 
-from movies_feed.models import ManualMapping, OmdbCacheEntry, Title, Occurrence, ScanRun
+from movies_feed.models import ManualMapping, OmdbCacheEntry, ParseLog, Title, Occurrence, ScanRun
 from movies_feed.omdb_client import OmdbMovieResult, OmdbLimitReachedError, OmdbTransportError, OmdbNoMatchError, OmdbClient, HttpTransport
+from movies_feed.match_policy import parse_broadcast_range
 from movies_feed.repository import (
     FakeTitleRepository,
     FakeOccurrenceRepository,
@@ -122,6 +123,59 @@ class TestScanner(unittest.TestCase):
             now=self.now,
             feed_fetcher=StaticTestFeedFetcher(),
         )
+
+    def make_series_result(
+        self,
+        title: str = "Seasoned Show",
+        year: int = 2007,
+        broadcast_year: str = "2007-2015",
+        genres=None,
+    ) -> OmdbMovieResult:
+        genres = genres or ["Drama"]
+        content_kind = "documentary" if "Documentary" in genres else "standard"
+        return OmdbMovieResult(
+            title=title,
+            year=year,
+            imdb_id="tt0804497",
+            media_type="series",
+            rating=8.0,
+            votes=1000,
+            metascore=None,
+            genres=genres,
+            countries=["USA"],
+            director=None,
+            plot="A series",
+            poster_url=None,
+            runtime=None,
+            awards=None,
+            box_office=None,
+            ratings=[],
+            raw_payload={
+                "Response": "True",
+                "Title": title,
+                "Year": broadcast_year,
+                "imdbID": "tt0804497",
+                "Type": "series",
+                "Genre": ", ".join(genres),
+                "Country": "USA",
+            },
+            source_type="series",
+            content_kind=content_kind,
+            broadcast_range=parse_broadcast_range(broadcast_year),
+        )
+
+    @staticmethod
+    def make_inline_feed(raw_title: str) -> str:
+        return f'''<?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+            <channel>
+                <item>
+                    <title>{raw_title}</title>
+                    <link>https://example.com/torrent/series-1</link>
+                    <guid>series-guid-1</guid>
+                </item>
+            </channel>
+        </rss>'''
 
     def add_recheck_occurrence(self, title_id: str, raw_title: str = "Stored Film 2020 1080p") -> None:
         self.occ_repo.upsert(
@@ -308,6 +362,131 @@ class TestScanner(unittest.TestCase):
         self.assertEqual(run.titles_created, 0)
         self.assertEqual(run.status, "partial")
         self.assertTrue(any("OMDb Transport Error" in err for err in run.error_summary))
+
+    def test_rss_documentary_series_preserves_source_type_and_range(self):
+        raw_title = "Документални / Nature Watch / Сезон 2 [2022, США, WEB-DL 1080p]"
+        result = self.make_series_result(
+            title="Nature Watch",
+            year=2018,
+            broadcast_year="2018-",
+            genres=["Documentary", "History"],
+        )
+        config = ScannerConfig(
+            rss_feeds={
+                "series_feed": {
+                    "name": "series_feed",
+                    "url": self.make_inline_feed(raw_title),
+                    "type": "series",
+                }
+            },
+            omdb_limit=10,
+        )
+
+        run = self.create_scanner(config, MockOmdbClient({"nature watch": result})).run("series_documentary")
+
+        self.assertEqual(run.status, "succeeded")
+        stored = self.title_repo.get(result.imdb_id)
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored.media_type, "series")
+        self.assertEqual(stored.source_type, "series")
+        self.assertEqual(stored.content_kind, "documentary")
+        self.assertEqual(stored.broadcast_range.raw, "2018-")
+
+    def test_rss_known_movie_feed_does_not_follow_series_result(self):
+        raw_title = "Документални / Nature Watch / Сезон 2 [2022, США, WEB-DL 1080p]"
+        result = self.make_series_result(title="Nature Watch", year=2018)
+        config = ScannerConfig(
+            rss_feeds={
+                "movie_feed": {
+                    "name": "movie_feed",
+                    "url": self.make_inline_feed(raw_title),
+                    "type": "movie",
+                }
+            },
+            omdb_limit=10,
+        )
+
+        run = self.create_scanner(config, MockOmdbClient({"nature watch": result})).run("movie_type_authority")
+
+        self.assertEqual(run.status, "succeeded")
+        self.assertEqual(self.title_repo.list_all(), [])
+        mismatch = next(log for log in self.parse_log_repo.get_all() if log.ignore_reason == "media_type_mismatch")
+        self.assertEqual(mismatch.trace_details["matchReasonCode"], "type_mismatch")
+        self.assertEqual(mismatch.trace_details["expectedSourceType"], "movie")
+
+    def test_rss_unknown_feed_infers_series_from_marker(self):
+        raw_title = "Документални / Nature Watch / Сезон 2 [2022, США, WEB-DL 1080p]"
+        result = self.make_series_result(title="Nature Watch", year=2018, broadcast_year="2018-")
+        config = ScannerConfig(
+            rss_feeds={
+                "untyped_feed": {
+                    "name": "untyped_feed",
+                    "url": self.make_inline_feed(raw_title),
+                    "type": None,
+                }
+            },
+            omdb_limit=10,
+        )
+
+        run = self.create_scanner(config, MockOmdbClient({"nature watch": result})).run("unknown_feed_type")
+
+        self.assertEqual(run.status, "succeeded")
+        stored = self.title_repo.get(result.imdb_id)
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored.source_type, "series")
+
+    def test_reparse_uses_stored_series_feed_type_and_accepts_later_season(self):
+        result = self.make_series_result()
+        source_log = ParseLog(
+            id="unmapped-series",
+            raw_title="Seasoned Show / Сезон 5 [2012]",
+            feed_name="series_feed",
+            parsed_successfully=True,
+            parsed_title="Seasoned Show",
+            parsed_year=2012,
+            omdb_status="not_found",
+            ignored=True,
+            ignore_reason="omdb_not_found",
+            processed_at=self.now,
+            trace_details={"feedType": "series"},
+        )
+        self.parse_log_repo.add(source_log)
+        config = ScannerConfig(mode="reparse-unfound")
+        scanner = self.create_scanner(config, MockOmdbClient({"seasoned show": result}))
+        from unittest.mock import MagicMock
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        mock_ai.batch_extract_titles.return_value = {
+            0: {"title": "Seasoned Show", "year": 2012, "media_type": "series"}
+        }
+        scanner.ai_matcher = mock_ai
+        run = ScanRun(started_at=self.now, finished_at=None, status="running", trigger="local")
+        timings = {"omdb_api": 0.0, "parse_log_write": 0.0}
+
+        stats = scanner.reparse_unfound_entries(run=run, section_timings=timings)
+
+        self.assertEqual(stats["reparsed_succeeded"], 1)
+        extract_items = mock_ai.batch_extract_titles.call_args.args[0]
+        self.assertEqual(extract_items[0]["feed_type"], "series")
+        self.assertIsNotNone(self.title_repo.get(result.imdb_id))
+
+    def test_recheck_candidate_uses_series_broadcast_range(self):
+        result = self.make_series_result()
+        scanner = self.create_scanner(ScannerConfig(mode="recheck-existing"), MockOmdbClient({"seasoned show": result}))
+        run = ScanRun(started_at=self.now, finished_at=None, status="running", trigger="local")
+
+        outcome = scanner._inspect_recheck_suggestion(
+            raw_title="Seasoned Show / Сезон 5 [2012]",
+            corrected_title="Seasoned Show",
+            corrected_year=2012,
+            corrected_media_type="series",
+            run=run,
+            section_timings={"omdb_api": 0.0},
+            expected_source_type="series",
+        )
+
+        self.assertEqual(outcome["candidate_outcome"], "valid_suggestion")
+        self.assertEqual(outcome["match_reason_code"], "series_season_year_in_range")
 
     def test_duplicate_entries_idempotent(self):
         rss_feeds = {

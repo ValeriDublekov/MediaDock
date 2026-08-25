@@ -2,6 +2,8 @@ import datetime
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from .match_policy import BroadcastRange
+
 
 @dataclass
 class Title:
@@ -29,6 +31,9 @@ class Title:
     ratings: List[Dict[str, str]] = field(default_factory=list)
     ai_validated: Optional[bool] = None
     ai_checked_at: Optional[datetime.datetime] = None
+    source_type: Optional[str] = None
+    content_kind: Optional[str] = None
+    broadcast_range: Optional[BroadcastRange] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the Title model to a camelCase Firestore dictionary."""
@@ -41,6 +46,12 @@ class Title:
             "lastSeenAt": self.last_seen_at,
             "updatedAt": self.updated_at,
         }
+        if self.source_type is not None:
+            res["sourceType"] = self.source_type
+        if self.content_kind is not None:
+            res["contentKind"] = self.content_kind
+        if self.broadcast_range is not None:
+            res["broadcastRange"] = self.broadcast_range.to_dict()
         if self.imdb_id is not None:
             res["imdbId"] = self.imdb_id
         if self.imdb_rating is not None:

@@ -24,7 +24,8 @@ are tracked in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 | `cli.py` | Validates bounded CLI inputs and mode-specific configuration, loads JSON/Firestore settings, selects repositories and mode, creates one `ScannerService`, and maps `ScanRun` status to a process exit code. |
 | `feed_fetcher.py` | Fetches allowlisted HTTPS RSS/Atom feeds through bounded, redirect-validated transport, and reads explicitly selected local fixture files. |
 | `rutracker_parser.py` | Regex/heuristic extraction of title, year, movie/series flag, quality, and rip type. |
-| `omdb_client.py` | Exact OMDb lookup, fallback lookup, series-period checks, and payload normalization. |
+| `omdb_client.py` | Exact OMDb lookup, fallback lookup, broadcast-range extraction, and payload normalization. |
+| `match_policy.py` | Shared typed media classification, source-type compatibility, year semantics, broadcast ranges, and exclusions. |
 | `ai_matcher.py` | Gemini batch title extraction, OMDb candidate validation, and stored-match audit. The active prompt strings are currently inline; the files under `prompts/` are not loaded by the current implementation. |
 | `scanner.py` | Orchestrates feeds, matching, filtering, repair, logging, and persistence. |
 | `repository.py` / `firestore_repository.py` | In-memory and Firestore persistence plus title/occurrence merge rules. |
@@ -45,9 +46,9 @@ The feed type is authoritative: a series-looking title in a `movie` feed is stil
 
 ### OMDb lookup
 
-- **Movie or unspecified type:** try title + year + optional type, then retry without year. A fallback movie is rejected when its year differs by more than one year.
-- **Series:** query title + `type=series` without a year, then require the requested season year to fall inside OMDb's full broadcast range. The parsed year and stored `Title.year` therefore have different valid meanings: the parsed year may identify a later season, while `Title.year` is OMDb's first broadcast year.
-- **Normalization:** genre classification runs before OMDb type classification. Any result with the `Documentary` or `Short` genre, including an OMDb series, becomes `documentary` or `short`; otherwise an OMDb series stays `series` and everything else becomes `movie`.
+- **Movie or unspecified type:** try title + year + optional type, then retry without year. The shared policy applies the existing +/-1 release-year tolerance to the resolved movie candidate.
+- **Series:** query title + `type=series` without a year and expose the full broadcast range. The parsed year may identify a later season, while `Title.year` is OMDb's first broadcast year; the shared policy checks the season year against the closed/open range and does not reject solely when the range is unavailable.
+- **Normalization:** OMDb `Type` becomes `sourceType`; `Documentary` and `Short` are content kinds. A result with `sourceType=series` remains `mediaType=series`, even when its content kind is documentary or short; movie documentaries/shorts retain their legacy display values.
 - **Direct IMDb mapping:** `get_by_imdb_id()` skips title/year lookup logic.
 
 ### AI operations
@@ -89,7 +90,7 @@ errors.
 8. Resolve a manual mapping by log/occurrence ID, raw title, or normalized parsed title. A successful IMDb lookup bypasses automatic type/year validation.
 9. Otherwise read the `(normalized title, year)` cache. Positive entries live for 30 days by default; negative entries live for up to two days.
 10. On a cache miss, call OMDb with a series hint when the parser says series, or with the configured feed type.
-11. Validate feed type and movie/documentary/short year tolerance, then apply country and genre exclusions.
+11. Evaluate the shared match policy for source type, movie release year or series season year, and country/genre exclusions. Known feed type remains authoritative; manual IMDb mappings bypass only type/year checks.
 12. Write a deterministic title, occurrence, and parse-log record. Writes are batched once per feed.
 
 `--dry-run` still reads Firestore/cache/manual mappings and calls external APIs, but skips writes. Its created counters are simulated and do not check whether records already exist. `--fake-repos` uses in-memory storage but can still call live OMDb/Gemini APIs. The RSS limit counts high-level lookups, not HTTP requests: one movie lookup can perform both a year-constrained request and a fallback request, and manual IMDb lookups occur before the soft-limit check.
@@ -98,9 +99,9 @@ errors.
 
 1. Read up to 200 recent logs selected when their OMDb status is unresolved **or when `ignored == true`**.
 2. Deduplicate by exact, case-sensitive raw title.
-3. Send batches of 15 raw titles to Gemini. Every item is labelled `feed_type=movie`, regardless of its original feed.
+3. Send batches of 15 raw titles to Gemini with the stored feed type when available; otherwise use `unknown` and allow inference.
 4. Use Gemini's title, year, and media type for a direct, uncached OMDb lookup.
-5. Reject configured exclusions, strict type mismatch, and movie/documentary year differences over one year.
+5. Apply the shared match policy for configured exclusions, source-type compatibility, movie release years, and series season years.
 6. Only when normalized extracted and OMDb titles differ, ask Gemini to validate the candidate.
 7. On success, upsert a title and a synthetic occurrence, then create a separate success parse log.
 8. On an individual failure, increment an in-memory counter only; the source log is not updated. If an entire AI batch returns no results, stop the phase without counting the unprocessed items or adding a run error.
@@ -110,9 +111,9 @@ errors.
 1. Load all titles and exclude records already marked `aiValidated`.
 2. Optionally filter by `audit_days`, then process newest titles first in batches of 15.
 3. Load all occurrences. Titles without occurrences are recorded as orphan `needs_review` outcomes and are not sent to Gemini; titles with occurrences currently use the first raw title as the audit input until occurrence-level audit is introduced.
-4. Gemini currently applies a generic one-year difference rule. For a later season, it can compare the season year in the raw title with the series' first broadcast year in OMDb and incorrectly report a mismatch.
+4. The audit prompt and deterministic policy distinguish a later season year in the raw title from the series' first broadcast year in OMDb; a difference alone is not a mismatch.
 5. Require complete response coverage and an explicit boolean `is_valid_match` for every requested ID. Only an explicit valid result sets `aiValidated=true` and `aiCheckedAt`.
-6. For an explicit mismatch, use Gemini's corrected title/year/type for a diagnostic, uncached OMDb lookup when a corrected title exists.
+6. For an explicit mismatch, use Gemini's corrected title/year/type for a diagnostic OMDb lookup when a corrected title exists, and run the result through the shared match policy.
 7. Classify missing correction, confirmed no-match, quota, transport, malformed, and candidate validation outcomes in the review log.
 8. Keep the current title and every occurrence in place for mismatches, suggestions, uncertain evidence, and retryable failures. Persist `decision=needs_review` with structured audit details; this stage does not migrate or delete catalog data.
 

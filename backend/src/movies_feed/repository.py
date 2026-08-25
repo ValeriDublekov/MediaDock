@@ -29,6 +29,9 @@ def merge_titles(existing: Title, incoming: Title) -> Title:
     ratings = incoming.ratings if incoming.ratings else existing.ratings
     ai_validated = incoming.ai_validated if incoming.ai_validated is not None else existing.ai_validated
     ai_checked_at = incoming.ai_checked_at if incoming.ai_checked_at is not None else existing.ai_checked_at
+    source_type = incoming.source_type if incoming.source_type is not None else existing.source_type
+    content_kind = incoming.content_kind if incoming.content_kind is not None else existing.content_kind
+    broadcast_range = incoming.broadcast_range if incoming.broadcast_range is not None else existing.broadcast_range
 
     return Title(
         title=incoming.title or existing.title,
@@ -53,6 +56,9 @@ def merge_titles(existing: Title, incoming: Title) -> Title:
         ratings=ratings,
         ai_validated=ai_validated,
         ai_checked_at=ai_checked_at,
+        source_type=source_type,
+        content_kind=content_kind,
+        broadcast_range=broadcast_range,
     )
 
 

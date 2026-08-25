@@ -226,9 +226,9 @@ class AiMatcher:
             "Rules:\n"
             "1. Remove Russian translated titles before the slash ('/'). Use the original/international title.\n"
             "2. Remove author names, directors in brackets like '(реж. Denis Villeneuve)', and codec tags.\n"
-            "3. If seasons/episodes are present (e.g. 'Сезон 1', '[01-08 из 08]', 'S01'), media_type MUST be 'series'.\n"
-            "4. If feed_type is 'movie' but title is clearly a multi-episode TV series, set media_type to 'series'.\n"
-            "5. If feed_type is 'series' but title is a single standalone movie, set media_type to 'movie'.\n\n"
+            "3. If seasons/episodes are present (e.g. 'Сезон 1', '[01-08 из 08]', 'S01'), treat that as a series marker.\n"
+            "4. When feed_type is 'movie' or 'series', it is authoritative for source type; do not silently change it because of a marker.\n"
+            "5. When feed_type is 'unknown', infer the source type from the title and its markers.\n\n"
             f"Input items:\n{json.dumps(items, ensure_ascii=False)}"
         )
 
@@ -282,7 +282,7 @@ class AiMatcher:
             "PRINCIPLE: It is much better to mark an item as NOT a match (is_match=false) than to accept a wrong title.\n\n"
             "Rules:\n"
             "1. If torrent is a TV series and OMDb result is a movie (or vice versa), is_match MUST be false.\n"
-            "2. If movie years differ by more than 1 year, is_match MUST be false.\n"
+            "2. Apply the one-year release-year tolerance only to movies. A series torrent year can be a later season/release year, while OMDb Year commonly contains the show's first broadcast year; that difference alone is NOT a mismatch.\n"
             "3. If titles are completely unrelated (e.g. searching 'Fallout' matched a 1995 documentary 'Fallout'), is_match MUST be false.\n\n"
             f"Candidate pairs:\n{json.dumps(candidates, ensure_ascii=False)}"
         )
@@ -353,7 +353,7 @@ class AiMatcher:
             "Verification criteria:\n"
             "1. If the torrent is for a TV series (has season/episode info, e.g. S01, Сезон 1) but the current OMDb item is a movie, it is INVALID (is_valid_match=false).\n"
             "2. If the torrent is for a movie but the current OMDb item is a TV series, it is INVALID.\n"
-            "3. If release years differ by more than 1 year, it is INVALID.\n"
+            "3. Apply the one-year release-year tolerance only to movies. A raw series year can identify a later season/release, while OMDb Year commonly identifies the series' first broadcast year; do NOT mark a series invalid solely for that difference.\n"
             "4. If the title is an unrelated movie (e.g. remake vs original, wrong film with similar word, documentary matched as feature film), it is INVALID.\n"
             "5. If INVALID, extract the exact original clean English/Latin title, release year, and media type ('movie' or 'series') from the raw torrent title so a new OMDb lookup can be performed.\n"
             "6. If VALID (the torrent is indeed for the specified movie/series), set is_valid_match=true.\n\n"

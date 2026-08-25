@@ -32,6 +32,11 @@ redirect validation, TLS transport, response/entry bounds, and explicit local
 fixture reads. `ScannerService` receives feed bytes from that adapter and is the
 only active caller of `feedparser`.
 
+`match_policy.py` is the shared domain policy boundary for source type,
+content kind, broadcast ranges, year semantics, exclusions, and typed
+accepted/rejected/ambiguous decisions. OMDb normalization supplies its input;
+scanner modes do not duplicate those deterministic checks.
+
 ### Frontend
 
 ```text

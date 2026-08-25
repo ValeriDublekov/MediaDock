@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 import firebase_admin
 from firebase_admin import credentials, firestore
 
+from .match_policy import broadcast_range_from_dict, effective_source_type
 from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
 from .repository import (
     ManualMappingRepository,
@@ -70,11 +71,15 @@ def title_from_dict(d: dict) -> Title:
     if not isinstance(d, dict) or "title" not in d:
         keys_str = list(d.keys()) if isinstance(d, dict) else str(type(d))
         raise KeyError(f"Document missing required 'title' field (keys present: {keys_str})")
+    media_type = d.get("mediaType", "movie")
+    content_kind = d.get("contentKind")
+    if content_kind is None:
+        content_kind = media_type if media_type in ("documentary", "short") else "standard"
     return Title(
         title=d["title"],
         normalized_title=d.get("normalizedTitle", d["title"].lower()),
         year=d.get("year"),
-        media_type=d.get("mediaType", "movie"),
+        media_type=media_type,
         first_seen_at=d.get("firstSeenAt", datetime.datetime.now(datetime.timezone.utc)),
         last_seen_at=d.get("lastSeenAt", datetime.datetime.now(datetime.timezone.utc)),
         updated_at=d.get("updatedAt", datetime.datetime.now(datetime.timezone.utc)),
@@ -93,6 +98,9 @@ def title_from_dict(d: dict) -> Title:
         ratings=d.get("ratings") or [],
         ai_validated=d.get("aiValidated"),
         ai_checked_at=d.get("aiCheckedAt"),
+        source_type=d.get("sourceType") or effective_source_type(media_type),
+        content_kind=content_kind,
+        broadcast_range=broadcast_range_from_dict(d.get("broadcastRange")),
     )
 
 

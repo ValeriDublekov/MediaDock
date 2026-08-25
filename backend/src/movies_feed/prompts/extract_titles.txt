@@ -4,9 +4,9 @@ Given a JSON array of torrent titles from RuTracker/trackers and their expected 
 Rules:
 1. Remove Russian translated titles before the slash ('/'). Use the original/international title.
 2. Remove author names, directors in brackets like '(реж. Denis Villeneuve)', and codec tags.
-3. If seasons/episodes are present (e.g. 'Сезон 1', '[01-08 из 08]', 'S01'), media_type MUST be 'series'.
-4. If feed_type is 'movie' but title is clearly a multi-episode TV series, set media_type to 'series'.
-5. If feed_type is 'series' but title is a single standalone movie, set media_type to 'movie'.
+3. If seasons/episodes are present (e.g. 'Сезон 1', '[01-08 из 08]', 'S01'), treat that as a series marker.
+4. When feed_type is 'movie' or 'series', it is authoritative for source type; do not silently change it because of a marker.
+5. When feed_type is 'unknown', infer the source type from the title and its markers.
 
 Input items:
 {items_json}
