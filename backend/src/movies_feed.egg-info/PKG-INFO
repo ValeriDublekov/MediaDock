@@ -6,3 +6,5 @@ Requires-Python: >=3.10
 Requires-Dist: feedparser>=6.0.0
 Requires-Dist: requests>=2.25.0
 Requires-Dist: firebase-admin>=6.0.0
+Requires-Dist: google-cloud-firestore>=2.21.0
+Requires-Dist: google-api-core!=2.35.0

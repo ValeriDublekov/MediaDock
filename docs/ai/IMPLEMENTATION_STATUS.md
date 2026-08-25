@@ -13,16 +13,16 @@ MVP wiring is present; production hardening is not complete.
 - P12-P14: Pull-request CI, daily scanner workflow, and GitHub Pages deployment are present; workflow security and failure semantics still require hardening.
 - P15: Integration and documentation audit identified open backend, workflow, authorization, and client-secret risks.
 - AI matcher: Gemini extraction/validation exists with inline prompts and a current default of `gemini-3.1-flash-lite`; see [`GEMINI_MODELS.md`](../GEMINI_MODELS.md).
+- Prompt 0A: Scanner workflow inputs, mode-aware CLI preflight, process exit codes, parse-only isolation, explicit emulator project IDs, and locked backend CI dependencies are implemented.
 
 ## Next Prompt
 
-Run Prompt 0A in `docs/BACKEND_REFACTORING_PROMPTS.md`, then 0B and 0C.
+Run Prompt 0B in `docs/BACKEND_REFACTORING_PROMPTS.md`, then 0C.
 
 ## Blockers
 
 - Firebase project identifiers and an authorized user account must be configured for production.
-- The backend suite is not currently green in the reviewed environment: `test_firestore_repository` cannot import `google.cloud.firestore`.
-- Workflow input validation, scanner exit codes, browser-secret removal, role enforcement, and bounded RSS fetching are open before production launch.
+- Browser-secret removal, role enforcement, and bounded RSS fetching remain open before production launch.
 
 
 ## Residual Risks

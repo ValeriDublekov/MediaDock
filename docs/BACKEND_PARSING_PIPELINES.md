@@ -21,7 +21,7 @@ boundary are prerequisites tracked in `docs/BACKEND_REFACTORING_PROMPTS.md`
 
 | Component | Current responsibility |
 | --- | --- |
-| `cli.py` | Loads JSON/Firestore settings, selects repositories and mode, creates one `ScannerService`. |
+| `cli.py` | Validates bounded CLI inputs and mode-specific configuration, loads JSON/Firestore settings, selects repositories and mode, creates one `ScannerService`, and maps `ScanRun` status to a process exit code. |
 | `rutracker_parser.py` | Regex/heuristic extraction of title, year, movie/series flag, quality, and rip type. |
 | `omdb_client.py` | Exact OMDb lookup, fallback lookup, series-period checks, and payload normalization. |
 | `ai_matcher.py` | Gemini batch title extraction, OMDb candidate validation, and stored-match audit. The active prompt strings are currently inline; the files under `prompts/` are not loaded by the current implementation. |
@@ -68,7 +68,13 @@ The normal RSS path does **not** call Gemini for extraction or candidate validat
 | `recheck-existing` | Stored titles not marked `aiValidated` | No new regex parse | No / no enforced limit | Audit + conditional validate | Validate, migrate, or delete titles/occurrences |
 | `all` | All of the above | Mixed | Mixed | Yes in phases 2-3 | Union of all writes |
 
-Every run first loads manual mappings. Non-dry runs also prune parse logs older than seven days. The configured trigger (`schedule`, `manual`, or `local`) is metadata only and does not change matching behavior.
+Non-parse-only runs first load manual mappings and prune parse logs older than
+seven days. The configured trigger (`schedule`, `manual`, or `local`) is
+metadata only and does not change matching behavior. The CLI preflight requires
+Firebase credentials for Firestore modes, OMDb credentials for modes that can
+query OMDb, and Gemini credentials for AI modes. It returns exit code `0` only
+for `succeeded`, `2` for `partial`, and `1` for `failed` or configuration
+errors.
 
 ### 1. Standard RSS scan (`--mode rss`)
 
@@ -78,7 +84,7 @@ Every run first loads manual mappings. Non-dry runs also prune parse logs older 
 4. Process each entry and regex-parse it a second time.
 5. If `force_days > 0`, silently skip entries older than the cutoff.
 6. Reject empty or unparseable titles and create a parse log.
-7. In `--parse-only`, each RSS entry stops after parsing. The CLI uses fake repositories, so these logs are not persisted outside the process. With `--mode all`, however, the same in-memory logs can continue into AI reprocessing later in the run.
+7. In `--parse-only`, each RSS entry stops after parsing. Parse-only is valid only with `--mode rss`; the CLI rejects combinations such as `--parse-only --mode all` and the scanner also exits before any AI phase. No Firestore, OMDb, Gemini, or parse-log write is performed.
 8. Resolve a manual mapping by log/occurrence ID, raw title, or normalized parsed title. A successful IMDb lookup bypasses automatic type/year validation.
 9. Otherwise read the `(normalized title, year)` cache. Positive entries live for 30 days by default; negative entries live for up to two days.
 10. On a cache miss, call OMDb with a series hint when the parser says series, or with the configured feed type.
@@ -116,18 +122,31 @@ The repair/delete sequence is not transactional and has no review or rollback st
 
 The phases run sequentially: RSS scan, DB audit, then parse-log reprocessing. RSS writes are flushed before the audit, so newly added titles may be audited immediately. Failures written by either RSS or DB audit may be selected for AI reprocessing in the same run; a title deleted by audit can therefore be recreated immediately by phase 3.
 
-The final run status is `succeeded` when `error_count == 0`, even when an AI phase stops because AI is unavailable or returns no results.
+The final run status is `succeeded` when `error_count == 0`. An incomplete AI
+phase records a run error and produces `partial`; failed/configuration outcomes
+map to a non-zero CLI exit code.
 
 ### Legacy execution
 
 `legacy/movie_scanner.py` has its own regex + OMDb + JSON-file cache/database pipeline, plus `--html`, `--test-parser`, and `--parse-only` modes. Its parser is nearly a copy of the active parser. It has no Firestore repositories, parse-log reprocessing, DB audit, manual mappings, or Gemini logic.
 
+## Resolved in Prompt 0A
+
+- Workflow dispatch values are read through environment variables, validated as
+	bounded decimal values/allowlisted modes, and passed with a shell argument
+	array. A static regression test protects this boundary.
+- CLI configuration preflight checks mode-specific secrets without logging
+	values, and scan status now controls the process exit code.
+- Parse-only is an RSS-only early-exit mode with no OMDb, Gemini, Firestore, or
+	parse-log writes; CI uses the explicit `demo-mediadock` emulator project.
+- CI and local backend checks install the reviewed `backend/requirements.lock`
+	set before the editable package.
+
 ## Inconsistencies and Bugs
 
 | Priority | Finding | Impact | Recommended fix |
 | --- | --- | --- | --- |
-| Critical | `workflow_dispatch` accepts free-form `force_days`/`audit_days` strings and interpolates them into the scanner shell command. | A user able to dispatch the workflow can inject shell syntax into a job that has Firebase, OMDb, and Gemini secrets. | Pass inputs through environment variables, validate a bounded numeric range, use a shell argument array, and add a workflow regression check. |
-| Critical | The CLI logs a non-success `ScanRun` status but does not return a non-zero process exit code. | GitHub Actions can report a green job after a partial/failed scanner run. | Define exit-code semantics and make incomplete AI/OMDb phases affect both `ScanRun` and the process result. |
+| Resolved | Workflow dispatch input handling and scanner process exit semantics. | Prompt 0A validates inputs outside shell source, uses an argument array, and maps `succeeded/partial/failed` to `0/2/1`. | Keep the workflow static regression test and documented exit-code contract green. |
 | High | Allowlist membership currently grants access to settings and manual-mapping writes without enforcing the documented `role`. | A reader account can alter privileged scanner inputs or mappings. | Add an explicit admin policy, validate fields and lengths in rules/backend, and test reader/admin/disabled cases. |
 | High | Client configuration exposes a path for scanner credentials/control through browser storage and Vite env configuration. | XSS or a compromised dependency can steal a PAT or OMDb key and trigger privileged operations. | Remove private scanner credentials from the browser and use GitHub's protected dispatch or a server-side control plane. |
 | High | The implementation and status documents disagree about Gemini model handling: the code defaults to `gemini-3.1-flash-lite`, remaps valid `gemini-2.5-flash*` IDs, and the status mentions Gemini 3.7. | A model setting can be silently changed or use a generation payload incompatible with the selected model. | Use `docs/GEMINI_MODELS.md`, stop silently remapping valid IDs, validate `generateContent` capability, and test model-specific generation settings. |
@@ -136,7 +155,7 @@ The final run status is `succeeded` when `error_count == 0`, even when an AI pha
 | Critical | Audit treats OMDb no-match, quota exhaustion, and transport failure as the same missing replacement, then deletes the title and all occurrences. A missing corrected title has the same outcome. | A timeout, exhausted quota, bad credential, or incomplete AI result can erase valid catalog data. | Model `matched`, `not_found`, `quota_exhausted`, `transport_error`, and `invalid_request` separately; never mutate catalog data for retryable/incomplete outcomes; create a review proposal instead. |
 | High | AI audit applies a generic ±1 year rule to series. A raw title can contain a later season's year, while OMDb and `Title.year` contain the show's first broadcast year. | Correct matches such as a 2012 season of a series that started in 2007 can be marked invalid and enter the destructive repair/delete path. | Give years explicit semantics (`movieReleaseYear`, `seasonYear`, `seriesStartYear`, and broadcast range); apply ±1 only to movies; for series, validate that the season year is inside the broadcast range or treat it as non-disqualifying when the range is unavailable. Update both AI prompts and deterministic tests. |
 | High | `aiValidated` is stored on the aggregate title and preserved by later RSS merges. New occurrences attached to an already validated title do not invalidate the flag and will never be audited. | A later false-positive occurrence can hide permanently behind an earlier title-level validation. | Track validation per occurrence/raw-title cluster and include a validation policy version; invalidate aggregate status whenever a new or changed occurrence is attached. |
-| High | `--parse-only --mode all` does not remain parse-only: its ignored in-memory logs are selected by phase 3 and can reach Gemini and OMDb. | A supposedly offline/no-API mode can perform external requests when Gemini is configured. | Make parse-only an early run-level exit after RSS parsing, reject incompatible mode combinations, and add a no-external-call regression test. |
+| Resolved | `--parse-only --mode all` is rejected and parse-only exits before AI/persistence phases. | Parse-only cannot reach OMDb, Gemini, Firestore, or parse-log writes. | Keep the CLI and scanner regression tests green. |
 | High | Successful log reprocessing does not resolve/update the source log. | The same unresolved item can be selected on every run until pruning. | Add repository `mark_resolved(log_id, decision)` or overwrite the original deterministic log with resolution metadata. |
 | High | Reprocessed occurrences lose `feedEntryId` and `torrentUrl`; their ID is derived from raw title while the stored fields cannot reproduce it. | Provenance is lost and later migration can change/collide occurrence IDs. | Persist source IDs/URL/feed type in `ParseLog` and reuse the original occurrence ID and fields. |
 | High | Matching/validation code is copied between RSS, reparse, and audit but has different rules. | The same candidate can be accepted in one mode and rejected in another. | Introduce one `MetadataResolver` and one typed `validate_match()` decision pipeline used by all modes. |

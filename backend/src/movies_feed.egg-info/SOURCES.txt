@@ -15,8 +15,10 @@ src/movies_feed.egg-info/dependency_links.txt
 src/movies_feed.egg-info/requires.txt
 src/movies_feed.egg-info/top_level.txt
 tests/test_ai_matcher.py
+tests/test_cli.py
 tests/test_firestore_repository.py
 tests/test_omdb_client.py
 tests/test_repository.py
 tests/test_rutracker_parser.py
 tests/test_scanner.py
+tests/test_workflow_security.py

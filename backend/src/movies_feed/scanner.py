@@ -92,6 +92,14 @@ class ScannerService:
         self._manual_mappings_by_raw_title: Dict[str, ManualMapping] = {}
         self._manual_mappings_by_parsed_title: Dict[str, ManualMapping] = {}
 
+    @staticmethod
+    def _record_phase_error(run: Optional[ScanRun], message: str) -> None:
+        if run is None:
+            return
+        run.error_count += 1
+        if message not in run.error_summary:
+            run.error_summary.append(message)
+
     def _load_manual_mappings(self) -> None:
         if not self.manual_mapping_repo:
             return
@@ -173,7 +181,12 @@ class ScannerService:
         self._pending_occurrences[occ_key] = merged_occ
 
     def _flush_parse_logs(self, section_timings: Optional[Dict[str, float]] = None) -> None:
-        if not self._pending_parse_logs or not self.parse_log_repo or self.config.is_dry_run:
+        if (
+            not self._pending_parse_logs
+            or not self.parse_log_repo
+            or self.config.is_dry_run
+            or self.config.is_parse_only
+        ):
             return
         t0 = time.perf_counter()
         self.parse_log_repo.add_many(self._pending_parse_logs)
@@ -256,13 +269,22 @@ class ScannerService:
 
     def run(self, run_id: str) -> ScanRun:
         self._reset_session_caches()
-        self._load_manual_mappings()
         run = ScanRun(
             started_at=self.now,
             finished_at=None,
             status="running",
             trigger=self.config.trigger,
         )
+        if self.config.is_parse_only and self.config.mode != "rss":
+            run.status = "failed"
+            run.error_count = 1
+            run.error_summary.append("Parse-only mode supports only rss mode")
+            run.finished_at = datetime.datetime.now(datetime.timezone.utc)
+            return run
+
+        if not self.config.is_parse_only:
+            self._load_manual_mappings()
+
         if not self.config.is_dry_run and not self.config.is_parse_only:
             self.run_repo.upsert(run_id, run)
 
@@ -280,7 +302,7 @@ class ScannerService:
             "ai_reparse": 0.0,
         }
 
-        if self.parse_log_repo and not self.config.is_dry_run:
+        if self.parse_log_repo and not self.config.is_dry_run and not self.config.is_parse_only:
             t0 = time.perf_counter()
             cutoff = self.now - datetime.timedelta(days=7)
             self.parse_log_repo.prune_older_than(cutoff)
@@ -375,23 +397,27 @@ class ScannerService:
             else:
                 logger.info(f"--> [Phase 1/3] RSS feed processing SKIPPED (mode is '{self.config.mode}')")
 
-            # 2. AI Database Recheck & Fix (if mode is "recheck-existing" or "all")
-            if self.config.mode in ("recheck-existing", "all"):
-                logger.info("--> [Phase 2/3] AI Audit & Repair of existing database titles...")
-                t0_recheck = time.perf_counter()
-                self.recheck_existing_titles(run=run, section_timings=section_timings)
-                section_timings["ai_recheck"] += (time.perf_counter() - t0_recheck)
+            if self.config.is_parse_only:
+                logger.info("--> [Phase 2/3] AI Database Audit SKIPPED (parse-only mode)")
+                logger.info("--> [Phase 3/3] AI Unmapped Reparsing SKIPPED (parse-only mode)")
             else:
-                logger.info(f"--> [Phase 2/3] AI Database Audit SKIPPED (mode is '{self.config.mode}')")
+                # 2. AI Database Recheck & Fix (if mode is "recheck-existing" or "all")
+                if self.config.mode in ("recheck-existing", "all"):
+                    logger.info("--> [Phase 2/3] AI Audit & Repair of existing database titles...")
+                    t0_recheck = time.perf_counter()
+                    self.recheck_existing_titles(run=run, section_timings=section_timings)
+                    section_timings["ai_recheck"] += (time.perf_counter() - t0_recheck)
+                else:
+                    logger.info(f"--> [Phase 2/3] AI Database Audit SKIPPED (mode is '{self.config.mode}')")
 
-            # 3. AI Reparse Unfound Titles (if mode is "reparse-unfound" or "all")
-            if self.config.mode in ("reparse-unfound", "all"):
-                logger.info("--> [Phase 3/3] AI Reparsing of unmapped/unfound titles...")
-                t0_reparse = time.perf_counter()
-                self.reparse_unfound_entries(run=run, section_timings=section_timings)
-                section_timings["ai_reparse"] += (time.perf_counter() - t0_reparse)
-            else:
-                logger.info(f"--> [Phase 3/3] AI Unmapped Reparsing SKIPPED (mode is '{self.config.mode}')")
+                # 3. AI Reparse Unfound Titles (if mode is "reparse-unfound" or "all")
+                if self.config.mode in ("reparse-unfound", "all"):
+                    logger.info("--> [Phase 3/3] AI Reparsing of unmapped/unfound titles...")
+                    t0_reparse = time.perf_counter()
+                    self.reparse_unfound_entries(run=run, section_timings=section_timings)
+                    section_timings["ai_reparse"] += (time.perf_counter() - t0_reparse)
+                else:
+                    logger.info(f"--> [Phase 3/3] AI Unmapped Reparsing SKIPPED (mode is '{self.config.mode}')")
 
             run.status = "succeeded" if run.error_count == 0 else "partial"
         except Exception as e:
@@ -523,13 +549,19 @@ class ScannerService:
                     logger.warning(f"AI batch_recheck_matches exception: {e}")
 
             if items_to_audit and not audit_results:
+                self._record_phase_error(run, "AI recheck phase incomplete")
                 logger.error(
                     f"[AI Recheck] AI matcher failed or returned no results on batch {batch_idx}/{total_batches} "
                     f"(rate limit or API error). Stopping remaining recheck processing immediately."
                 )
                 break
 
+            if len(audit_results) < len(items_to_audit):
+                self._record_phase_error(run, "AI recheck phase returned incomplete results")
+
             for idx, (title_id, title_record, occs, raw_title, feed_name) in enumerate(chunk_context):
+                if idx not in audit_results:
+                    continue
                 ai_res = audit_results.get(idx, {})
                 if ai_res.get("is_valid_match", True):
                     # Valid match: mark as AI-validated and persist to DB
@@ -555,6 +587,8 @@ class ScannerService:
                                 media_type=corr_media_type,
                             )
                         except (OmdbNoMatchError, OmdbLimitReachedError, OmdbTransportError) as ex:
+                            if isinstance(ex, (OmdbLimitReachedError, OmdbTransportError)):
+                                self._record_phase_error(run, "OMDb phase incomplete during recheck")
                             logger.info(f"OMDb lookup for '{corr_title}' yielded no match or error: {ex}")
                             new_omdb_result = None
 
@@ -727,16 +761,23 @@ class ScannerService:
                     logger.warning(f"AI batch_extract_titles failed: {e}")
 
             if items_to_extract and not extracted_results:
+                self._record_phase_error(run, "AI reparse phase incomplete")
                 logger.error(
                     f"[AI Reparse] AI matcher failed or returned no results on batch {batch_idx}/{total_batches} "
                     f"(rate limit or API error). Stopping remaining unmapped re-parse batches immediately."
                 )
                 break
 
+            if len(extracted_results) < len(items_to_extract):
+                self._record_phase_error(run, "AI reparse phase returned incomplete results")
+
             if batch_idx < total_batches and self.ai_matcher and self.ai_matcher.is_available:
                 time.sleep(5.0)
 
             for idx, log in enumerate(chunk):
+                if idx not in extracted_results:
+                    stats["reparsed_failed"] += 1
+                    continue
                 ai_data = extracted_results.get(idx, {})
                 title = ai_data.get("title")
                 year = ai_data.get("year")
@@ -754,6 +795,8 @@ class ScannerService:
                         media_type=media_type,
                     )
                 except (OmdbNoMatchError, OmdbLimitReachedError, OmdbTransportError) as ex:
+                    if isinstance(ex, (OmdbLimitReachedError, OmdbTransportError)):
+                        self._record_phase_error(run, "OMDb phase incomplete during reparse")
                     omdb_result = None
 
                 is_valid = False

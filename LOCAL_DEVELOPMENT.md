@@ -32,7 +32,8 @@ Create a virtual environment and install the backend package in editable mode:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate  # On Windows: .\.venv\Scripts\activate
-pip install -e ./backend
+python -m pip install --requirement backend/requirements.lock
+python -m pip install --no-deps --editable ./backend
 ```
 
 ## Running the Application Locally
@@ -59,8 +60,14 @@ python -m movies_feed.cli --config legacy/config.json --mode rss --parse-only
 ```
 
 Use the Firebase emulator and synthetic fixtures for automated tests. The
-scanner's `--dry-run` still permits external API calls in the current
-implementation; `--parse-only` is the mode that disables OMDb for RSS parsing.
+scanner's `--dry-run` still permits external API calls; `--parse-only` is the
+offline scanner mode for RSS parsing and is valid only with `--mode rss`. It
+does not call OMDb, Gemini, Firestore, or write parse logs.
+
+The scanner process exits with `0` for `succeeded`, `2` for `partial`, and `1`
+for `failed` or configuration errors. AI modes require `GEMINI_API_KEY`, all
+non-parse-only OMDb modes require `OMDB_API_KEY`, and Firestore modes require
+Firebase credentials unless fake repositories or the emulator are used.
 
 ## Testing
 

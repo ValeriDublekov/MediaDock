@@ -76,6 +76,13 @@ The exact names must match the workflows and `.env.example`.
 
 The scanner workflow (`.github/workflows/scanner.yml`) decodes `FIREBASE_SERVICE_ACCOUNT` into a temporary environment file outside the checked out repository and sets `GOOGLE_APPLICATION_CREDENTIALS` for the step. Credentials are never committed, logged, or uploaded as build artifacts.
 
+The scanner validates dispatch inputs in the shell without interpolating them
+into executable source. It exits with `0` only for a succeeded run, `2` for a
+partial/retryable run, and `1` for a failed run or configuration error. The CLI
+preflight checks required credential presence by mode and reports only secret
+names. Parse-only is accepted only for RSS mode and performs no OMDb, Gemini,
+Firestore, or parse-log write operation.
+
 ### Variables for Pages build environment
 
 Store public Firebase web configuration using the `VITE_*` names expected by the

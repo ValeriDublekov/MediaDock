@@ -3,8 +3,9 @@ import datetime
 import json
 import logging
 import os
+import re
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from .firestore_repository import (
     FirestoreOccurrenceRepository,
@@ -29,11 +30,106 @@ from .repository import (
 
 logger = logging.getLogger(__name__)
 
+SUPPORTED_MODES = frozenset({"rss", "recheck-existing", "reparse-unfound", "all"})
+AI_MODES = frozenset({"recheck-existing", "reparse-unfound", "all"})
+OMDB_MODES = frozenset({"rss", "recheck-existing", "reparse-unfound", "all"})
+MAX_SCANNER_DAYS = 30
+
+EXIT_SUCCESS = 0
+EXIT_FAILURE = 1
+EXIT_PARTIAL = 2
+EXIT_CONFIGURATION_ERROR = EXIT_FAILURE
+
+
+class ConfigurationError(ValueError):
+    """Raised when scanner arguments or required runtime configuration are invalid."""
+
+
+def _has_value(environment: Mapping[str, str], name: str) -> bool:
+    return bool(environment.get(name, "").strip())
+
+
+def _parse_bounded_days(value: Any, option_name: str) -> int:
+    raw_value = str(value)
+    if not re.fullmatch(r"[0-9]+", raw_value):
+        raise ConfigurationError(
+            f"{option_name} must be a decimal integer from 0 to {MAX_SCANNER_DAYS}"
+        )
+    try:
+        parsed_value = int(raw_value)
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"{option_name} must be a decimal integer from 0 to {MAX_SCANNER_DAYS}"
+        ) from exc
+    if parsed_value > MAX_SCANNER_DAYS:
+        raise ConfigurationError(
+            f"{option_name} must be a decimal integer from 0 to {MAX_SCANNER_DAYS}"
+        )
+    return parsed_value
+
+
+def validate_runtime_configuration(
+    *,
+    mode: str,
+    force_days: Any,
+    audit_days: Any,
+    parse_only: bool = False,
+    fake_repos: bool = False,
+    environment: Optional[Mapping[str, str]] = None,
+) -> tuple[int, int]:
+    """Validate mode, bounded inputs, and secrets without exposing secret values."""
+    if mode not in SUPPORTED_MODES:
+        raise ConfigurationError("mode is not supported")
+    if parse_only and mode != "rss":
+        raise ConfigurationError("parse-only mode is supported only with --mode rss")
+
+    parsed_force_days = _parse_bounded_days(force_days, "force_days")
+    parsed_audit_days = _parse_bounded_days(audit_days, "audit_days")
+    env = environment if environment is not None else os.environ
+
+    missing: list[str] = []
+    if not fake_repos and not parse_only and not (
+        _has_value(env, "FIREBASE_SERVICE_ACCOUNT")
+        or _has_value(env, "GOOGLE_APPLICATION_CREDENTIALS")
+        or _has_value(env, "FIRESTORE_EMULATOR_HOST")
+    ):
+        missing.append("Firebase credentials")
+    if mode in OMDB_MODES and not parse_only and not _has_value(env, "OMDB_API_KEY"):
+        missing.append("OMDB_API_KEY")
+    if mode in AI_MODES and not _has_value(env, "GEMINI_API_KEY"):
+        missing.append("GEMINI_API_KEY")
+
+    if missing:
+        raise ConfigurationError(
+            "Missing required scanner configuration: " + ", ".join(missing)
+        )
+    return parsed_force_days, parsed_audit_days
+
+
+def exit_code_for_status(status: str) -> int:
+    """Map the persisted ScanRun status to the process result used by CI."""
+    if status == "succeeded":
+        return EXIT_SUCCESS
+    if status == "partial":
+        return EXIT_PARTIAL
+    return EXIT_FAILURE
+
+
+def _sanitize_diagnostic(message: Any, environment: Optional[Mapping[str, str]] = None) -> str:
+    """Redact known secrets and URL-style API keys from CLI diagnostics."""
+    env = environment if environment is not None else os.environ
+    result = str(message)
+    for name in ("OMDB_API_KEY", "GEMINI_API_KEY", "FIREBASE_SERVICE_ACCOUNT"):
+        secret = env.get(name, "")
+        if secret:
+            result = result.replace(secret, "[REDACTED]")
+    return re.sub(r"([?&](?:key|apikey|api_key)=)[^&\s]+", r"\1[REDACTED]", result, flags=re.IGNORECASE)
+
 def load_config(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def main():
+def main(argv: Optional[Sequence[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     
     parser = argparse.ArgumentParser(description="MediaDock movies feed scanner")
@@ -41,15 +137,31 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Parse and fetch, but do not write to Firestore")
     parser.add_argument("--parse-only", action="store_true", help="Only parse RSS and titles, no OMDb requests or Firestore writes")
     parser.add_argument("--fake-repos", action="store_true", help="Use in-memory repositories instead of Firestore")
-    parser.add_argument("--force-days", type=int, default=0, help="Force scan entries N days back")
-    parser.add_argument("--audit-days", type=int, default=0, help="Audit existing records N days back (0 = unlimited)")
+    parser.add_argument("--force-days", type=str, default="0", help="Force scan entries N days back")
+    parser.add_argument("--audit-days", type=str, default="0", help="Audit existing records N days back (0 = unlimited)")
     parser.add_argument("--mode", type=str, default="rss", choices=["rss", "recheck-existing", "reparse-unfound", "all"], help="Scan mode: 'rss' (feed scan), 'recheck-existing' (AI check stored titles), 'reparse-unfound' (AI reparse unmapped titles), or 'all'")
     
     parser.add_argument("--trigger", type=str, default=None, choices=["schedule", "manual", "local"], help="Trigger type (schedule, manual, local)")
     
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    config_data = load_config(args.config)
+    try:
+        args.force_days, args.audit_days = validate_runtime_configuration(
+            mode=args.mode,
+            force_days=args.force_days,
+            audit_days=args.audit_days,
+            parse_only=args.parse_only,
+            fake_repos=args.fake_repos,
+        )
+    except ConfigurationError as exc:
+        logger.error("Configuration error: %s", _sanitize_diagnostic(exc))
+        return EXIT_CONFIGURATION_ERROR
+
+    try:
+        config_data = load_config(args.config)
+    except (OSError, ValueError, TypeError) as exc:
+        logger.error("Configuration file could not be loaded (%s)", type(exc).__name__)
+        return EXIT_CONFIGURATION_ERROR
     
     rss_feeds = config_data.get("rss_feeds", {})
     video_settings = config_data.get("video_settings", {})
@@ -73,13 +185,14 @@ def main():
                 if "excludedGenres" in data:
                     excluded_genres = data["excludedGenres"]
         except Exception as e:
-            logger.warning(f"Could not load custom settings from Firestore titles/settings_config (falling back to legacy/config.json): {e}")
+            logger.warning(
+                "Could not load custom settings from Firestore titles/settings_config "
+                "(falling back to legacy/config.json): %s",
+                type(e).__name__,
+            )
 
     omdb_api_key = os.environ.get("OMDB_API_KEY", "")
-    if not args.parse_only and not omdb_api_key:
-        logger.warning("OMDB_API_KEY environment variable is not set. OMDb lookups will fail if attempted.")
-
-    omdb_client = OmdbClient(api_key=omdb_api_key if omdb_api_key else "dummy")
+    omdb_client = OmdbClient(api_key=omdb_api_key or "parse-only-disabled")
 
     trigger = args.trigger or os.environ.get("SCANNER_TRIGGER")
     if not trigger:
@@ -159,7 +272,11 @@ def main():
     run_id = str(uuid.uuid4())
     logger.info(f"Starting scan run {run_id}")
     
-    run = scanner.run(run_id)
+    try:
+        run = scanner.run(run_id)
+    except Exception as exc:
+        logger.error("Scanner execution failed (%s)", type(exc).__name__)
+        return EXIT_FAILURE
 
     logger.info(f"Scan finished with status: {run.status}")
     logger.info(f"Feeds processed: {run.feeds_processed}")
@@ -176,7 +293,9 @@ def main():
     if run.error_count > 0:
         logger.warning(f"Errors: {run.error_count}")
         for err in run.error_summary:
-            logger.warning(f"  - {err}")
+            logger.warning("  - %s", _sanitize_diagnostic(err))
+
+    return exit_code_for_status(run.status)
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

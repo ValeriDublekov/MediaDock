@@ -44,47 +44,69 @@ jobs:
     name: Run Media Scanner
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: "backend/pyproject.toml"
+          cache-dependency-path: "backend/requirements.lock"
 
       - name: Install Python package and dependencies
-        run: pip install -e ./backend
+        run: |
+          python -m pip install --requirement backend/requirements.lock
+          python -m pip install --no-deps --editable ./backend
 
       - name: Decode Firebase Service Account Credentials
         if: ${{ env.FIREBASE_SERVICE_ACCOUNT != '' }}
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
+          set -euo pipefail
+          umask 077
           mkdir -p ~/.config/gcloud
           CRED_PATH="$HOME/.config/gcloud/firebase_service_account.json"
-          echo "$FIREBASE_SERVICE_ACCOUNT" | base64 --decode > "$CRED_PATH"
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 --decode > "$CRED_PATH"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$CRED_PATH" >> $GITHUB_ENV
 
       - name: Execute Scanner
         env:
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SCANNER_DRY_RUN: ${{ inputs.dry_run }}
+          SCANNER_FORCE_DAYS: ${{ inputs.force_days }}
+          SCANNER_AUDIT_DAYS: ${{ inputs.audit_days }}
+          SCANNER_MODE: ${{ inputs.mode }}
         run: |
-          EXTRA_ARGS=""
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
-            EXTRA_ARGS="$EXTRA_ARGS --dry-run"
+          set -euo pipefail
+          dry_run="${SCANNER_DRY_RUN:-false}"
+          force_days="${SCANNER_FORCE_DAYS:-0}"
+          audit_days="${SCANNER_AUDIT_DAYS:-0}"
+          mode="${SCANNER_MODE:-rss}"
+
+          case "$dry_run" in
+            true|false) ;;
+            *) printf '%s\n' 'dry_run must be true or false' >&2; exit 1 ;;
+          esac
+          if ! [[ "$force_days" =~ ^[0-9]+$ ]] || (( force_days > 30 )); then
+            printf '%s\n' 'force_days must be a decimal integer from 0 to 30' >&2
+            exit 1
           fi
-          if [ -n "${{ github.event.inputs.force_days }}" ] && [ "${{ github.event.inputs.force_days }}" != "0" ]; then
-            EXTRA_ARGS="$EXTRA_ARGS --force-days ${{ github.event.inputs.force_days }}"
+          if ! [[ "$audit_days" =~ ^[0-9]+$ ]] || (( audit_days > 30 )); then
+            printf '%s\n' 'audit_days must be a decimal integer from 0 to 30' >&2
+            exit 1
           fi
-          if [ -n "${{ github.event.inputs.audit_days }}" ] && [ "${{ github.event.inputs.audit_days }}" != "0" ]; then
-            EXTRA_ARGS="$EXTRA_ARGS --audit-days ${{ github.event.inputs.audit_days }}"
+          case "$mode" in
+            rss|recheck-existing|reparse-unfound|all) ;;
+            *) printf '%s\n' 'mode is not supported' >&2; exit 1 ;;
+          esac
+
+          scanner_args=(--config legacy/config.json --mode "$mode" --force-days "$force_days" --audit-days "$audit_days")
+          if [[ "$dry_run" == "true" ]]; then
+            scanner_args+=(--dry-run)
           fi
-          if [ -n "${{ github.event.inputs.mode }}" ]; then
-            EXTRA_ARGS="$EXTRA_ARGS --mode ${{ github.event.inputs.mode }}"
-          fi
-          python -m movies_feed.cli $EXTRA_ARGS
+          python -m movies_feed.cli "${scanner_args[@]}"

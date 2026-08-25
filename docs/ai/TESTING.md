@@ -12,7 +12,8 @@ import error, so the previous "verified" wording was premature.
 From repository root:
 
 ```powershell
-pip install -e ./backend
+python -m pip install --requirement backend/requirements.lock
+python -m pip install --no-deps --editable ./backend
 npx firebase emulators:exec --project demo-mediadock "python -m unittest discover -s backend/tests -v"
 npx tsc --noEmit
 npx vitest run src/test
@@ -22,9 +23,22 @@ npm run build
 
 This validates backend unit/integration suites, frontend TypeScript typing, component/repository unit tests, Firestore security rules via emulator, and frontend production compilation.
 
-The local commands above use an explicit demo project. The current CI workflow
-does not yet pass that project flag to its emulator commands; Prompt 0A makes
-the workflow and this command contract identical.
+The local commands above use an explicit demo project. The CI workflow passes
+that project flag to its emulator commands, so the workflow and this command
+contract are identical. The lock file is the reviewed dependency set; install
+the editable package with `--no-deps` after installing the lock so dependency
+resolution cannot silently drift in CI.
+
+## Scanner Process Contract
+
+The scanner returns exit code `0` only for `succeeded`, `2` for `partial` or
+retryable completion, and `1` for `failed` or configuration errors. Parse-only
+is a run-level RSS-only mode: `--parse-only --mode all` is rejected before
+scanner construction, and parse-only performs no OMDb, Gemini, Firestore, or
+parse-log writes. RSS fetching is still required to obtain the feed entries.
+
+The CLI preflight checks mode-specific Firebase, OMDb, and Gemini configuration
+by presence only. It reports secret names and never prints their values.
 
 When workflow files change, also run a YAML/workflow linter such as
 `actionlint` when available. If no linter is installed, run the repository's
