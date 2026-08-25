@@ -43,9 +43,28 @@ def get_occurrence_id(feed_entry_id: Optional[str], torrent_url: str) -> str:
     return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
 
 
-def get_cache_key(lookup_title: str, lookup_year: Optional[int]) -> str:
-    """Gets deterministic OMDb cache key from lookup title and year."""
+def get_cache_key(
+    lookup_title: str,
+    lookup_year: Optional[int],
+    media_type: Optional[str] = None,
+    year_semantics: Optional[str] = None,
+    lookup_identity: Optional[str] = None,
+) -> str:
+    """Gets a versioned OMDb cache key with type and year semantics."""
     norm_title = normalize_title(lookup_title)
     year_str = str(lookup_year) if lookup_year is not None else ""
-    raw_str = f"v1:cache:{norm_title}:{year_str}"
+    normalized_media_type = media_type.strip().lower() if isinstance(media_type, str) else "unknown"
+    if normalized_media_type not in ("movie", "series"):
+        normalized_media_type = "unknown"
+    normalized_year_semantics = year_semantics.strip().lower() if isinstance(year_semantics, str) else ""
+    if not normalized_year_semantics:
+        normalized_year_semantics = {
+            "movie": "movie_release_year",
+            "series": "series_season_year",
+        }.get(normalized_media_type, "unknown_year")
+    normalized_identity = lookup_identity.strip().lower() if isinstance(lookup_identity, str) else ""
+    raw_str = (
+        f"v2:cache:{norm_title}:{year_str}:{normalized_year_semantics}:"
+        f"{normalized_media_type}:{normalized_identity}"
+    )
     return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()

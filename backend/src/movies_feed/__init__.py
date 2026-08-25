@@ -21,6 +21,13 @@ from .match_policy import (
     parse_broadcast_range,
 )
 from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
+from .metadata_resolver import (
+    MetadataOutcome,
+    MetadataOutcomeStatus,
+    MetadataResolver,
+    OmdbResolver,
+    RequestBudget,
+)
 from .repository import (
     FakeManualMappingRepository,
     FakeOmdbCacheRepository,

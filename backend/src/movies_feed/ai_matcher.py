@@ -13,6 +13,10 @@ DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
 
 
+class GeminiModelCapabilityError(ValueError):
+    """Raised when the configured Gemini model cannot run generateContent."""
+
+
 class AiMatcher:
     """
     AI-powered batch parsing and validation helper for media scanner.
@@ -29,20 +33,6 @@ class AiMatcher:
     ):
         self.api_key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "")
         chosen_model = model or os.environ.get("GEMINI_MODEL", GEMINI_MODEL)
-        
-        # Map legacy or invalid model identifiers to official active API model IDs
-        invalid_or_legacy = (
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-2.0-flash-lite",
-            "gemini-2.0-flash",
-        )
-        if chosen_model in invalid_or_legacy:
-            logger.warning(
-                f"Model '{chosen_model}' is not a valid active model for Google Generative Language v1beta API. "
-                f"Normalizing to active model 'gemini-3.1-flash-lite'."
-            )
-            chosen_model = "gemini-3.1-flash-lite"
         self.model = chosen_model
 
         # Determine inter-request delay to comply with model RPM limits
@@ -64,6 +54,7 @@ class AiMatcher:
         self.failed_calls: int = 0
         self.total_items_processed: int = 0
         self._disabled: bool = False
+        self._capability_validated: bool = False
 
     @property
     def is_available(self) -> bool:
@@ -76,6 +67,58 @@ class AiMatcher:
             "failed_calls": self.failed_calls,
             "total_items_processed": self.total_items_processed,
         }
+
+    @staticmethod
+    def _supports_generate_content(model_payload: Dict[str, Any], configured_model: str) -> bool:
+        model_name = model_payload.get("name")
+        if not isinstance(model_name, str):
+            return False
+        normalized_name = model_name.rsplit("/", 1)[-1]
+        normalized_model = configured_model.rsplit("/", 1)[-1]
+        methods = model_payload.get("supportedGenerationMethods")
+        return normalized_name == normalized_model and isinstance(methods, list) and "generateContent" in methods
+
+    @classmethod
+    def validate_model_capability_payload(
+        cls,
+        payload: Any,
+        configured_model: str,
+    ) -> None:
+        if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+            raise GeminiModelCapabilityError("Gemini models.list returned an invalid response")
+        if not any(
+            isinstance(model, dict) and cls._supports_generate_content(model, configured_model)
+            for model in payload["models"]
+        ):
+            raise GeminiModelCapabilityError(
+                f"Configured Gemini model '{configured_model}' does not support generateContent"
+            )
+
+    def validate_model_capability(self, timeout: float = 10.0) -> None:
+        """Verify the configured model exists and supports the matcher operation."""
+        if not self.api_key or not self.api_key.strip():
+            raise GeminiModelCapabilityError("Gemini API key is required for model capability validation")
+        request = urllib.request.Request(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            headers={
+                "Accept": "application/json",
+                "x-goog-api-key": self.api_key,
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raise GeminiModelCapabilityError(
+                f"Gemini models.list capability check failed with HTTP {exc.code}"
+            ) from exc
+        except Exception as exc:
+            raise GeminiModelCapabilityError(
+                f"Gemini models.list capability check failed ({type(exc).__name__})"
+            ) from exc
+        self.validate_model_capability_payload(payload, self.model)
+        self._capability_validated = True
 
     def _call_gemini(
         self,
@@ -97,7 +140,7 @@ class AiMatcher:
             f"(model: {self.model}, items: {item_count}, prompt_len: {len(prompt)} chars)..."
         )
 
-        url = f"{self.endpoint}?key={self.api_key}"
+        url = self.endpoint
         payload: Dict[str, Any] = {
             "contents": [
                 {
@@ -119,7 +162,10 @@ class AiMatcher:
         req = urllib.request.Request(
             url,
             data=data,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self.api_key,
+            },
             method="POST"
         )
 

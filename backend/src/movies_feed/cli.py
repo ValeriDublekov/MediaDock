@@ -17,7 +17,7 @@ from .firestore_repository import (
     get_firestore_client,
 )
 from .omdb_client import OmdbClient
-from .ai_matcher import AiMatcher
+from .ai_matcher import AiMatcher, GeminiModelCapabilityError
 from .scanner import ScannerConfig, ScannerService
 from .repository import (
     FakeOccurrenceRepository,
@@ -347,6 +347,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         manual_mapping_repo = FirestoreManualMappingRepository(db)
 
     ai_matcher = AiMatcher()
+    if args.mode in AI_MODES and ai_matcher.is_available:
+        try:
+            ai_matcher.validate_model_capability()
+        except GeminiModelCapabilityError as exc:
+            logger.error("Gemini model configuration error: %s", _sanitize_diagnostic(exc))
+            return EXIT_CONFIGURATION_ERROR
     if ai_matcher.is_available:
         logger.info("AI matching and validation enabled via GEMINI_API_KEY.")
 

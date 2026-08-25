@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import feedparser
 
-from .ids import clean_title_for_comparison, get_cache_key, get_occurrence_id, get_title_id, normalize_title
+from .ids import clean_title_for_comparison, get_occurrence_id, get_title_id, normalize_title
 from .match_policy import (
     MatchDecision,
     effective_source_type,
@@ -17,13 +17,12 @@ from .match_policy import (
     get_exclusion_reason as policy_get_exclusion_reason,
     normalize_source_type,
 )
-from .models import ManualMapping, Occurrence, OmdbCacheEntry, ParseLog, ScanRun, Title
+from .models import ManualMapping, Occurrence, ParseLog, ScanRun, Title
+from .metadata_resolver import MetadataOutcome, MetadataOutcomeStatus, MetadataResolver, OmdbResolver
 from .omdb_client import (
     OmdbClient,
     OmdbLimitReachedError,
     OmdbMovieResult,
-    OmdbNoMatchError,
-    OmdbTransportError,
 )
 from .repository import (
     ManualMappingRepository,
@@ -83,6 +82,7 @@ class ScannerService:
         ai_matcher: Optional[AiMatcher] = None,
         now: Optional[datetime.datetime] = None,
         feed_fetcher: Optional[FeedFetcher] = None,
+        metadata_resolver: Optional[MetadataResolver] = None,
     ):
         self.config = config
         self.omdb_client = omdb_client
@@ -95,6 +95,14 @@ class ScannerService:
         self.ai_matcher = ai_matcher
         self.now = now or datetime.datetime.now(datetime.timezone.utc)
         self.feed_fetcher = feed_fetcher or FeedFetcher()
+        self.metadata_resolver = metadata_resolver or OmdbResolver(
+            omdb_client,
+            cache_repo,
+            cache_ttl_days=config.cache_ttl_days,
+            request_limit=config.omdb_limit,
+            is_dry_run=config.is_dry_run,
+            now=self.now,
+        )
         self._reset_session_caches()
 
     def _iter_scan_feed_definitions(self) -> List[Dict[str, Optional[str]]]:
@@ -107,7 +115,6 @@ class ScannerService:
         return list(iter_feed_definitions(self.config.rss_feeds))
 
     def _reset_session_caches(self) -> None:
-        self._session_cache_entries: Dict[str, Optional[OmdbCacheEntry]] = {}
         self._session_titles: Dict[str, Optional[Title]] = {}
         self._session_occurrences: Dict[tuple, Optional[Occurrence]] = {}
         self._pending_parse_logs: List[ParseLog] = []
@@ -124,6 +131,31 @@ class ScannerService:
         run.error_count += 1
         if message not in run.error_summary:
             run.error_summary.append(message)
+
+    def _sync_omdb_attempts(self, run: Optional[ScanRun]) -> None:
+        if run is None:
+            return
+        resolver_attempts = getattr(self.metadata_resolver, "http_attempts", 0)
+        run.omdb_requests = max(run.omdb_requests, resolver_attempts)
+
+    def _record_metadata_outcome_failure(
+        self,
+        run: Optional[ScanRun],
+        outcome: MetadataOutcome,
+        phase: str,
+    ) -> None:
+        if outcome.status in (
+            MetadataOutcomeStatus.QUOTA_EXHAUSTED,
+            MetadataOutcomeStatus.TRANSPORT_ERROR,
+        ):
+            self._record_phase_error(run, f"OMDb phase incomplete during {phase}")
+            if outcome.status is MetadataOutcomeStatus.TRANSPORT_ERROR and outcome.error_message:
+                self._record_phase_error(run, f"OMDb Transport Error: {outcome.error_message}")
+        elif outcome.status is MetadataOutcomeStatus.UNEXPECTED_ERROR:
+            self._record_phase_error(run, f"OMDb phase failed during {phase}")
+        elif outcome.status is MetadataOutcomeStatus.INVALID_REQUEST:
+            self._record_phase_error(run, f"OMDb phase rejected an invalid request during {phase}")
+        self._sync_omdb_attempts(run)
 
     @staticmethod
     def _expected_source_type(feed_type: Optional[str], series_marker: bool = False) -> Optional[str]:
@@ -349,45 +381,34 @@ class ScannerService:
             outcome["candidate_outcome"] = "not_evaluated"
             return outcome
 
-        t0 = time.perf_counter()
-        try:
-            omdb_result = self.omdb_client.get_movie_info(
-                lookup_title,
-                str(corrected_year) if corrected_year is not None else None,
-                media_type=corrected_media_type,
-            )
-        except OmdbNoMatchError:
+        resolver_outcome = self.metadata_resolver.resolve_title(
+            lookup_title,
+            corrected_year,
+            media_type=corrected_media_type,
+            section_timings=section_timings,
+        )
+        self._sync_omdb_attempts(run)
+        if resolver_outcome.status is MetadataOutcomeStatus.CONFIRMED_NOT_FOUND:
             outcome["omdb_status"] = "not_found"
             outcome["omdb_outcome"] = "confirmed_not_found"
             return outcome
-        except OmdbLimitReachedError:
+        if resolver_outcome.status is not MetadataOutcomeStatus.FOUND:
             outcome["omdb_status"] = "error"
-            outcome["omdb_outcome"] = "quota_exhausted"
-            outcome["retryable"] = True
-            self._record_phase_error(run, "OMDb phase incomplete during recheck")
+            outcome["omdb_outcome"] = (
+                "malformed_result"
+                if resolver_outcome.status is MetadataOutcomeStatus.UNEXPECTED_ERROR
+                and resolver_outcome.error_message == "OMDb returned malformed metadata"
+                else resolver_outcome.status.value
+            )
+            outcome["retryable"] = resolver_outcome.status in (
+                MetadataOutcomeStatus.QUOTA_EXHAUSTED,
+                MetadataOutcomeStatus.TRANSPORT_ERROR,
+                MetadataOutcomeStatus.UNEXPECTED_ERROR,
+            )
+            self._record_metadata_outcome_failure(run, resolver_outcome, "recheck")
             return outcome
-        except OmdbTransportError:
-            outcome["omdb_status"] = "error"
-            outcome["omdb_outcome"] = "transport_error"
-            outcome["retryable"] = True
-            self._record_phase_error(run, "OMDb phase incomplete during recheck")
-            return outcome
-        except ValueError:
-            outcome["omdb_status"] = "error"
-            outcome["omdb_outcome"] = "invalid_request"
-            outcome["retryable"] = False
-            self._record_phase_error(run, "OMDb phase failed during recheck")
-            return outcome
-        except Exception:
-            outcome["omdb_status"] = "error"
-            outcome["omdb_outcome"] = "unexpected_error"
-            outcome["retryable"] = True
-            self._record_phase_error(run, "OMDb phase incomplete during recheck")
-            return outcome
-        finally:
-            if section_timings is not None:
-                section_timings.setdefault("omdb_api", 0.0)
-                section_timings["omdb_api"] += time.perf_counter() - t0
+
+        omdb_result = resolver_outcome.result
 
         if (
             not isinstance(omdb_result, OmdbMovieResult)
@@ -486,33 +507,6 @@ class ScannerService:
                 self._manual_mappings_by_raw_title[m.raw_title.strip().lower()] = m
             if m.parsed_title:
                 self._manual_mappings_by_parsed_title[normalize_title(m.parsed_title)] = m
-
-    def _get_cache_entry(self, cache_key: str) -> Optional[OmdbCacheEntry]:
-        if cache_key in self._session_cache_entries:
-            return self._session_cache_entries[cache_key]
-        entry = self.cache_repo.get(cache_key)
-        self._session_cache_entries[cache_key] = entry
-        return entry
-
-    def _prefetch_cache_entries(
-        self,
-        cache_keys: List[str],
-        section_timings: Optional[Dict[str, float]] = None,
-    ) -> None:
-        missing_keys = [k for k in set(cache_keys) if k not in self._session_cache_entries]
-        if not missing_keys:
-            return
-        t0 = time.perf_counter()
-        fetched = self.cache_repo.get_many(missing_keys)
-        if section_timings is not None:
-            section_timings["cache_lookup"] += (time.perf_counter() - t0)
-        for k in missing_keys:
-            self._session_cache_entries[k] = fetched.get(k)
-
-    def _set_cache_entry(self, cache_key: str, entry: OmdbCacheEntry) -> None:
-        self._session_cache_entries[cache_key] = entry
-        if not self.config.is_dry_run:
-            self.cache_repo.set(cache_key, entry)
 
     def _get_title(self, title_id: str) -> Optional[Title]:
         if title_id in self._session_titles:
@@ -647,6 +641,11 @@ class ScannerService:
 
     def run(self, run_id: str) -> ScanRun:
         self._reset_session_caches()
+        self.metadata_resolver.start_run(
+            now=self.now,
+            request_limit=self.config.omdb_limit,
+            is_dry_run=self.config.is_dry_run,
+        )
         run = ScanRun(
             started_at=self.now,
             finished_at=None,
@@ -713,7 +712,7 @@ class ScannerService:
                         )
 
                         # Bulk pre-fetch cache entries for this feed
-                        cache_keys_to_prefetch = []
+                        cache_requests_to_prefetch = []
                         for entry in entries:
                             raw_title = getattr(entry, "title", "")
                             if raw_title:
@@ -730,12 +729,20 @@ class ScannerService:
                                                 y = int(parsed.year)
                                             except ValueError:
                                                 pass
-                                        ck = get_cache_key(parsed.title, y)
-                                        cache_keys_to_prefetch.append(ck)
+                                        expected_source_type = self._expected_source_type(
+                                            feed_def.get("type"),
+                                            parsed.is_series,
+                                        )
+                                        cache_requests_to_prefetch.append(
+                                            (parsed.title, y, expected_source_type, None)
+                                        )
                                 except Exception as e:
                                     logger.warning(f"Error during cache key prefetch for '{raw_title}': {e}")
-                        if cache_keys_to_prefetch:
-                            self._prefetch_cache_entries(cache_keys_to_prefetch, section_timings)
+                        if cache_requests_to_prefetch:
+                            self.metadata_resolver.prefetch(
+                                cache_requests_to_prefetch,
+                                section_timings,
+                            )
 
                         for entry in entries:
                             run.entries_seen += 1
@@ -815,6 +822,7 @@ class ScannerService:
             self._flush_parse_logs(section_timings)
             self._flush_pending_db_upserts(section_timings)
             run.finished_at = datetime.datetime.now(datetime.timezone.utc)
+            self._sync_omdb_attempts(run)
             run.section_timings = {k: round(v, 4) for k, v in section_timings.items()}
             logger.info("Scan Section Timings Summary:")
             for sec_name, sec_time in run.section_timings.items():
@@ -1156,17 +1164,23 @@ class ScannerService:
                     stats["reparsed_failed"] += 1
                     continue
 
-                omdb_result = None
-                try:
-                    omdb_result = self.omdb_client.get_movie_info(
-                        title,
-                        str(year) if year else None,
-                        media_type=expected_source_type,
-                    )
-                except (OmdbNoMatchError, OmdbLimitReachedError, OmdbTransportError) as ex:
-                    if isinstance(ex, (OmdbLimitReachedError, OmdbTransportError)):
-                        self._record_phase_error(run, "OMDb phase incomplete during reparse")
-                    omdb_result = None
+                resolver_outcome = self.metadata_resolver.resolve_title(
+                    title,
+                    year,
+                    media_type=expected_source_type,
+                    section_timings=section_timings,
+                )
+                self._sync_omdb_attempts(run)
+                omdb_result = (
+                    resolver_outcome.result
+                    if resolver_outcome.status is MetadataOutcomeStatus.FOUND
+                    else None
+                )
+                if resolver_outcome.status not in (
+                    MetadataOutcomeStatus.FOUND,
+                    MetadataOutcomeStatus.CONFIRMED_NOT_FOUND,
+                ):
+                    self._record_metadata_outcome_failure(run, resolver_outcome, "reparse")
 
                 is_valid = False
                 if omdb_result:
@@ -1414,13 +1428,6 @@ class ScannerService:
             )
             return
 
-        cache_key = get_cache_key(parsed.title, lookup_year)
-        t0_cache = time.perf_counter()
-        cache_entry = self._get_cache_entry(cache_key)
-        section_timings["cache_lookup"] += (time.perf_counter() - t0_cache)
-
-        omdb_payload = None
-        omdb_result = None
         used_manual_mapping = False
 
         # Check if there is a manual IMDb mapping provided for this title
@@ -1432,17 +1439,29 @@ class ScannerService:
         )
 
         if manual_mapping and manual_mapping.imdb_id:
-            run.omdb_requests += 1
-            status = "not_found"
-            payload = None
-            t0_omdb = time.perf_counter()
-            try:
-                omdb_result = self.omdb_client.get_by_imdb_id(manual_mapping.imdb_id)
-                status = "found"
-                payload = omdb_result.raw_payload
-                used_manual_mapping = True
-                
-                # If successfully retrieved by IMDb ID, delete manual mapping so it isn't reprocessed
+            resolver_outcome = self.metadata_resolver.resolve_by_imdb_id(
+                manual_mapping.imdb_id,
+                lookup_title=parsed.title,
+                lookup_year=lookup_year,
+                media_type=expected_source_type,
+                section_timings=section_timings,
+            )
+        else:
+            resolver_outcome = self.metadata_resolver.resolve_title(
+                parsed.title,
+                lookup_year,
+                media_type=expected_source_type,
+                section_timings=section_timings,
+            )
+
+        self._sync_omdb_attempts(run)
+        if resolver_outcome.cache_hit:
+            run.cache_hits += 1
+
+        if resolver_outcome.status is MetadataOutcomeStatus.FOUND:
+            omdb_result = resolver_outcome.result
+            used_manual_mapping = manual_mapping is not None and bool(manual_mapping.imdb_id)
+            if used_manual_mapping:
                 if not self.config.is_dry_run and self.manual_mapping_repo:
                     self.manual_mapping_repo.delete(manual_mapping.id)
                 self._manual_mappings_by_id.pop(manual_mapping.id, None)
@@ -1450,175 +1469,58 @@ class ScannerService:
                     self._manual_mappings_by_raw_title.pop(manual_mapping.raw_title.strip().lower(), None)
                 if manual_mapping.parsed_title:
                     self._manual_mappings_by_parsed_title.pop(normalize_title(manual_mapping.parsed_title), None)
-            except OmdbNoMatchError:
-                pass
-            except OmdbLimitReachedError:
-                raise
-            except OmdbTransportError as e:
-                run.error_count += 1
-                run.error_summary.append(f"OMDb Transport Error for IMDb ID {manual_mapping.imdb_id}: {str(e)}")
-                self._log_parse_entry(
-                    raw_title=raw_title,
-                    feed_name=feed_name,
-                    parsed_successfully=True,
-                    parsed_title=parsed.title,
-                    parsed_year=lookup_year,
-                    omdb_status="error",
-                    ignored=True,
-                    ignore_reason="omdb_error",
-                    error_message=f"OMDb Transport Error: {str(e)}",
-                    feed_entry_id=feed_entry_id,
-                    torrent_url=torrent_url,
-                    section_timings=section_timings,
-                    trace_details={**base_trace, "decision": "error_omdb_transport", "decisionDetails": str(e)},
-                )
-                return
-            finally:
-                section_timings["omdb_api"] += (time.perf_counter() - t0_omdb)
-
-            if status == "found" and omdb_result:
-                new_cache = OmdbCacheEntry(
-                    lookup_title=parsed.title,
-                    lookup_year=lookup_year,
-                    status="found",
-                    payload=payload,
-                    fetched_at=self.now,
-                    expires_at=self.now + datetime.timedelta(days=self.config.cache_ttl_days),
-                )
-                self._set_cache_entry(cache_key, new_cache)
-
-        if omdb_result is None and cache_entry and cache_entry.expires_at > self.now:
-            run.cache_hits += 1
-            cache_info = {
-                "cacheKey": cache_key,
-                "cacheHit": True,
-                "cacheStatus": cache_entry.status,
-                "cacheFetchedAt": cache_entry.fetched_at.strftime('%Y-%m-%d %H:%M') if cache_entry.fetched_at else None,
-            }
-            if cache_entry.status != "found" or not cache_entry.payload:
-                run.ignored_entries += 1
-                err_msg = f"OMDb кеш статус '{cache_entry.status}' (записан на {cache_entry.fetched_at.strftime('%Y-%m-%d %H:%M') if cache_entry.fetched_at else 'предишен скан'})"
-                logger.info(f"[Scanner:Cache] '{parsed.title}' ({lookup_year}) -> HIT negative cache: {cache_key}")
-                self._log_parse_entry(
-                    raw_title=raw_title,
-                    feed_name=feed_name,
-                    parsed_successfully=True,
-                    parsed_title=parsed.title,
-                    parsed_year=lookup_year,
-                    omdb_status="not_found",
-                    ignored=True,
-                    ignore_reason="omdb_not_found",
-                    error_message=err_msg,
-                    feed_entry_id=feed_entry_id,
-                    torrent_url=torrent_url,
-                    section_timings=section_timings,
-                    trace_details={**base_trace, **cache_info, "decision": "ignored_omdb_not_found", "decisionDetails": err_msg},
-                )
-                return
-            omdb_payload = cache_entry.payload
-            omdb_result = self.omdb_client._normalize_payload(omdb_payload)
-            logger.info(f"[Scanner:Cache] '{parsed.title}' ({lookup_year}) -> HIT positive cache: {omdb_result.title} ({omdb_result.year}) [{omdb_result.imdb_id}]")
-        elif omdb_result is None:
-            if run.omdb_requests >= self.config.omdb_limit:
-                logger.info("Soft limit reached for OMDb requests in this run.")
-                run.ignored_entries += 1
-                err_msg = "Достигнат лимит на OMDb заявки за това сканиране"
-                self._log_parse_entry(
-                    raw_title=raw_title,
-                    feed_name=feed_name,
-                    parsed_successfully=True,
-                    parsed_title=parsed.title,
-                    parsed_year=lookup_year,
-                    omdb_status="skipped",
-                    ignored=True,
-                    ignore_reason="omdb_limit_reached",
-                    error_message=err_msg,
-                    feed_entry_id=feed_entry_id,
-                    torrent_url=torrent_url,
-                    section_timings=section_timings,
-                    trace_details={**base_trace, "decision": "ignored_omdb_limit_reached", "decisionDetails": err_msg},
-                )
-                return
-
-            run.omdb_requests += 1
-            status = "not_found"
-            payload = None
-            t0_omdb = time.perf_counter()
-            media_type_hint = expected_source_type
-            logger.info(f"[Scanner:OMDb Query] Requesting OMDb for '{parsed.title}', Year: {lookup_year}, Hint: '{media_type_hint}'")
-            try:
-                omdb_result = self.omdb_client.get_movie_info(parsed.title, parsed.year, media_type=media_type_hint)
-                status = "found"
-                payload = omdb_result.raw_payload
-            except OmdbNoMatchError:
-                pass
-            except OmdbLimitReachedError:
-                raise
-            except OmdbTransportError as e:
-                run.error_count += 1
-                run.error_summary.append(f"OMDb Transport Error: {str(e)}")
-                self._log_parse_entry(
-                    raw_title=raw_title,
-                    feed_name=feed_name,
-                    parsed_successfully=True,
-                    parsed_title=parsed.title,
-                    parsed_year=lookup_year,
-                    omdb_status="error",
-                    ignored=True,
-                    ignore_reason="omdb_error",
-                    error_message=f"OMDb Transport Error: {str(e)}",
-                    feed_entry_id=feed_entry_id,
-                    torrent_url=torrent_url,
-                    section_timings=section_timings,
-                    trace_details={**base_trace, "decision": "error_omdb_transport", "decisionDetails": str(e)},
-                )
-                return
-            finally:
-                section_timings["omdb_api"] += (time.perf_counter() - t0_omdb)
-            
-            # Use shorter TTL (2 days) for negative cache so newly added titles are checked again sooner
-            cache_days = self.config.cache_ttl_days if status == "found" else min(2, self.config.cache_ttl_days)
-            new_cache = OmdbCacheEntry(
-                lookup_title=parsed.title,
-                lookup_year=lookup_year,
-                status=status,
-                payload=payload,
-                fetched_at=self.now,
-                expires_at=self.now + datetime.timedelta(days=cache_days),
+        else:
+            run.ignored_entries += 1
+            self._record_metadata_outcome_failure(run, resolver_outcome, "rss")
+            status = (
+                "not_found"
+                if resolver_outcome.status is MetadataOutcomeStatus.CONFIRMED_NOT_FOUND
+                else "skipped"
+                if resolver_outcome.status is MetadataOutcomeStatus.QUOTA_EXHAUSTED
+                else "error"
             )
-            t0_cache_write = time.perf_counter()
-            self._set_cache_entry(cache_key, new_cache)
-            section_timings["cache_lookup"] += (time.perf_counter() - t0_cache_write)
-
-            if status != "found":
-                run.ignored_entries += 1
-                err_msg = f"OMDb не намери заглавие '{parsed.title}' (търсено с година: {lookup_year}, тип: {media_type_hint or 'всички'})"
-                logger.info(f"[Scanner:OMDb Result] '{parsed.title}' ({lookup_year}) -> NOT FOUND in OMDb")
-                self._log_parse_entry(
-                    raw_title=raw_title,
-                    feed_name=feed_name,
-                    parsed_successfully=True,
-                    parsed_title=parsed.title,
-                    parsed_year=lookup_year,
-                    omdb_status="not_found",
-                    ignored=True,
-                    ignore_reason="omdb_not_found",
-                    error_message=err_msg,
-                    feed_entry_id=feed_entry_id,
-                    torrent_url=torrent_url,
-                    section_timings=section_timings,
-                    trace_details={
-                        **base_trace,
-                        "cacheKey": cache_key,
-                        "cacheHit": False,
-                        "omdbQueryTitle": parsed.title,
-                        "omdbQueryYear": lookup_year,
-                        "omdbQueryType": media_type_hint,
-                        "decision": "ignored_omdb_not_found",
-                        "decisionDetails": err_msg,
-                    },
+            ignore_reason = (
+                "omdb_not_found"
+                if resolver_outcome.status is MetadataOutcomeStatus.CONFIRMED_NOT_FOUND
+                else "omdb_limit_reached"
+                if resolver_outcome.status is MetadataOutcomeStatus.QUOTA_EXHAUSTED
+                else "omdb_error"
+            )
+            if resolver_outcome.status is MetadataOutcomeStatus.CONFIRMED_NOT_FOUND:
+                err_msg = (
+                    f"OMDb не намери заглавие '{parsed.title}' (търсено с година: {lookup_year}, "
+                    f"тип: {expected_source_type or 'всички'})"
                 )
-                return
+            elif resolver_outcome.status is MetadataOutcomeStatus.QUOTA_EXHAUSTED:
+                err_msg = "Достигнат лимит на OMDb заявки за това сканиране"
+            else:
+                err_msg = resolver_outcome.error_message or "OMDb lookup failed"
+            trace_details = {
+                **base_trace,
+                "cacheKey": resolver_outcome.cache_key,
+                "cacheHit": resolver_outcome.cache_hit,
+                "metadataOutcome": resolver_outcome.status.value,
+                "decision": f"ignored_{resolver_outcome.status.value}",
+                "decisionDetails": err_msg,
+            }
+            self._log_parse_entry(
+                raw_title=raw_title,
+                feed_name=feed_name,
+                parsed_successfully=True,
+                parsed_title=parsed.title,
+                parsed_year=lookup_year,
+                omdb_status=status,
+                ignored=True,
+                ignore_reason=ignore_reason,
+                error_message=err_msg,
+                feed_entry_id=feed_entry_id,
+                torrent_url=torrent_url,
+                section_timings=section_timings,
+                trace_details=trace_details,
+            )
+            if resolver_outcome.status is MetadataOutcomeStatus.QUOTA_EXHAUSTED:
+                raise OmdbLimitReachedError("OMDb quota exhausted for this run")
+            return
 
         if not omdb_result:
             return

@@ -131,7 +131,9 @@ still depends on Authentication and Firestore rules.
 - Untrusted feed URLs are rejected by a code-owned, bounded fetch adapter before
         feed parsing.
 - OMDb and AI limit/error states are explicit, included in scan counters, and
-        produce a non-success process result when the phase is incomplete.
+        produce a non-success process result when the phase is incomplete. One
+        resolver budget counts actual OMDb HTTP attempts across all scanner
+        phases; a quota response stops further OMDb requests for the run.
 - Existing-title audit mismatches and uncertain evidence are persisted as
         `needs_review` outcomes; the audit phase does not delete titles or move
         occurrences.

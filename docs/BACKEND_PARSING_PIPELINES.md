@@ -25,6 +25,7 @@ are tracked in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 | `feed_fetcher.py` | Fetches allowlisted HTTPS RSS/Atom feeds through bounded, redirect-validated transport, and reads explicitly selected local fixture files. |
 | `rutracker_parser.py` | Regex/heuristic extraction of title, year, movie/series flag, quality, and rip type. |
 | `omdb_client.py` | Exact OMDb lookup, fallback lookup, broadcast-range extraction, and payload normalization. |
+| `metadata_resolver.py` | Shared typed OMDb outcomes, versioned cache, timing, direct IMDb resolution, and one run-wide HTTP budget. |
 | `match_policy.py` | Shared typed media classification, source-type compatibility, year semantics, broadcast ranges, and exclusions. |
 | `ai_matcher.py` | Gemini batch title extraction, OMDb candidate validation, and stored-match audit. The active prompt strings are currently inline; the files under `prompts/` are not loaded by the current implementation. |
 | `scanner.py` | Orchestrates feeds, matching, filtering, repair, logging, and persistence. |
@@ -48,6 +49,7 @@ The feed type is authoritative: a series-looking title in a `movie` feed is stil
 
 - **Movie or unspecified type:** try title + year + optional type, then retry without year. The shared policy applies the existing +/-1 release-year tolerance to the resolved movie candidate.
 - **Series:** query title + `type=series` without a year and expose the full broadcast range. The parsed year may identify a later season, while `Title.year` is OMDb's first broadcast year; the shared policy checks the season year against the closed/open range and does not reject solely when the range is unavailable.
+- **Resolution boundary:** RSS, reparse-unfound, recheck-existing, and direct IMDb mappings use `OmdbResolver`. It owns the versioned cache, typed outcomes, cache/API timings, and one run-wide budget that counts every actual HTTP attempt, including fallbacks. Only `found` and `confirmed_not_found` are cached; quota, transport, credential, malformed-request, and service failures are never cached.
 - **Normalization:** OMDb `Type` becomes `sourceType`; `Documentary` and `Short` are content kinds. A result with `sourceType=series` remains `mediaType=series`, even when its content kind is documentary or short; movie documentaries/shorts retain their legacy display values.
 - **Direct IMDb mapping:** `get_by_imdb_id()` skips title/year lookup logic.
 
@@ -65,10 +67,10 @@ The normal RSS path does **not** call Gemini for extraction or candidate validat
 
 | Mode | Input | Parser | OMDb cache/limit | AI | Main writes |
 | --- | --- | --- | --- | --- | --- |
-| `rss` | Configured feeds | Regex | Yes / 50 counted lookups by default | No | Titles, occurrences, parse logs, cache |
-| `reparse-unfound` | Recent unresolved/ignored parse logs | AI | No / no enforced limit | Extract + conditional validate | Titles, synthetic occurrences, new parse logs |
-| `recheck-existing` | Stored titles not marked `aiValidated` | No new regex parse | No / no enforced limit | Audit + conditional validate | Explicit valid flag or review parse logs; no catalog repair |
-| `all` | All of the above | Mixed | Mixed | Yes in phases 2-3 | Union of all writes |
+| `rss` | Configured feeds | Regex | Yes / one run-wide actual-HTTP budget | No | Titles, occurrences, parse logs, cache |
+| `reparse-unfound` | Recent unresolved/ignored parse logs | AI | Yes / one run-wide actual-HTTP budget | Extract + conditional validate | Titles, synthetic occurrences, new parse logs |
+| `recheck-existing` | Stored titles not marked `aiValidated` | No new regex parse | Yes / one run-wide actual-HTTP budget | Audit + conditional validate | Explicit valid flag or review parse logs; no catalog repair |
+| `all` | All of the above | Mixed | One shared budget across phases | Yes in phases 2-3 | Union of all writes |
 
 Non-parse-only runs first load manual mappings and prune parse logs older than
 seven days. The configured trigger (`schedule`, `manual`, or `local`) is
@@ -88,19 +90,19 @@ errors.
 6. Reject empty or unparseable titles and create a parse log.
 7. In `--parse-only`, each RSS entry stops after parsing. Parse-only is valid only with `--mode rss`; the CLI rejects combinations such as `--parse-only --mode all` and the scanner also exits before any AI phase. No Firestore, OMDb, Gemini, or parse-log write is performed. An explicitly supplied `--feed-file` is read as bytes through the fixture path and is never passed as a URL to `feedparser`.
 8. Resolve a manual mapping by log/occurrence ID, raw title, or normalized parsed title. A successful IMDb lookup bypasses automatic type/year validation.
-9. Otherwise read the `(normalized title, year)` cache. Positive entries live for 30 days by default; negative entries live for up to two days.
-10. On a cache miss, call OMDb with a series hint when the parser says series, or with the configured feed type.
+9. Otherwise resolve through the versioned `(normalized title, year semantics, source type)` cache. Positive entries live for 30 days by default; confirmed-negative entries live for up to two days. Old type-less entries are ignored until natural expiry.
+10. On a cache miss, call OMDb through `OmdbResolver` with a series hint when the parser says series, or with the configured feed type. The resolver counts every actual HTTP request, including fallback requests, and stops the run after a quota response or exhausted budget.
 11. Evaluate the shared match policy for source type, movie release year or series season year, and country/genre exclusions. Known feed type remains authoritative; manual IMDb mappings bypass only type/year checks.
 12. Write a deterministic title, occurrence, and parse-log record. Writes are batched once per feed.
 
-`--dry-run` still reads Firestore/cache/manual mappings and calls external APIs, but skips writes. Its created counters are simulated and do not check whether records already exist. `--fake-repos` uses in-memory storage but can still call live OMDb/Gemini APIs. The RSS limit counts high-level lookups, not HTTP requests: one movie lookup can perform both a year-constrained request and a fallback request, and manual IMDb lookups occur before the soft-limit check.
+`--dry-run` still reads Firestore/cache/manual mappings and calls external APIs, but skips writes. Its created counters are simulated and do not check whether records already exist. `--fake-repos` uses in-memory storage but can still call live OMDb/Gemini APIs. The RSS budget counts actual HTTP requests: one movie lookup can perform both a year-constrained request and a fallback request, and manual IMDb lookups use the same run-wide budget and cache boundary.
 
 ### 2. Parse-log reprocessing (`--mode reparse-unfound`)
 
 1. Read up to 200 recent logs selected when their OMDb status is unresolved **or when `ignored == true`**.
 2. Deduplicate by exact, case-sensitive raw title.
 3. Send batches of 15 raw titles to Gemini with the stored feed type when available; otherwise use `unknown` and allow inference.
-4. Use Gemini's title, year, and media type for a direct, uncached OMDb lookup.
+4. Use Gemini's title, year, and media type for an `OmdbResolver` lookup through the shared cache and run-wide HTTP budget.
 5. Apply the shared match policy for configured exclusions, source-type compatibility, movie release years, and series season years.
 6. Only when normalized extracted and OMDb titles differ, ask Gemini to validate the candidate.
 7. On success, upsert a title and a synthetic occurrence, then create a separate success parse log.
@@ -113,7 +115,7 @@ errors.
 3. Load all occurrences. Titles without occurrences are recorded as orphan `needs_review` outcomes and are not sent to Gemini; titles with occurrences currently use the first raw title as the audit input until occurrence-level audit is introduced.
 4. The audit prompt and deterministic policy distinguish a later season year in the raw title from the series' first broadcast year in OMDb; a difference alone is not a mismatch.
 5. Require complete response coverage and an explicit boolean `is_valid_match` for every requested ID. Only an explicit valid result sets `aiValidated=true` and `aiCheckedAt`.
-6. For an explicit mismatch, use Gemini's corrected title/year/type for a diagnostic OMDb lookup when a corrected title exists, and run the result through the shared match policy.
+6. For an explicit mismatch, use Gemini's corrected title/year/type for a diagnostic `OmdbResolver` lookup when a corrected title exists, and run the result through the shared match policy.
 7. Classify missing correction, confirmed no-match, quota, transport, malformed, and candidate validation outcomes in the review log.
 8. Keep the current title and every occurrence in place for mismatches, suggestions, uncertain evidence, and retryable failures. Persist `decision=needs_review` with structured audit details; this stage does not migrate or delete catalog data.
 
@@ -159,7 +161,7 @@ map to a non-zero CLI exit code.
 | Resolved | Workflow dispatch input handling and scanner process exit semantics. | Prompt 0A validates inputs outside shell source, uses an argument array, and maps `succeeded/partial/failed` to `0/2/1`. | Keep the workflow static regression test and documented exit-code contract green. |
 | Resolved | Allowlist membership previously granted settings and manual-mapping writes without enforcing the documented `role`. | Prompt 0B restricts those writes to explicit admins and validates document shape/ownership. | Keep the rules emulator suite green. |
 | Resolved | Client configuration previously exposed scanner credentials/control through browser storage and Vite env configuration. | Prompt 0B removes PAT/OMDb credentials and uses GitHub's protected Actions UI. | Keep the bundle/config regression test green. |
-| High | The implementation and status documents disagree about Gemini model handling: the code defaults to `gemini-3.1-flash-lite`, remaps valid `gemini-2.5-flash*` IDs, and the status mentions Gemini 3.7. | A model setting can be silently changed or use a generation payload incompatible with the selected model. | Use `docs/GEMINI_MODELS.md`, stop silently remapping valid IDs, validate `generateContent` capability, and test model-specific generation settings. |
+| Resolved for Prompt 3 | The implementation and status documents disagreed about Gemini model handling and valid `gemini-2.5-flash*` IDs. | A model setting could be silently changed or use a generation payload incompatible with the selected model. | The configured ID is preserved and AI-mode startup validates the active `models.list` entry supports `generateContent`; generation-setting migration remains Prompt 6. |
 | Resolved for Prompt 1 | AI audit is fail-open: a missing item/result defaults to `is_valid_match=True`; candidate validation also accepts missing/failed AI responses. | Partial or malformed AI output can validate wrong data, followed by destructive moves/deletes. | Recheck batches now require complete IDs and explicit booleans, candidate validation fails closed, and uncertain results become review-only outcomes. Full confidence/proposal architecture remains deferred. |
 | Critical | DB audit judges a title from only its first occurrence, then moves or deletes every occurrence. | One unrepresentative occurrence can corrupt the entire title aggregate. | Audit each distinct raw-title cluster, split incorrect occurrences, and keep the existing title while any occurrence still validates. |
 | Resolved for Prompt 1 | Audit treated OMDb no-match, quota exhaustion, and transport failure as the same missing replacement, then deleted the title and all occurrences. A missing corrected title had the same outcome. | A timeout, exhausted quota, bad credential, or incomplete AI result could erase valid catalog data. | Recheck now preserves catalog data and stores distinct temporary `omdbOutcome` values in `decision=needs_review` logs; resolver/proposal architecture remains deferred. |
@@ -168,13 +170,13 @@ map to a non-zero CLI exit code.
 | Resolved | `--parse-only --mode all` is rejected and parse-only exits before AI/persistence phases. | Parse-only cannot reach OMDb, Gemini, Firestore, or parse-log writes. | Keep the CLI and scanner regression tests green. |
 | High | Successful log reprocessing does not resolve/update the source log. | The same unresolved item can be selected on every run until pruning. | Add repository `mark_resolved(log_id, decision)` or overwrite the original deterministic log with resolution metadata. |
 | High | Reprocessed occurrences lose `feedEntryId` and `torrentUrl`; their ID is derived from raw title while the stored fields cannot reproduce it. | Provenance is lost and later migration can change/collide occurrence IDs. | Persist source IDs/URL/feed type in `ParseLog` and reuse the original occurrence ID and fields. |
-| High | Matching/validation code is copied between RSS, reparse, and audit but has different rules. | The same candidate can be accepted in one mode and rejected in another. | Introduce one `MetadataResolver` and one typed `validate_match()` decision pipeline used by all modes. |
+| Resolved for Prompt 3 | Matching/validation code was copied between RSS, reparse, and audit lookup paths. | The same candidate could be resolved with different cache, error, or budget behavior in different modes. | All OMDb lookups now use `OmdbResolver`; deterministic matching remains in `match_policy.py`. |
 | High | RSS accepts documentary/short as movie-like, while AI flows use strict `movie == media_type`; AI year checks omit `short`. | Mode-dependent type decisions and missed validation. | Define one compatibility matrix (`movie` may or may not include documentary/short) and use it everywhere. |
 | High | Genre-first OMDb normalization can convert a documentary or short **series** into `documentary` or `short`, after which a series feed rejects it. | Correct documentary series can be classified as movie-like and dropped. | Preserve source kind separately from content genre, for example `sourceType=series` plus `contentKind=documentary`; base feed compatibility on source kind. |
 | High | Audit/reparse subtract OMDb year from AI year without checking whether OMDb year is `None`. | Valid OMDb payloads with `N/A` year can raise `TypeError`. | Guard both values before arithmetic and return an explicit `year_unknown` decision. |
-| High | Audit/reparse bypass OMDb cache, soft request limit, request counters, and OMDb timing. Quota errors are swallowed as ordinary no-match results. | Excess API traffic, misleading run metrics, and repeated calls after quota exhaustion. | Route every lookup through one cached, budget-aware resolver and propagate global quota exhaustion. |
-| High | Most OMDb `Response=False` errors other than text containing `limit reached` become `OmdbNoMatchError`. RSS then stores a negative title cache entry. | Authentication, malformed-request, or service errors can suppress a valid title for two days; audit may turn the same classification into deletion. | Parse OMDb error categories explicitly and cache only confirmed title-not-found outcomes. |
-| High | Cache key omits media type. | Same-title, same-year movie and series requests can share an invalid positive/negative cache entry. | Version the key and include normalized media type; migrate or naturally expire old keys. |
+| Resolved for Prompt 3 | Audit/reparse previously bypassed OMDb cache, request limits, counters, and timing; quota errors were swallowed as ordinary no-match results. | Excess API traffic, misleading run metrics, and repeated calls after quota exhaustion. | `OmdbResolver` now owns cache/API timing, counts actual HTTP attempts including fallbacks, and stops later phases after quota exhaustion. |
+| Resolved for Prompt 3 | Most OMDb `Response=False` errors other than text containing `limit reached` were previously treated as `OmdbNoMatchError`. | Authentication, malformed-request, or service errors could suppress a valid title for two days. | OMDb response categories are explicit; only confirmed not-found responses are negative-cached, while credential and service failures become typed non-cacheable outcomes. |
+| Resolved for Prompt 3 | Cache key omitted media type and year semantics. | Same-title, same-year movie and series requests could share an invalid positive/negative cache entry. | The v2 key includes normalized title, year semantics, source type, and optional lookup identity; old type-less entries are ignored until natural expiry. |
 | Resolved | Feed URLs are passed directly to `feedparser` with no scheme/host validation, timeout, size limit, entry cap, or `bozo`/HTTP check. | SSRF/local-file reads, hangs, amplification, and silent partial feeds were possible. | `FeedFetcher` now owns the allowlist, redirect/IP checks, response limits, and explicit parse-error handling; fixture reads require `--feed-file`. |
 | High | RSS writes the source publication timestamp into both `firstSeenAt` and `lastSeenAt`. Audit filtering prefers this old `lastSeenAt` over the newer `updatedAt`. | A release rescanned today can be excluded by `audit_days` because it was published months ago. | Store `sourcePublishedAt` separately; set observed `firstSeenAt`/`lastSeenAt` from scanner time and define audit recency against an explicit field. |
 | High | Manual mappings are used only while processing a live RSS entry, not while reprocessing parse logs. | A correction remains unused when the source entry has left the feed, while Gemini keeps retrying it. | Resolve manual mappings before AI in the shared retry pipeline and persist enough source context to complete the occurrence. |

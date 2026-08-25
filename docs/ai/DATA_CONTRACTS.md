@@ -9,12 +9,12 @@
 - Writers validate and normalize external data before repository calls.
 - IDs and upserts are deterministic to make workflow reruns safe.
 
-This document contains the current storage contract. The implementation still
-has known legacy gaps that later stages must change explicitly: the cache key is
-currently type-less, parse logs do not yet carry complete source/retry context,
-and there is no audit-proposal collection. A stage that changes any of these
-contracts must update this file, add emulator/fake compatibility tests, and
-document backward-read and migration behavior in the same change.
+This document contains the current storage contract. Parse logs do not yet carry
+complete source/retry context, and there is no audit-proposal collection; those
+are later-stage changes. OMDb cache keys are versioned by Prompt 3. A stage that
+changes any of these contracts must update this file, add emulator/fake
+compatibility tests, and document backward-read and migration behavior in the
+same change.
 
 ## `titles/{titleId}`
 
@@ -153,14 +153,23 @@ a second occurrence.
 | Field | Type | Notes |
 | --- | --- | --- |
 | `lookupTitle`, `lookupYear` | string, number/null | Normalized request |
-| `status` | string | `found` or supported negative status |
+| `lookupYearSemantics` | string | `movie_release_year`, `series_season_year`, or `unknown_year` |
+| `sourceType` | string | `movie`, `series`, or `unknown`; the requested OMDb source type |
+| `lookupIdentity` | string or null | Optional identity scope, used for direct IMDb mappings |
+| `status` | string | `found` or `confirmed_not_found` |
 | `payload` | map or null | Validated OMDb response |
 | `fetchedAt`, `expiresAt` | Timestamp | Fetch time and validity boundary |
 
-The current cache key is deterministic from title and year only. Prompt 3 must
-version it to include lookup semantics and source media type; old type-less
-entries must not be treated as valid for every media type. Do not cache
-transport, quota, authentication, or malformed-request failures.
+The cache key is a SHA-256 digest of the versioned tuple
+`v2:cache:<normalized-title>:<lookup-year>:<lookup-year-semantics>:<source-type>:<lookup-identity>`.
+Automatic title lookups use an empty identity; direct IMDb mappings use an
+`imdb:<id>` identity so a manual override cannot be confused with a title-only
+lookup. Old type-less entries and new entries missing the context fields are
+ignored by the resolver and are left to natural expiry; no lazy reinterpretation
+as movie and series is performed. Only `found` and `confirmed_not_found`
+outcomes are persisted. Transport, quota, authentication, malformed-request,
+and other service failures are never cached. `cacheHits` includes positive and
+confirmed-negative hits.
 
 ## `scanRuns/{runId}`
 
@@ -168,7 +177,7 @@ transport, quota, authentication, or malformed-request failures.
 | --- | --- | --- |
 | `startedAt`, `finishedAt` | Timestamp | Run start and completion |
 | `status`, `trigger` | string | `running/succeeded/partial/failed`, `schedule/manual/local` |
-| `feedsProcessed`, `entriesSeen`, `titlesCreated`, `occurrencesCreated`, `cacheHits`, `omdbRequests`, `ignoredEntries`, `errorCount` | number | Counters |
+| `feedsProcessed`, `entriesSeen`, `titlesCreated`, `occurrencesCreated`, `cacheHits`, `omdbRequests`, `ignoredEntries`, `errorCount` | number | Counters; `omdbRequests` is the number of actual OMDb HTTP attempts, including fallbacks |
 | `errorSummary` | array | Bounded sanitized summaries |
 
 Run IDs may be generated per execution; idempotency is required for catalog data.

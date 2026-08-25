@@ -14,6 +14,7 @@ from movies_feed.cli import (
     validate_settings_document,
     validate_runtime_configuration,
 )
+from movies_feed.ai_matcher import GeminiModelCapabilityError
 from movies_feed.models import ScanRun
 from movies_feed.repository import (
     FakeOccurrenceRepository,
@@ -158,6 +159,24 @@ class TestCliConfiguration(unittest.TestCase):
                         main(["--fake-repos", "--mode", "rss"]),
                         expected_code,
                     )
+
+    def test_main_rejects_model_without_generate_content_capability(self) -> None:
+        from unittest.mock import MagicMock
+
+        matcher = MagicMock()
+        matcher.is_available = True
+        matcher.validate_model_capability.side_effect = GeminiModelCapabilityError("unsupported model")
+        with patch.dict(
+            os.environ,
+            {"OMDB_API_KEY": "configured", "GEMINI_API_KEY": "configured"},
+            clear=True,
+        ), patch("movies_feed.cli.load_config", return_value={}), patch(
+            "movies_feed.cli.AiMatcher", return_value=matcher
+        ):
+            self.assertEqual(
+                main(["--fake-repos", "--mode", "reparse-unfound"]),
+                EXIT_FAILURE,
+            )
 
     def test_main_passes_fixture_as_separate_scanner_input(self) -> None:
         fixture_path = "backend/tests/fixtures/movies_feed.atom"

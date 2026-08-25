@@ -120,10 +120,13 @@ class OmdbCacheEntry:
     payload: Optional[Dict[str, Any]]
     fetched_at: datetime.datetime
     expires_at: datetime.datetime
+    lookup_year_semantics: Optional[str] = None
+    source_type: Optional[str] = None
+    lookup_identity: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the OmdbCacheEntry model to a camelCase Firestore dictionary."""
-        return {
+        res = {
             "lookupTitle": self.lookup_title,
             "lookupYear": self.lookup_year,
             "status": self.status,
@@ -131,6 +134,13 @@ class OmdbCacheEntry:
             "fetchedAt": self.fetched_at,
             "expiresAt": self.expires_at,
         }
+        if self.lookup_year_semantics is not None:
+            res["lookupYearSemantics"] = self.lookup_year_semantics
+        if self.source_type is not None:
+            res["sourceType"] = self.source_type
+        if self.lookup_identity is not None:
+            res["lookupIdentity"] = self.lookup_identity
+        return res
 
 
 @dataclass

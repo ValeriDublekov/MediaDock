@@ -606,6 +606,86 @@ class TestScanner(unittest.TestCase):
         remaining_mappings = self.manual_mapping_repo.get_all()
         self.assertEqual(len(remaining_mappings), 0)
 
+    def test_manual_mapping_does_not_call_or_delete_when_budget_is_exhausted(self):
+        mapping = ManualMapping(
+            id="manual_budget",
+            raw_title="Budgeted Title (2020)",
+            imdb_id="tt0133093",
+            created_at=self.now,
+            parsed_title="Budgeted Title",
+            parsed_year=2020,
+        )
+        self.manual_mapping_repo.set(mapping)
+        rss_feeds = {
+            "test_feed": {
+                "name": "test_feed",
+                "url": """<?xml version="1.0" encoding="UTF-8"?>
+                <rss version="2.0"><channel><item>
+                    <title>Budgeted Title (2020) [1080p]</title>
+                    <link>https://example.com/torrent/budget</link>
+                    <guid>budget-guid</guid>
+                </item></channel></rss>""",
+                "type": "movie",
+            }
+        }
+        config = ScannerConfig(
+            rss_feeds=rss_feeds,
+            mode="rss",
+            omdb_limit=0,
+        )
+        omdb = MockOmdbClient({"tt0133093": self.valid_movie})
+
+        run = self.create_scanner(config, omdb).run("manual_budget")
+
+        self.assertEqual(run.status, "partial")
+        self.assertEqual(run.omdb_requests, 0)
+        self.assertEqual(omdb.request_count, 0)
+        self.assertEqual([item.id for item in self.manual_mapping_repo.get_all()], [mapping.id])
+
+    def test_run_budget_is_shared_from_rss_to_reparse_phase(self):
+        rss_feeds = {
+            "test_feed": {
+                "name": "test_feed",
+                "url": self.make_inline_feed("The Matrix (1999) [1080p]"),
+                "type": "movie",
+            }
+        }
+        self.parse_log_repo.add(ParseLog(
+            id="unmapped-after-rss",
+            raw_title="Unmapped Film (2020)",
+            feed_name="test_feed",
+            parsed_successfully=True,
+            parsed_title="Unmapped Film",
+            parsed_year=2020,
+            omdb_status="not_found",
+            ignored=True,
+            ignore_reason="omdb_not_found",
+            processed_at=self.now,
+            trace_details={"feedType": "movie"},
+        ))
+        config = ScannerConfig(
+            rss_feeds=rss_feeds,
+            mode="all",
+            omdb_limit=1,
+        )
+        omdb = MockOmdbClient({"the matrix": self.valid_movie})
+        scanner = self.create_scanner(config, omdb)
+        from unittest.mock import MagicMock
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        mock_ai.batch_recheck_matches.return_value = {0: {"is_valid_match": True}}
+        mock_ai.batch_extract_titles.return_value = {
+            0: {"title": "Unmapped Film", "year": 2020, "media_type": "movie"}
+        }
+        scanner.ai_matcher = mock_ai
+
+        run = scanner.run("shared_budget")
+
+        self.assertEqual(run.status, "partial")
+        self.assertEqual(run.omdb_requests, 1)
+        self.assertEqual(omdb.request_count, 1)
+        self.assertTrue(scanner.metadata_resolver.quota_exhausted)
+
     def test_parse_error_captured_in_parse_logs(self):
         rss_feeds = {
             "test_feed": {

@@ -1,7 +1,7 @@
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .match_policy import (
     BroadcastRange,
@@ -28,6 +28,21 @@ class OmdbLimitReachedError(OmdbError):
 
 class OmdbNoMatchError(OmdbError):
     """Raised when OMDb returns a negative response (e.g., Movie not found)."""
+    pass
+
+
+class OmdbInvalidRequestError(OmdbError):
+    """Raised when OMDb rejects the request shape or lookup identifier."""
+    pass
+
+
+class OmdbAuthenticationError(OmdbError):
+    """Raised when OMDb rejects the configured credentials."""
+    pass
+
+
+class OmdbServiceError(OmdbError):
+    """Raised when OMDb returns an unclassified service-side failure."""
     pass
 
 
@@ -180,16 +195,52 @@ def _sanitize_string(text: str, api_key: Optional[str]) -> str:
 
 
 class OmdbClient:
-    def __init__(self, api_key: str, transport: Optional[HttpTransport] = None):
+    def __init__(
+        self,
+        api_key: str,
+        transport: Optional[HttpTransport] = None,
+        request_guard: Optional[Callable[[], None]] = None,
+    ):
         if not api_key:
             raise ValueError("OMDb API key is required")
         self._api_key = api_key
         self._transport = transport or RequestsHttpTransport()
         self._base_url = "https://www.omdbapi.com/"
         self._timeout = 10.0
+        self._request_guard = request_guard
 
     def __repr__(self) -> str:
         return f"OmdbClient(transport={self._transport.__class__.__name__})"
+
+    def set_request_guard(self, request_guard: Optional[Callable[[], None]]) -> None:
+        """Install a callback invoked immediately before every HTTP attempt."""
+        self._request_guard = request_guard
+
+    @staticmethod
+    def _response_error_kind(error_message: Any) -> str:
+        message = str(error_message or "").strip().lower()
+        if "limit reached" in message or "request limit" in message:
+            return "quota"
+        if any(marker in message for marker in ("invalid api key", "api key not valid", "authentication", "unauthorized")):
+            return "authentication"
+        if any(marker in message for marker in ("invalid request", "invalid parameter")):
+            return "invalid_request"
+        if any(marker in message for marker in ("not found", "not exist", "no such", "incorrect imdb id")):
+            return "not_found"
+        return "service"
+
+    @classmethod
+    def _raise_response_error(cls, error_message: Any, context: str) -> None:
+        kind = cls._response_error_kind(error_message)
+        message = str(error_message or "OMDb returned an error")
+        if kind == "quota":
+            raise OmdbLimitReachedError("Daily API limit reached")
+        if kind == "authentication":
+            raise OmdbAuthenticationError("OMDb authentication failed")
+        if kind == "invalid_request":
+            raise OmdbInvalidRequestError(f"OMDb rejected {context}: {message}")
+        if kind == "service":
+            raise OmdbServiceError(f"OMDb service error for {context}: {message}")
 
     def _make_request(
         self,
@@ -206,6 +257,8 @@ class OmdbClient:
         if media_type and media_type.lower() in ("movie", "series"):
             params["type"] = media_type.lower()
 
+        if self._request_guard is not None:
+            self._request_guard()
         try:
             return self._transport.get(self._base_url, params, timeout=self._timeout)
         except Exception as e:
@@ -219,18 +272,23 @@ class OmdbClient:
             "apikey": self._api_key,
             "i": imdb_id.strip(),
         }
+        if self._request_guard is not None:
+            self._request_guard()
         try:
             data = self._transport.get(self._base_url, params, timeout=self._timeout)
         except Exception as e:
             sanitized_msg = _sanitize_string(str(e), self._api_key)
             raise OmdbTransportError(f"HTTP transport failed: {sanitized_msg}") from e
 
+        if not isinstance(data, dict):
+            raise OmdbServiceError("OMDb returned a malformed response")
         if data.get("Response") == "True":
             return self._normalize_payload(data)
         else:
             err_msg = data.get("Error", "")
-            if "limit reached" in err_msg.lower():
-                raise OmdbLimitReachedError("Daily API limit reached")
+            if self._response_error_kind(err_msg) == "not_found":
+                raise OmdbNoMatchError(f"OMDb lookup failed for IMDb ID {imdb_id}: {err_msg}")
+            self._raise_response_error(err_msg, f"IMDb ID {imdb_id}")
             raise OmdbNoMatchError(f"OMDb lookup failed for IMDb ID {imdb_id}: {err_msg}")
 
     def get_movie_info(
@@ -253,47 +311,55 @@ class OmdbClient:
         # 2. Check if the returned series broadcasting period (Year) covers the requested year.
         if media_type and media_type.lower() == "series":
             data = self._make_request(title, media_type="series")
+            if not isinstance(data, dict):
+                raise OmdbServiceError("OMDb returned a malformed response")
             if data.get("Response") == "True":
                 payload = data
             else:
                 err_msg = data.get("Error", "")
-                if "limit reached" in err_msg.lower():
-                    raise OmdbLimitReachedError("Daily API limit reached")
-                raise OmdbNoMatchError(f"OMDb lookup failed: {err_msg}")
+                if self._response_error_kind(err_msg) == "not_found":
+                    raise OmdbNoMatchError(f"OMDb lookup failed: {err_msg}")
+                self._raise_response_error(err_msg, f"title '{title}'")
 
         if payload is None and (not media_type or media_type.lower() != "series"):
             # 1. Primary lookup: Title + Year + Media Type (if year is specified)
             if year:
                 try:
                     data = self._make_request(title, year, media_type)
+                    if not isinstance(data, dict):
+                        raise OmdbServiceError("OMDb returned a malformed response")
                     if data.get("Response") == "True":
                         payload = data
                     else:
                         err_msg = data.get("Error", "")
-                        if "limit reached" in err_msg.lower():
-                            raise OmdbLimitReachedError("Daily API limit reached")
+                        if self._response_error_kind(err_msg) != "not_found":
+                            self._raise_response_error(err_msg, f"title '{title}'")
                 except OmdbTransportError:
                     raise
 
             # 2. Fallback lookup: Title + Media Type (without year, if media_type is specified or as movie)
             if payload is None and media_type and media_type.lower() in ("movie", "series"):
                 data = self._make_request(title, media_type=media_type)
+                if not isinstance(data, dict):
+                    raise OmdbServiceError("OMDb returned a malformed response")
                 if data.get("Response") == "True":
                     payload = data
                 else:
                     err_msg = data.get("Error", "")
-                    if "limit reached" in err_msg.lower():
-                        raise OmdbLimitReachedError("Daily API limit reached")
+                    if self._response_error_kind(err_msg) != "not_found":
+                        self._raise_response_error(err_msg, f"title '{title}'")
 
             # 3. Fallback lookup: Title only (if not explicitly constrained or after media_type lookup)
             if payload is None and not media_type:
                 data = self._make_request(title)
+                if not isinstance(data, dict):
+                    raise OmdbServiceError("OMDb returned a malformed response")
                 if data.get("Response") == "True":
                     payload = data
                 else:
                     err_msg = data.get("Error", "")
-                    if "limit reached" in err_msg.lower():
-                        raise OmdbLimitReachedError("Daily API limit reached")
+                    if self._response_error_kind(err_msg) != "not_found":
+                        self._raise_response_error(err_msg, f"title '{title}'")
 
             if payload is None:
                 raise OmdbNoMatchError(f"OMDb lookup failed for '{title}' (year={year}, type={media_type})")

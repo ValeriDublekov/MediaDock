@@ -128,6 +128,9 @@ def cache_entry_from_dict(d: dict) -> OmdbCacheEntry:
         payload=d.get("payload"),
         fetched_at=d["fetchedAt"],
         expires_at=d["expiresAt"],
+        lookup_year_semantics=d.get("lookupYearSemantics"),
+        source_type=d.get("sourceType"),
+        lookup_identity=d.get("lookupIdentity"),
     )
 
 

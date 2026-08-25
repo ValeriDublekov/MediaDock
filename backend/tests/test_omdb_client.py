@@ -148,7 +148,7 @@ class OmdbClientTests(unittest.TestCase):
         # Both requests fail with Response False
         responses = [
             {"Response": "False", "Error": "Movie not found!"},
-            {"Response": "False", "Error": "Something else was wrong!"}
+            {"Response": "False", "Error": "Movie not found!"}
         ]
         transport = MockHttpTransport(responses)
         client = OmdbClient("secret_key_12345", transport=transport)

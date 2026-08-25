@@ -80,7 +80,7 @@ class RepositoryAndIdTests(unittest.TestCase):
     def test_get_cache_key(self) -> None:
         title = "  Inception  "
         year = 2010
-        expected_raw = f"v1:cache:inception:{year}"
+        expected_raw = f"v2:cache:inception:{year}:unknown_year:unknown:"
         expected_hash = hashlib.sha256(expected_raw.encode("utf-8")).hexdigest()
 
         self.assertEqual(get_cache_key(title, year), expected_hash)

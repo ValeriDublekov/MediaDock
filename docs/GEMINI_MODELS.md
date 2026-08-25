@@ -107,13 +107,13 @@ Deep Research and Antigravity are managed agent products, not drop-in
 
 - The current default is `gemini-3.1-flash-lite` in
   `backend/src/movies_feed/ai_matcher.py`.
-- The current client sends `temperature` and the legacy
+- The current client preserves the configured model ID and sends `temperature` and the legacy
   `thinkingConfig.thinkingBudget` field. Gemini 3.6 and 3.7 migration guidance
   requires reviewing these settings; do not switch the default by changing one
   string only.
 - `gemini-2.5-flash` and `gemini-2.5-flash-lite` are currently valid stable IDs.
-  The current code's legacy remapping of these IDs is therefore incorrect and
-  should be removed or replaced with capability validation.
+  The client does not remap these IDs; startup capability validation decides
+  whether the selected model supports `generateContent`.
 - The `confidence` field is an application contract. A model being listed by
   the API does not make its output semantically safe for catalog mutations.
 - Stable model IDs are preferable for repeatable production behavior. Preview
@@ -140,8 +140,9 @@ Do not treat this file as a permanent allowlist. Before enabling a model, query
 `x-goog-api-key` header; do not put the API key in a URL or log it.
 
 The exact response from `models.list` is the final authority for the active
-project. Update this file when the official catalog changes, and record the
-review date and any deprecation replacement.
+project. The CLI validates the configured model against that response for AI
+modes and requires `generateContent`. Update this file when the official
+catalog changes, and record the review date and any deprecation replacement.
 
 ## Not active
 

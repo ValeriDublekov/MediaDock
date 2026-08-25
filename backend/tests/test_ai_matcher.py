@@ -18,15 +18,61 @@ class TestAiMatcher(unittest.TestCase):
         matcher_with_key = AiMatcher(api_key="valid_gemini_key_12345")
         self.assertTrue(matcher_with_key.is_available)
 
-    def test_model_normalization(self):
+    def test_model_selection_preserves_configured_ids(self):
         matcher_default = AiMatcher(api_key="valid_key", inter_request_delay=0.1)
         self.assertEqual(matcher_default.model, "gemini-3.1-flash-lite")
 
         matcher_legacy_25_lite = AiMatcher(api_key="valid_key", model="gemini-2.5-flash-lite", inter_request_delay=0.1)
-        self.assertEqual(matcher_legacy_25_lite.model, "gemini-3.1-flash-lite")
+        self.assertEqual(matcher_legacy_25_lite.model, "gemini-2.5-flash-lite")
 
         matcher_legacy_25_flash = AiMatcher(api_key="valid_key", model="gemini-2.5-flash", inter_request_delay=0.1)
-        self.assertEqual(matcher_legacy_25_flash.model, "gemini-3.1-flash-lite")
+        self.assertEqual(matcher_legacy_25_flash.model, "gemini-2.5-flash")
+
+    def test_model_capability_requires_generate_content(self):
+        payload = {
+            "models": [
+                {
+                    "name": "models/gemini-2.5-flash",
+                    "supportedGenerationMethods": ["generateContent"],
+                },
+                {
+                    "name": "models/gemini-2.5-flash-image",
+                    "supportedGenerationMethods": ["generateContent"],
+                },
+            ]
+        }
+        AiMatcher.validate_model_capability_payload(payload, "gemini-2.5-flash")
+
+        with self.assertRaises(ValueError):
+            AiMatcher.validate_model_capability_payload(payload, "gemini-2.5-flash-lite")
+
+    @patch("urllib.request.urlopen")
+    def test_model_capability_request_uses_header_api_key(self, mock_urlopen):
+        response = MagicMock()
+        response.read.return_value = b'{"models": [{"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]}]}'
+        response.__enter__.return_value = response
+        mock_urlopen.return_value = response
+
+        matcher = AiMatcher(api_key="secret-key", model="gemini-2.5-flash")
+        matcher.validate_model_capability()
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.headers["X-goog-api-key"], "secret-key")
+        self.assertNotIn("key=secret-key", request.full_url)
+
+    @patch("urllib.request.urlopen")
+    def test_generation_request_uses_header_api_key(self, mock_urlopen):
+        response = MagicMock()
+        response.read.return_value = b'{"candidates": [{"content": {"parts": [{"text": "{}"}]}}]}'
+        response.__enter__.return_value = response
+        mock_urlopen.return_value = response
+
+        matcher = AiMatcher(api_key="secret-key", inter_request_delay=0.0)
+        matcher._call_gemini("test prompt")
+
+        request = mock_urlopen.call_args.args[0]
+        self.assertEqual(request.headers["X-goog-api-key"], "secret-key")
+        self.assertNotIn("key=secret-key", request.full_url)
 
     @patch.object(AiMatcher, "_call_gemini")
     def test_batch_extract_titles(self, mock_call):

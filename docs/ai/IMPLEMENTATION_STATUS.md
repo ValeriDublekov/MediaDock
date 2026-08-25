@@ -18,21 +18,22 @@ MVP wiring is present; production hardening is not complete.
 - Prompt 0C: Bounded HTTPS RSS fetching, public DNS and redirect validation, response/entry limits, bozo rejection, and explicit `--feed-file` fixture input are implemented.
 - Prompt 1: Existing-title audit is fail-closed and review-only; incomplete AI/OMDb evidence cannot delete or migrate catalog records, and fake repositories are defensive-copy safe for dry-run.
 - Prompt 2: Shared typed media/year policy is used by RSS, reparse, and audit candidate checks; source type is stored separately from content kind, and series broadcast ranges preserve later-season semantics.
+- Prompt 3: `OmdbResolver` provides typed outcomes, versioned type/semantics-aware cache entries, actual HTTP-attempt accounting, a run-wide quota budget across all modes, and Gemini model capability preflight without model-ID remapping.
 
 ## Next Prompt
 
-Run Prompt 3 in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+Run Prompt 4 in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 
 - Firebase project identifiers and an authorized user account must be configured for production.
-- Production launch still requires the later non-destructive audit, resolver, retry, and proposal stages.
+- Production launch still requires the later retry, source-context, proposal, and application stages.
 - The Firestore rules emulator could not run in this local environment because Java is unavailable; CI installs Java 21 and runs the same rules test.
 
 
 ## Residual Risks
 
-- The OMDb rate limit can halt scanner execution for the day. Cache reuse and partial-run status must be monitored; shared resolver/cache work remains Prompt 3.
+- The OMDb rate limit can halt scanner execution for the day. Cache reuse, actual-attempt counters, and partial-run status must be monitored.
 - Allowlist addition requires a manual write to the Firestore database using Firebase Console until an admin control plane exists.
 - The current `AiMatcher` payload needs compatibility review before changing the model to Gemini 3.6/3.7; full AI hardening remains Prompt 6.
 - Unpaginated local filtering currently handles all pages loaded into memory, which may become slow if thousands of entries are retained locally.
