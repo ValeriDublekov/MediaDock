@@ -6,13 +6,17 @@
    execution, testing, and emulator workflow.
 - [DEPLOYMENT.md](DEPLOYMENT.md) - target Firebase, GitHub Actions, and GitHub Pages
    deployment runbook.
+- [docs/BACKEND_REFACTORING_PROMPTS.md](docs/BACKEND_REFACTORING_PROMPTS.md) - staged
+   security, matching, retry, and audit improvements.
+- [docs/GEMINI_MODELS.md](docs/GEMINI_MODELS.md) - reviewed Gemini API model catalog
+   and MediaDock compatibility notes.
 - [docs/ai/PROJECT_CONTEXT.md](docs/ai/PROJECT_CONTEXT.md) - compact entry context
    for AI implementation sessions.
 - [docs/ai/ARCHITECTURE.md](docs/ai/ARCHITECTURE.md) - target components, trust
    boundaries, and dependency rules.
 - [docs/ai/DATA_CONTRACTS.md](docs/ai/DATA_CONTRACTS.md) - Firestore schema,
    queries, IDs, ownership, and write boundaries.
-- [docs/ai/TESTING.md](docs/ai/TESTING.md) - canonical verified test commands.
+- [docs/ai/TESTING.md](docs/ai/TESTING.md) - canonical test commands and verification status.
 
 ## Overview
 
@@ -33,10 +37,10 @@ MediaDock/
 ├── docs/ai/                  # Compact architecture and data contracts
 ├── legacy/                   # Deprecated JSON/HTML implementation
 ├── .github/workflows/        # CI, Scanner, and Pages deployment pipelines
-└── config.json               # Backend non-secret configuration
+└── legacy/config.json        # Current backend non-secret configuration
 ```
 
 ## Quick Links
 - **Local Development**: See [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md) for running tests, emulator, and local builds.
 - **Deployment**: See [DEPLOYMENT.md](DEPLOYMENT.md) for GitHub Actions and Pages runbooks.
-- **AI Agent Docs**: Architecture and Firestore data contracts are in [docs/ai/](docs/ai/).
+- **AI Agent Docs**: Architecture, Firestore data contracts, testing, and status are in [docs/ai/](docs/ai/).

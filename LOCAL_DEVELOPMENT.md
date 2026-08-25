@@ -17,6 +17,8 @@ cp .env.example .env
 ```
 Populate `.env` with:
 - `OMDB_API_KEY`: Your OMDb API key for backend scanner.
+- `GEMINI_API_KEY`: Optional for RSS-only work; required for AI scanner modes.
+- `GEMINI_MODEL`: Optional approved model override; see [docs/GEMINI_MODELS.md](docs/GEMINI_MODELS.md).
 - `VITE_FIREBASE_*`: Your Firebase web project configuration.
 
 ### 2. Frontend & Emulator Setup
@@ -48,10 +50,17 @@ firebase emulators:start --project demo-mediadock
 ```
 
 ### Backend Scanner (Dry Run)
-You can run the backend scanner CLI to parse an RSS feed without writing to production:
+The current CLI reads the configured RSS feeds and can parse them without OMDb or
+Firestore writes. Do not pass a fixture path as a positional argument; an
+explicit fixture option is part of the later parser/fetcher work in
+`docs/BACKEND_REFACTORING_PROMPTS.md`:
 ```bash
-python -m movies_feed.cli --parse-only backend/tests/fixtures/movies_feed.atom
+python -m movies_feed.cli --config legacy/config.json --mode rss --parse-only
 ```
+
+Use the Firebase emulator and synthetic fixtures for automated tests. The
+scanner's `--dry-run` still permits external API calls in the current
+implementation; `--parse-only` is the mode that disables OMDb for RSS parsing.
 
 ## Testing
 
@@ -82,3 +91,8 @@ Use a production build/preview and verify the configured repository base path. T
 - Run every currently applicable command from `docs/ai/TESTING.md`.
 - Confirm no `.env`, credential, emulator export, local data, or build output is staged.
 - Ensure all CI checks pass.
+
+For the staged backend hardening sequence, follow
+`docs/BACKEND_REFACTORING_PROMPTS.md` and the model reference in
+`docs/GEMINI_MODELS.md`. Do not enable production AI repair modes until the
+workflow, authorization, fetch, and non-destructive repair gates are green.

@@ -1,10 +1,11 @@
-# Deployment 
+# Deployment
 
 This is the target deployment runbook for Cloud Firestore, Firebase Authentication,
-the daily GitHub Actions scanner, and the React GitHub Pages site. It becomes fully
-executable as prompts P08 and P12-P14 are completed.
+the daily GitHub Actions scanner, and the React GitHub Pages site. The MVP
+workflows exist, but production launch remains gated on the hardening stages in
+`docs/BACKEND_REFACTORING_PROMPTS.md` (Prompts 0A-0C and the later repair stages).
 
-## Deployment Model 
+## Deployment Model
 
 | Component | Platform | Credentials |
 | --- | --- | --- |
@@ -22,7 +23,8 @@ GitHub Pages cannot run the Python scanner.
 - Firestore database created in the selected region.
 - Google Sign-In provider enabled.
 - GitHub repository with Actions and Pages enabled.
-- A rotated OMDb API key.
+- A rotated OMDb API key; a Gemini API key is also required for AI modes.
+- An explicitly approved Gemini model ID with the required API capability; see [`docs/GEMINI_MODELS.md`](docs/GEMINI_MODELS.md).
 - At least one Google account selected for the access allowlist.
 
 Record project names and regions outside source code where appropriate. Never put
@@ -45,28 +47,31 @@ Authentication Authorized Domains. For a project site, the host is typically
 ### 3. Create the first allowlist entry
 
 After the user has signed in once and the UID is known, create the documented
-`allowlist/{uid}` record with matching email, `enabled: true`, and `role: reader`.
-Do not key the document by mutable display name.
+`allowlist/{uid}` record with matching email, `enabled: true`, and an explicitly
+chosen role. Do not key the document by mutable display name. Until Prompt 0B is
+complete, do not assume the current rules enforce the documented `reader` role
+for settings or manual-mapping writes.
 
 ### 4. Deploy rules and indexes
 
-Use only the project command added and verified during P08. Test against the
-Firebase Emulator before production deployment. Review the rules diff and selected
-Firebase project immediately before running the deploy command.
+Use only the current Firebase CLI deployment command documented for this
+repository. Test against the Firebase Emulator before production deployment.
+Review the rules diff and selected Firebase project immediately before running
+the deploy command; never rely on an implicit project from a developer shell.
 
 Catalog client writes must remain denied. A future owner-scoped feature requires a
 specific schema and rules tests before deployment.
 
 ## GitHub Configuration
 
-The exact names must match workflows and `.env.example`. P13/P14 update this table
-when workflows are implemented.
+The exact names must match the workflows and `.env.example`.
 
 ### Secrets
 
 | Purpose | Expected secret | Format / Usage |
 | --- | --- | --- |
 | OMDb requests | `OMDB_API_KEY` | String OMDb API key |
+| Gemini AI modes | `GEMINI_API_KEY` | String Gemini API key; required for `recheck-existing`, `reparse-unfound`, and `all` |
 | Firebase Admin scanner access | `FIREBASE_SERVICE_ACCOUNT` | Base64-encoded Firebase Admin service account JSON (`base64 -w 0 <key.json>`) |
 
 The scanner workflow (`.github/workflows/scanner.yml`) decodes `FIREBASE_SERVICE_ACCOUNT` into a temporary environment file outside the checked out repository and sets `GOOGLE_APPLICATION_CREDENTIALS` for the step. Credentials are never committed, logged, or uploaded as build artifacts.
@@ -77,12 +82,21 @@ Store public Firebase web configuration using the `VITE_*` names expected by the
 frontend as **Repository Variables** (not Secrets). Do not add `OMDB_API_KEY`, private keys, or Admin project credentials to
 the Pages build job.
 
+`GEMINI_MODEL` is a non-secret repository variable only if model selection is
+intentionally controlled there; otherwise keep it in the scanner environment.
+Validate it against [`docs/GEMINI_MODELS.md`](docs/GEMINI_MODELS.md) and the
+runtime `models.list` capability response. Never expose it together with a
+private API key in the frontend bundle.
+
 ### Repository settings
 
 1. Enable GitHub Actions required by the committed workflows.
 2. Configure Pages source as GitHub Actions.
 3. Protect the deployment environment if desired.
-4. Keep workflow permissions at their documented minimum (`contents: read`).
+4. Keep workflow permissions at their documented minimum (`contents: read` for
+   the scanner; Pages deploy additionally needs `pages: write` and `id-token: write`).
+5. Restrict who can dispatch the scanner and review changes to workflow files,
+	because manual dispatch can access production secrets.
 
 ## First Scanner Deployment
 
@@ -91,17 +105,18 @@ Do not wait for the first cron execution.
 1. Confirm all canonical checks from `docs/ai/TESTING.md` pass.
 2. Confirm production Firestore rules/indexes are deployed.
 3. Configure `OMDB_API_KEY` and `FIREBASE_SERVICE_ACCOUNT` in GitHub Repository Secrets.
-4. Trigger `.github/workflows/scanner.yml` manually via `workflow_dispatch` with `dry_run: true`.
-5. Inspect sanitized run counters in the job logs and confirm no production Firestore write occurred (`titles_created: 0`, `occurrences_created: 0`).
-6. Trigger `workflow_dispatch` without dry-run mode (`dry_run: false`).
-7. In Firebase Console, verify one `scanRuns/{run_id}` record, title documents under `titles/{id}`, occurrence documents under `titles/{id}/occurrences/{occ_id}`, and cached OMDb entries in `omdbCache`.
-8. Rerun `workflow_dispatch` once more and verify no duplicate title or occurrence documents are created due to deterministic ID merging.
+4. Configure `GEMINI_API_KEY` before using an AI mode, and configure/approve `GEMINI_MODEL` if overriding the default.
+5. Trigger `.github/workflows/scanner.yml` manually via `workflow_dispatch` with `dry_run: true` and a bounded input set.
+6. Inspect sanitized run counters and confirm no production Firestore write occurred by comparing the datastore before and after. Do not use `titles_created: 0` or `occurrences_created: 0` as the sole proof: the current dry-run counters are simulated and may not reflect existing records.
+7. Trigger `workflow_dispatch` without dry-run mode (`dry_run: false`) only after the job's exit-code and partial-run behavior is verified.
+8. In Firebase Console, verify one `scanRuns/{run_id}` record, title documents under `titles/{id}`, occurrence documents under `titles/{id}/occurrences/{occ_id}`, and cached OMDb entries in `omdbCache`.
+9. Rerun `workflow_dispatch` once more and verify no duplicate title or occurrence documents are created due to deterministic ID merging.
 
 If OMDb reports a daily limit, stop repeated manual runs and verify cache behavior.
 
 ## GitHub Pages Deployment
 
-P14 owns the executable workflow. The deployment must:
+The committed Pages workflow must:
 
 - Build `frontend/` with the correct Vite base for `/<repository>/`.
 - Include only public Firebase web variables.
@@ -132,7 +147,8 @@ context unless it changes a stable command or status.
 - GitHub cron uses UTC and may start later than the exact scheduled minute.
 - Concurrency prevents overlapping scanner writes.
 - A timeout prevents abandoned jobs.
-- Failures retain sanitized logs and a bounded scan-run summary.
+- Scanner failures must produce a non-success process exit code and a bounded,
+  sanitized scan-run summary; do not rely on log text alone.
 - Re-running a failed/partial workflow is safe because catalog IDs are deterministic.
 
 Review Actions history periodically for disabled schedules, expired credentials,
@@ -175,8 +191,14 @@ invalidate the credential.
 ## Release Gate
 
 - Backend, rules, and frontend CI pass.
+- The backend dependency environment is reproducible and the complete canonical
+  suite is green.
 - Rules/indexes match `docs/ai/DATA_CONTRACTS.md`.
 - Required secrets/variables exist under the exact workflow names.
+- The selected Gemini model is active and supports the request contract used by
+  `AiMatcher`; AI mode preflight is tested without printing secrets.
+- Workflow inputs are validated and cannot inject shell syntax.
+- Reader/admin authorization and browser-secret checks pass.
 - Manual scanner idempotency check passes.
 - Pages smoke checklist passes for denied and allowlisted users.
 - No real secret, local catalog data, or service-account file is tracked/artifacted.

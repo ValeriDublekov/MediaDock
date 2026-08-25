@@ -2,8 +2,10 @@
 
 ## Status
 
-This describes the target architecture. Bootstrap (P00/M0) is complete: legacy
-source is isolated under `legacy/`, and target directory placeholders exist.
+This describes the target architecture. Bootstrap (P00/M0) and the MVP wiring
+are present, but production hardening is still open. The prerequisite security
+and operational work is tracked in `docs/BACKEND_REFACTORING_PROMPTS.md`
+(Prompts 0A-0C).
 
 ## Components
 
@@ -17,9 +19,9 @@ CLI / GitHub Actions
         |
 Scanner application service
         |
-Domain models and repository interfaces
-   |          |             |
-RSS adapter  OMDb adapter  Firestore Admin adapters
+Domain models and policy/resolver interfaces
+        |             |                |
+FeedFetcher  OMDb/AI adapters  Firestore Admin adapters
 ```
 
 Business logic must not initialize Firebase, read process arguments, or perform
@@ -62,6 +64,11 @@ Do not introduce blanket authenticated writes. Future admin editing requires an
 explicit role claim/document, dedicated repository methods, validation, and rule
 tests; it must not reuse owner-data permissions.
 
+The target boundary above is stricter than the current rules: today an
+allowlisted browser can still write `titles/settings_config` and
+`manualMappings`. Treat that as an open security finding until Prompt 0B and its
+emulator tests are complete.
+
 ## Deployment Topology
 
 ```text
@@ -89,7 +96,8 @@ repository base path. Firebase Authorized Domains must include the Pages host.
 ### Secret server values
 
 - `OMDB_API_KEY`
-- `GEMINI_API_KEY` (optional, for AI title extraction & OMDb validation; prompt templates in `backend/src/movies_feed/prompts/`)
+- `GEMINI_API_KEY` (optional, for AI title extraction and OMDb validation)
+- `GEMINI_MODEL` (optional stable or explicitly approved preview model; see [`GEMINI_MODELS.md`](../GEMINI_MODELS.md))
 - Firebase Admin credentials
 
 These exist in local ignored environment/credential storage or GitHub Secrets.
@@ -107,7 +115,10 @@ still depends on Authentication and Firestore rules.
 ## Failure Strategy
 
 - A malformed feed item does not abort the entire scan.
-- OMDb limit/error states are explicit and included in scan counters.
+- Untrusted feed URLs are rejected by a code-owned, bounded fetch adapter before
+        feed parsing.
+- OMDb and AI limit/error states are explicit, included in scan counters, and
+        produce a non-success process result when the phase is incomplete.
 - Scan runs record bounded error summaries without secrets.
 - Repository writes are idempotent so a workflow rerun is safe.
 - Frontend exposes loading, empty, denied, retryable error, and end states.
@@ -115,6 +126,7 @@ still depends on Authentication and Firestore rules.
 ## Deferred Architecture
 
 - Full-text search service.
-- Client write feature and admin editor.
+- Client write feature and admin editor; any future privileged control plane must
+        use an explicit admin role and server-side credential boundary.
 - Cloud-hosted scanner outside GitHub Actions.
 - Notifications and user preference features.

@@ -9,6 +9,14 @@
 - Writers validate and normalize external data before repository calls.
 - IDs and upserts are deterministic to make workflow reruns safe.
 
+This document contains the current storage contract. The implementation still
+has known legacy gaps that later stages must change explicitly: the cache key is
+currently type-less, parse logs do not yet carry complete source/retry context,
+there is no audit-proposal collection, and the documented allowlist role is not
+yet enforced by the current rules. A stage that changes any of these contracts
+must update this file, add emulator/fake compatibility tests, and document
+backward-read and migration behavior in the same change.
+
 ## `titles/{titleId}`
 
 One normalized movie or series record.
@@ -67,7 +75,10 @@ a second occurrence.
 | `payload` | map or null | Validated OMDb response |
 | `fetchedAt`, `expiresAt` | Timestamp | Fetch time and validity boundary |
 
-Cache key is deterministic from title and year. Do not cache transport failures.
+The current cache key is deterministic from title and year only. Prompt 3 must
+version it to include lookup semantics and source media type; old type-less
+entries must not be treated as valid for every media type. Do not cache
+transport, quota, authentication, or malformed-request failures.
 
 ## `scanRuns/{runId}`
 
@@ -82,7 +93,9 @@ Run IDs may be generated per execution; idempotency is required for catalog data
 
 ## `parseLogs/{logId}`
 
-One RSS parse result log entry. Retained for 1 week (7 days).
+One RSS parse result log entry. The current implementation retains logs for one
+week (7 days), but retryable work must not be deleted solely because it is old.
+Prompt 5 introduces explicit terminal/retryable retention semantics.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -99,7 +112,10 @@ One RSS parse result log entry. Retained for 1 week (7 days).
 
 ## `manualMappings/{mappingId}`
 
-Manual IMDb ID override mappings provided by allowlisted users for unfound titles. Deleted by scanner once successfully queried and stored.
+Manual IMDb ID override mappings provided by allowlisted users for unfound titles.
+The current implementation deletes a mapping after a successful IMDb query; the
+target workflow consumes it only after filtering and durable catalog persistence
+succeed.
 
 | Field | Type | Notes |
 | --- | --- | --- |

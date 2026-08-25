@@ -10,7 +10,7 @@ with OMDb metadata, and presents an authenticated searchable catalog.
 - The legacy Python scanner and config are isolated under `legacy/`.
 - Local JSON files stored scan history, catalog data, and OMDb cache in the legacy scanner.
 - Parser tests use Atom fixtures under `tests/fixtures/`.
-- `AI_STUDIO_MIGRATION_GUIDE.md` defines the incremental migration.
+- `docs/BACKEND_REFACTORING_PROMPTS.md` defines the current incremental hardening roadmap.
 - The repository has completed bootstrap prompt P00 (Milestone M0).
 
 ## Target State
@@ -46,11 +46,12 @@ with OMDb metadata, and presents an authenticated searchable catalog.
 
 - GitHub Pages hosts static frontend assets only.
 - GitHub Actions runs Python and writes server-managed Firestore data.
-- The browser never receives OMDb or Firebase Admin credentials.
+- The target browser boundary excludes OMDb and Firebase Admin credentials; the current client-secret exposure is an open hardening item in Prompt 0B.
 - UI components access data through typed repositories, not direct Firestore queries.
 - MVP has no client write feature, but owner-scoped writes are a supported extension.
 - Firestore is the catalog source of truth; generated HTML and local JSON are legacy.
-- Optional `GEMINI_API_KEY` enables AI batch parsing and OMDb verification. Prompts are stored in `backend/src/movies_feed/prompts/`.
+- Optional `GEMINI_API_KEY` enables AI batch parsing and OMDb verification. Current prompts are inline in `ai_matcher.py`; the standalone prompt files are not yet the runtime source of truth.
+- `GEMINI_MODEL` selects an approved model from [`GEMINI_MODELS.md`](../GEMINI_MODELS.md), subject to runtime capability validation.
 
 ## Stable Vocabulary
 
