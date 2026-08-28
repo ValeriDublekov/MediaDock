@@ -1,10 +1,16 @@
 """MoviesFeed / MediaDock backend package."""
 
 from .ids import (
+    get_audit_event_id,
     get_cache_key,
     get_fallback_title_id,
+    get_fallback_title_id_v1,
+    get_fallback_title_id_v2,
     get_occurrence_id,
+    get_occurrence_id_v1,
+    get_source_item_id,
     get_title_id,
+    get_title_id_v2,
     normalize_title,
 )
 from .match_policy import (

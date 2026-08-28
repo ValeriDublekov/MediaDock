@@ -87,9 +87,22 @@ stable `reasonCode`. Current codes include `type_mismatch`,
 ID rule:
 
 1. Use lowercase OMDb `imdbID` when available, such as `tt1234567`.
-2. Otherwise use a versioned deterministic SHA-256-derived ID from normalized
-   title, numeric year (or empty), and media type.
-3. The fallback algorithm/version must have a unit test and must not silently change.
+2. Otherwise new writes use the lowercase hexadecimal SHA-256 digest of the
+   UTF-8 tuple
+   `v2:title:<normalized-resolved-title>:<year-semantics>:<canonical-year-or-empty>:<source-type>`.
+3. `normalized-resolved-title` is the resolved display title after trimming,
+   lowercasing, and collapsing whitespace. `source-type` is `movie`, `series`,
+   or `unknown`; documentary and short movies canonicalize to `movie`.
+4. `year-semantics` is `movie_release_year` for movies,
+   `series_start_year` for series, or `unknown_year`. The canonical year is the
+   resolved movie release year or resolved series first-broadcast year, never
+   an RSS season year.
+
+The legacy fallback tuple `v1:<caller-title>:<year-or-empty>:<media-type>`
+remains available only through an explicit compatibility helper. Existing v1
+title documents are readable and coexist naturally with v2 documents; readers
+do not reinterpret a stored document ID, and Prompt 4B performs no bulk
+migration.
 
 The backend may merge refreshed metadata but must preserve `firstSeenAt`.
 
@@ -172,9 +185,21 @@ used as an observation time. `firstSeenAt` and `lastSeenAt` continue to describe
 scanner observations and retain their existing behavior until Prompt 4C wires
 and merges source context consistently.
 
-ID rule: deterministic hash of normalized `feedEntryId` when present, otherwise
-normalized torrent URL. Repeated sightings update `lastSeenAt` and do not create
-a second occurrence.
+New occurrence writes use the lowercase hexadecimal SHA-256 digest of the UTF-8
+tuple `v2:source:<source-feed-id>:entry:<feed-entry-id>` when a non-empty entry
+ID is present. Otherwise they use
+`v2:source:<source-feed-id>:url:<torrent-url>`. Each component is trimmed;
+entry IDs and URLs remain otherwise opaque and case-sensitive. The stable
+`rssFeeds` configuration map key is `source-feed-id`; the mutable display name
+never participates in the ID. A missing feed ID, or a missing entry ID and URL,
+is rejected rather than hashed as an ambiguous identity. Entry identity takes
+precedence over URL, so URL changes do not duplicate an item with a stable GUID.
+
+The legacy tuple `v1:<feed-entry-id-or-torrent-url>` remains available through
+an explicit compatibility helper. Existing v1 occurrence documents remain
+readable and coexist naturally with v2 documents. They are not reinterpreted,
+renamed, or bulk migrated by Prompt 4B. Repeated v2 sightings produce the same
+document ID; timestamp merge behavior remains owned by Prompt 4C.
 
 ## `omdbCache/{cacheKey}`
 
@@ -244,8 +269,13 @@ Missing `eventKind` means legacy or unknown and is not interpreted as `source`.
 A normal `source` parse log represents exactly one source item. Retry attempts
 are metadata updates to that source log and must not silently create new IDs.
 Audit and review records use `audit_review`, with their own event identity, and
-must not overwrite source logs. Prompt 4A defines this contract but does not
-change ID generation, retry metadata, scanner writes, or migrate stored data.
+must not overwrite source logs. A source ParseLog uses exactly the same v2
+source-item tuple and digest as its occurrence, allowing retries to update the
+same log. Audit/review logs instead use the SHA-256 digest of the UTF-8 tuple
+`v2:audit:<event-identity>`. The explicit namespace prevents an audit event from
+overwriting a source log even when their descriptive identity text matches.
+Legacy v1 ParseLogs remain readable and may be updated under their existing ID;
+they are never treated as if their digest encoded v2 source identity.
 
 The existing-title audit is review-only in the current stage. A complete batch
 must contain exactly one result for every requested ID, and each result must

@@ -19,23 +19,6 @@ Each new stage below is intentionally written as `Scope`, `Non-goals`, `Contract
 implementing an earlier one. If an existing implementation already satisfies a
 bullet, add or verify the regression test and leave the behavior unchanged.
 
-## Prompt 4A: Define Source Context and Observation Fields
-
-```text
-Goal: define the provenance contract before changing IDs or retry behavior.
-
-Scope: backend/src/movies_feed/models.py, backend/src/movies_feed/firestore_repository.py, focused model/serialization tests, and the directly affected AI data contract. Add a typed SourceContext with sourceFeedId, sourceFeedName, feedType, feedEntryId, torrentUrl, rawTitle, sourcePublishedAt, and observedAt. Extend ParseLog and Occurrence serialization/deserialization with backward-compatible optional source fields.
-
-Contract: sourcePublishedAt is the feed's publication time; firstSeenAt and lastSeenAt describe scanner observations. A legacy document without the new fields must remain readable and must not acquire invented provenance. Decide and document that a normal source ParseLog represents one source item, while audit/review events are a separate event kind; retry attempts are metadata on the source log, not silently new IDs.
-
-Non-goals: do not change occurrence/title/parse-log ID algorithms, scanner phase order, retry selection, matching policy, or catalog behavior.
-
-Work: add the typed model, optional fields, Firestore round-trip conversion, and the exact field names/missing-field defaults to docs/ai/DATA_CONTRACTS.md. Keep existing public fields compatible while making the new context available to later stages.
-
-Tests: round-trip every new field, deserialize old documents with fields absent, preserve null publication time, and prove publication time is not used as observation time.
-
-Done when: focused serialization tests and the full backend suite pass; the data contract names every new field and the next stage can consume SourceContext without guessing.
-```
 
 ## Prompt 4B: Version Source-Aware IDs
 

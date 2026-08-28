@@ -19,10 +19,12 @@ MVP wiring is present; production hardening is not complete.
 - Prompt 1: Existing-title audit is fail-closed and review-only; incomplete AI/OMDb evidence cannot delete or migrate catalog records, and fake repositories are defensive-copy safe for dry-run.
 - Prompt 2: Shared typed media/year policy is used by RSS, reparse, and audit candidate checks; source type is stored separately from content kind, and series broadcast ranges preserve later-season semantics.
 - Prompt 3: `OmdbResolver` provides typed outcomes, versioned type/semantics-aware cache entries, actual HTTP-attempt accounting, a run-wide quota budget across all modes, and Gemini model capability preflight without model-ID remapping.
+- Prompt 4A: Optional typed `SourceContext` and source/audit event kinds round-trip without inventing provenance for legacy documents.
+- Prompt 4B: Source-aware v2 occurrence/source-log IDs, isolated audit IDs, canonical fallback title IDs, and explicit v1 natural coexistence are implemented.
 
 ## Next Prompt
 
-Run Prompt 4A in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+Run Prompt 4C in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 

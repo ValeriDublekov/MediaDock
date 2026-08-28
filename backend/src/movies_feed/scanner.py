@@ -9,7 +9,14 @@ from typing import Any, Dict, List, Optional
 
 import feedparser
 
-from .ids import clean_title_for_comparison, get_occurrence_id, get_title_id, normalize_title
+from .ids import (
+    clean_title_for_comparison,
+    get_audit_event_id,
+    get_occurrence_id_v1,
+    get_source_item_id,
+    get_title_id_v2,
+    normalize_title,
+)
 from .match_policy import (
     MatchDecision,
     effective_source_type,
@@ -108,11 +115,18 @@ class ScannerService:
     def _iter_scan_feed_definitions(self) -> List[Dict[str, Optional[str]]]:
         if self.config.feed_file:
             return [{
+                "id": self.config.feed_file_name,
                 "name": self.config.feed_file_name,
                 "url": None,
                 "type": self.config.feed_file_type,
             }]
-        return list(iter_feed_definitions(self.config.rss_feeds))
+        return [
+            {**feed_definition, "id": source_feed_id}
+            for source_feed_id, feed_definition in zip(
+                self.config.rss_feeds,
+                iter_feed_definitions(self.config.rss_feeds),
+            )
+        ]
 
     def _reset_session_caches(self) -> None:
         self._session_titles: Dict[str, Optional[Title]] = {}
@@ -352,7 +366,7 @@ class ScannerService:
             section_timings=section_timings,
             trace_details=details,
             decision="needs_review",
-            log_key=f"recheck:{title_id}:{audit_outcome}",
+            audit_event_identity=f"recheck:{title_id}:{audit_outcome}",
         )
 
     def _inspect_recheck_suggestion(
@@ -611,16 +625,23 @@ class ScannerService:
         section_timings: Optional[Dict[str, float]] = None,
         trace_details: Optional[Dict[str, Any]] = None,
         decision: Optional[str] = None,
-        log_key: Optional[str] = None,
+        source_feed_id: Optional[str] = None,
+        source_log_id: Optional[str] = None,
+        audit_event_identity: Optional[str] = None,
     ) -> None:
         if not self.parse_log_repo or self.config.is_dry_run:
             return
-        if log_key is not None:
-            log_id = get_occurrence_id(None, log_key)
-        elif feed_entry_id or torrent_url:
-            log_id = get_occurrence_id(feed_entry_id, torrent_url)
+        if source_log_id is not None:
+            log_id = source_log_id
+            event_kind = "source"
+        elif audit_event_identity is not None:
+            log_id = get_audit_event_id(audit_event_identity)
+            event_kind = "audit_review"
+        elif source_feed_id is not None:
+            log_id = get_source_item_id(source_feed_id, feed_entry_id, torrent_url)
+            event_kind = "source"
         else:
-            log_id = get_occurrence_id(None, raw_title + str(self.now.timestamp()))
+            raise ValueError("source or audit identity is required for a parse log")
 
         log = ParseLog(
             id=log_id,
@@ -636,6 +657,7 @@ class ScannerService:
             error_message=error_message,
             trace_details=trace_details,
             decision=decision,
+            event_kind=event_kind,
         )
         self._pending_parse_logs.append(log)
 
@@ -772,6 +794,7 @@ class ScannerService:
                                         error_message=err_text,
                                         feed_entry_id=getattr(entry, "id", None),
                                         torrent_url=getattr(entry, "link", None),
+                                        source_feed_id=feed_def.get("id"),
                                         section_timings=section_timings,
                                     )
                                 except Exception as log_ex:
@@ -1210,7 +1233,12 @@ class ScannerService:
 
                 if omdb_result and is_valid:
                     norm_lookup_title = normalize_title(omdb_result.title)
-                    title_id = get_title_id(omdb_result.imdb_id, norm_lookup_title, omdb_result.year, omdb_result.media_type)
+                    title_id = get_title_id_v2(
+                        omdb_result.imdb_id,
+                        omdb_result.title,
+                        omdb_result.year,
+                        effective_source_type(omdb_result.media_type, omdb_result.source_type),
+                    )
 
                     title_record = Title(
                         title=omdb_result.title,
@@ -1238,7 +1266,7 @@ class ScannerService:
                         broadcast_range=omdb_result.broadcast_range,
                     )
 
-                    occ_id = get_occurrence_id(None, log.raw_title)
+                    occ_id = log.id
                     occ_record = Occurrence(
                         source_feed_id=log.feed_name or "reparsed",
                         source_feed_name=log.feed_name or "reparsed",
@@ -1264,6 +1292,7 @@ class ScannerService:
                         omdb_status="found",
                         ignored=False,
                         ignore_reason=None,
+                        source_log_id=log.id,
                         section_timings=section_timings,
                         trace_details={
                             "feedType": stored_feed_type,
@@ -1323,6 +1352,7 @@ class ScannerService:
         feed_entry_id = getattr(entry, "id", None)
         torrent_url = getattr(entry, "link", "")
         feed_name = feed_def.get("name", "")
+        source_feed_id = feed_def.get("id", "")
 
         entry_dt = _get_entry_datetime(entry)
         item_time = entry_dt if entry_dt is not None else datetime.datetime.now(datetime.timezone.utc)
@@ -1348,6 +1378,7 @@ class ScannerService:
                 error_message=None,
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
+                source_feed_id=source_feed_id,
                 section_timings=section_timings,
             )
             return
@@ -1384,6 +1415,7 @@ class ScannerService:
                 error_message=parse_error,
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
+                source_feed_id=source_feed_id,
                 section_timings=section_timings,
             )
             return
@@ -1423,6 +1455,7 @@ class ScannerService:
                 error_message="Режим само парсване (OMDb заявките са изключени)",
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
+                source_feed_id=source_feed_id,
                 section_timings=section_timings,
                 trace_details={**base_trace, "decision": "ignored_parse_only", "decisionDetails": "Parse only mode"},
             )
@@ -1431,9 +1464,11 @@ class ScannerService:
         used_manual_mapping = False
 
         # Check if there is a manual IMDb mapping provided for this title
-        entry_log_id = get_occurrence_id(feed_entry_id, torrent_url)
+        entry_log_id = get_source_item_id(source_feed_id, feed_entry_id, torrent_url)
+        legacy_entry_log_id = get_occurrence_id_v1(feed_entry_id, torrent_url)
         manual_mapping = (
             self._manual_mappings_by_id.get(entry_log_id)
+            or self._manual_mappings_by_id.get(legacy_entry_log_id)
             or self._manual_mappings_by_raw_title.get(raw_title.strip().lower())
             or (self._manual_mappings_by_parsed_title.get(normalize_title(parsed.title)) if parsed.title else None)
         )
@@ -1515,6 +1550,7 @@ class ScannerService:
                 error_message=err_msg,
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
+                source_feed_id=source_feed_id,
                 section_timings=section_timings,
                 trace_details=trace_details,
             )
@@ -1578,6 +1614,7 @@ class ScannerService:
                 error_message=err_msg,
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
+                source_feed_id=source_feed_id,
                 section_timings=section_timings,
                 trace_details={
                     **base_trace,
@@ -1603,6 +1640,7 @@ class ScannerService:
             error_message=None,
             feed_entry_id=feed_entry_id,
             torrent_url=torrent_url,
+            source_feed_id=source_feed_id,
             section_timings=section_timings,
             trace_details={
                 **base_trace,
@@ -1615,7 +1653,12 @@ class ScannerService:
         # Prepare records
         media_type = omdb_result.media_type
         imdb_id = omdb_result.imdb_id
-        title_id = get_title_id(imdb_id, norm_lookup_title, lookup_year, media_type)
+        title_id = get_title_id_v2(
+            imdb_id,
+            omdb_result.title,
+            omdb_result.year,
+            effective_source_type(omdb_result.media_type, omdb_result.source_type),
+        )
 
         title_record = Title(
             title=omdb_result.title,
@@ -1643,7 +1686,7 @@ class ScannerService:
             broadcast_range=omdb_result.broadcast_range,
         )
 
-        occurrence_id = get_occurrence_id(feed_entry_id, torrent_url)
+        occurrence_id = get_source_item_id(source_feed_id, feed_entry_id, torrent_url)
 
         occurrence_record = Occurrence(
             source_feed_id=feed_def["name"],  # use name as id for now or pass slug

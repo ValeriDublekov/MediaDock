@@ -3,6 +3,10 @@ import re
 from typing import Optional
 
 
+def _sha256_id(canonical_value: str) -> str:
+    return hashlib.sha256(canonical_value.encode("utf-8")).hexdigest()
+
+
 def normalize_title(title: str) -> str:
     """Case-folds and collapses multiple spaces in title for robust matching and deduplication."""
     if not title:
@@ -19,11 +23,45 @@ def clean_title_for_comparison(title: Optional[str]) -> str:
     return " ".join(cleaned.split())
 
 
-def get_fallback_title_id(normalized_title: str, year: Optional[int], media_type: str) -> str:
-    """Computes a versioned deterministic SHA-256-derived ID from title, year, and media type."""
+def get_fallback_title_id_v1(normalized_title: str, year: Optional[int], media_type: str) -> str:
+    """Computes the legacy v1 fallback title ID without reinterpreting its inputs."""
     year_str = str(year) if year is not None else ""
     raw_str = f"v1:{normalized_title}:{year_str}:{media_type.lower()}"
-    return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
+    return _sha256_id(raw_str)
+
+
+def get_fallback_title_id(normalized_title: str, year: Optional[int], media_type: str) -> str:
+    """Compatibility wrapper for the legacy v1 fallback title ID."""
+    return get_fallback_title_id_v1(normalized_title, year, media_type)
+
+
+def _normalize_source_media_type(media_type: str) -> str:
+    normalized_media_type = media_type.strip().lower() if isinstance(media_type, str) else ""
+    if normalized_media_type == "series":
+        return "series"
+    if normalized_media_type in ("movie", "documentary", "short"):
+        return "movie"
+    return "unknown"
+
+
+def get_fallback_title_id_v2(
+    resolved_title: str,
+    canonical_year: Optional[int],
+    source_media_type: str,
+) -> str:
+    """Computes a v2 title ID from canonical resolved metadata."""
+    normalized_resolved_title = normalize_title(resolved_title)
+    normalized_source_type = _normalize_source_media_type(source_media_type)
+    year_semantics = {
+        "movie": "movie_release_year",
+        "series": "series_start_year",
+    }.get(normalized_source_type, "unknown_year")
+    year_value = str(canonical_year) if canonical_year is not None else ""
+    canonical_value = (
+        f"v2:title:{normalized_resolved_title}:{year_semantics}:"
+        f"{year_value}:{normalized_source_type}"
+    )
+    return _sha256_id(canonical_value)
 
 
 def get_title_id(imdb_id: Optional[str], normalized_title: str, year: Optional[int], media_type: str) -> str:
@@ -33,14 +71,64 @@ def get_title_id(imdb_id: Optional[str], normalized_title: str, year: Optional[i
     return get_fallback_title_id(normalized_title, year, media_type)
 
 
-def get_occurrence_id(feed_entry_id: Optional[str], torrent_url: str) -> str:
-    """Gets deterministic occurrence ID, using feedEntryId hash if present, otherwise torrentUrl hash."""
+def get_title_id_v2(
+    imdb_id: Optional[str],
+    resolved_title: str,
+    canonical_year: Optional[int],
+    source_media_type: str,
+) -> str:
+    """Gets a normalized IMDb ID or a v2 fallback based on resolved metadata."""
+    if imdb_id and imdb_id.strip():
+        return imdb_id.strip().lower()
+    return get_fallback_title_id_v2(resolved_title, canonical_year, source_media_type)
+
+
+def get_occurrence_id_v1(feed_entry_id: Optional[str], torrent_url: str) -> str:
+    """Computes the legacy v1 source ID without feed identity."""
     if feed_entry_id and feed_entry_id.strip():
-        val = feed_entry_id.strip()
+        identity_value = feed_entry_id.strip()
     else:
-        val = torrent_url.strip()
-    raw_str = f"v1:{val}"
-    return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
+        identity_value = torrent_url.strip()
+    return _sha256_id(f"v1:{identity_value}")
+
+
+def get_occurrence_id(feed_entry_id: Optional[str], torrent_url: str) -> str:
+    """Compatibility wrapper for the legacy v1 occurrence ID."""
+    return get_occurrence_id_v1(feed_entry_id, torrent_url)
+
+
+def get_source_item_id(
+    source_feed_id: str,
+    feed_entry_id: Optional[str],
+    torrent_url: Optional[str],
+) -> str:
+    """Computes the v2 ID shared by an occurrence and its source ParseLog."""
+    normalized_source_feed_id = source_feed_id.strip() if isinstance(source_feed_id, str) else ""
+    if not normalized_source_feed_id:
+        raise ValueError("source_feed_id is required for a v2 source item ID")
+
+    normalized_feed_entry_id = feed_entry_id.strip() if isinstance(feed_entry_id, str) else ""
+    if normalized_feed_entry_id:
+        identity_kind = "entry"
+        identity_value = normalized_feed_entry_id
+    else:
+        normalized_torrent_url = torrent_url.strip() if isinstance(torrent_url, str) else ""
+        if not normalized_torrent_url:
+            raise ValueError("feed_entry_id or torrent_url is required for a v2 source item ID")
+        identity_kind = "url"
+        identity_value = normalized_torrent_url
+
+    return _sha256_id(
+        f"v2:source:{normalized_source_feed_id}:{identity_kind}:{identity_value}"
+    )
+
+
+def get_audit_event_id(event_identity: str) -> str:
+    """Computes a v2 audit ID in a namespace distinct from source items."""
+    normalized_event_identity = event_identity.strip() if isinstance(event_identity, str) else ""
+    if not normalized_event_identity:
+        raise ValueError("event_identity is required for a v2 audit event ID")
+    return _sha256_id(f"v2:audit:{normalized_event_identity}")
 
 
 def get_cache_key(

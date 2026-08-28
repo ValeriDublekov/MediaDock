@@ -1,5 +1,6 @@
 import datetime
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict
 
@@ -16,6 +17,7 @@ from movies_feed.repository import (
 )
 from movies_feed.scanner import ScannerConfig, ScannerService
 from movies_feed.feed_fetcher import FeedFetcher
+from movies_feed.ids import get_occurrence_id_v1, get_source_item_id, get_title_id_v2
 
 
 class StaticTestFeedFetcher:
@@ -252,6 +254,183 @@ class TestScanner(unittest.TestCase):
         sample_log = logs[0]
         self.assertTrue(sample_log.parsed_successfully)
         self.assertIsNotNone(sample_log.raw_title)
+
+    def test_source_ids_use_stable_feed_key_not_display_name(self):
+        raw_title = "Матрица / The Matrix (Вачовски) [1999, США, фантастика, BDRip 1080p]"
+        config = ScannerConfig(
+            rss_feeds={
+                "stable-feed": {
+                    "name": "Original Display Name",
+                    "url": self.make_inline_feed(raw_title),
+                    "type": "movie",
+                }
+            },
+            omdb_limit=10,
+        )
+        scanner = self.create_scanner(config, MockOmdbClient({"the matrix": self.valid_movie}))
+
+        scanner.run("stable_feed_first")
+        config.rss_feeds["stable-feed"]["name"] = "Renamed Display Label"
+        scanner.run("stable_feed_second")
+
+        expected_id = get_source_item_id("stable-feed", "series-guid-1", None)
+        occurrences = self.occ_repo.list_by_title(self.valid_movie.imdb_id)
+        source_logs = [log for log in self.parse_log_repo.get_all() if log.event_kind == "source"]
+        self.assertEqual(len(occurrences), 1)
+        self.assertIsNotNone(self.occ_repo.get(self.valid_movie.imdb_id, expected_id))
+        self.assertEqual([log.id for log in source_logs], [expected_id])
+
+    def test_equal_guids_from_different_feed_keys_create_distinct_source_items(self):
+        raw_title = "Матрица / The Matrix (Вачовски) [1999, США, фантастика, BDRip 1080p]"
+        config = ScannerConfig(
+            rss_feeds={
+                "movies-primary": {
+                    "name": "Shared Display Name",
+                    "url": self.make_inline_feed(raw_title),
+                    "type": "movie",
+                },
+                "movies-secondary": {
+                    "name": "Shared Display Name",
+                    "url": self.make_inline_feed(raw_title),
+                    "type": "movie",
+                },
+            },
+            omdb_limit=10,
+        )
+
+        self.create_scanner(config, MockOmdbClient({"the matrix": self.valid_movie})).run("two_feeds")
+
+        occurrence_ids = {
+            get_source_item_id("movies-primary", "series-guid-1", None),
+            get_source_item_id("movies-secondary", "series-guid-1", None),
+        }
+        self.assertEqual(len(self.occ_repo.list_by_title(self.valid_movie.imdb_id)), 2)
+        self.assertEqual({log.id for log in self.parse_log_repo.get_all()}, occurrence_ids)
+
+    def test_source_and_audit_logs_do_not_overwrite_each_other(self):
+        scanner = self.create_scanner(ScannerConfig(), MockOmdbClient({}))
+        timings = {"parse_log_write": 0.0}
+
+        scanner._log_parse_entry(
+            raw_title="Stored Film 2020",
+            feed_name="Movies",
+            parsed_successfully=False,
+            parsed_title=None,
+            parsed_year=None,
+            omdb_status="not_found",
+            ignored=True,
+            ignore_reason="omdb_not_found",
+            source_feed_id="movies",
+            feed_entry_id="shared-identity",
+        )
+        scanner._log_parse_entry(
+            raw_title="Stored Film 2020",
+            feed_name="Movies",
+            parsed_successfully=True,
+            parsed_title="Stored Film",
+            parsed_year=2020,
+            omdb_status="skipped",
+            ignored=True,
+            ignore_reason="audit_needs_review",
+            audit_event_identity="movies:entry:shared-identity",
+        )
+        scanner._flush_parse_logs(timings)
+
+        logs = self.parse_log_repo.get_all()
+        self.assertEqual(len(logs), 2)
+        self.assertEqual({log.event_kind for log in logs}, {"source", "audit_review"})
+
+    def test_legacy_v1_manual_mapping_id_remains_usable(self):
+        legacy_id = get_occurrence_id_v1(
+            "series-guid-1",
+            "https://example.com/torrent/series-1",
+        )
+        mapping = ManualMapping(
+            id=legacy_id,
+            raw_title="No raw-title match",
+            imdb_id=self.valid_movie.imdb_id,
+            created_at=self.now,
+        )
+        self.manual_mapping_repo.set(mapping)
+        config = ScannerConfig(
+            rss_feeds={
+                "stable-feed": {
+                    "name": "Movies",
+                    "url": self.make_inline_feed(
+                        "Матрица / The Matrix (Вачовски) [1999, США, фантастика, BDRip 1080p]"
+                    ),
+                    "type": "movie",
+                }
+            },
+            omdb_limit=10,
+        )
+
+        run = self.create_scanner(config, MockOmdbClient({self.valid_movie.imdb_id: self.valid_movie})).run(
+            "legacy_mapping"
+        )
+
+        self.assertEqual(run.titles_created, 1)
+        self.assertEqual(self.manual_mapping_repo.get_all(), [])
+
+    def test_rss_and_reparse_share_fallback_title_id(self):
+        result_without_imdb = replace(
+            self.valid_movie,
+            imdb_id=None,
+            raw_payload={**self.valid_movie.raw_payload, "imdbID": ""},
+        )
+        raw_title = "Матрица / The Matrix (Вачовски) [1999, США, фантастика, BDRip 1080p]"
+        rss_config = ScannerConfig(
+            rss_feeds={
+                "movies": {
+                    "name": "Movies",
+                    "url": self.make_inline_feed(raw_title),
+                    "type": "movie",
+                }
+            },
+            omdb_limit=10,
+        )
+        self.create_scanner(rss_config, MockOmdbClient({"the matrix": result_without_imdb})).run(
+            "fallback_rss"
+        )
+        expected_title_id = get_title_id_v2(None, "The Matrix", 1999, "movie")
+        self.assertIsNotNone(self.title_repo.get(expected_title_id))
+
+        retry_log = ParseLog(
+            id=get_source_item_id("archive", "archived-entry", None),
+            raw_title="Archived Matrix Release",
+            feed_name="Archive",
+            parsed_successfully=True,
+            parsed_title="Archived Matrix",
+            parsed_year=2000,
+            omdb_status="not_found",
+            ignored=True,
+            ignore_reason="omdb_not_found",
+            processed_at=self.now,
+            trace_details={"feedType": "movie"},
+            event_kind="source",
+        )
+        self.parse_log_repo.add(retry_log)
+        reparse_scanner = self.create_scanner(
+            ScannerConfig(mode="reparse-unfound"),
+            MockOmdbClient({"the matrix": result_without_imdb}),
+        )
+        from unittest.mock import MagicMock
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        mock_ai.batch_extract_titles.return_value = {
+            0: {"title": "The Matrix", "year": 1999, "media_type": "movie"}
+        }
+        reparse_scanner.ai_matcher = mock_ai
+
+        reparse_scanner.reparse_unfound_entries(
+            section_timings={"omdb_api": 0.0, "parse_log_write": 0.0}
+        )
+
+        self.assertEqual(
+            [title_id for title_id, _ in self.title_repo.list_all_ids_and_titles()],
+            [expected_title_id],
+        )
+        self.assertIsNotNone(self.occ_repo.get(expected_title_id, retry_log.id))
 
     def test_section_timings_recorded(self):
         rss_feeds = {
