@@ -21,10 +21,11 @@ MVP wiring is present; production hardening is not complete.
 - Prompt 3: `OmdbResolver` provides typed outcomes, versioned type/semantics-aware cache entries, actual HTTP-attempt accounting, a run-wide quota budget across all modes, and Gemini model capability preflight without model-ID remapping.
 - Prompt 4A: Optional typed `SourceContext` and source/audit event kinds round-trip without inventing provenance for legacy documents.
 - Prompt 4B: Source-aware v2 occurrence/source-log IDs, isolated audit IDs, canonical fallback title IDs, and explicit v1 natural coexistence are implemented.
+- Prompt 4C: RSS and reparse writes retain stable source context, separate publication from observation time, and use matching single/bulk repository merge semantics with defensive copies.
 
 ## Next Prompt
 
-Run Prompt 4C in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+Run Prompt 5A in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 

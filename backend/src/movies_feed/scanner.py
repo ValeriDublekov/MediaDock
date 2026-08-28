@@ -24,7 +24,7 @@ from .match_policy import (
     get_exclusion_reason as policy_get_exclusion_reason,
     normalize_source_type,
 )
-from .models import ManualMapping, Occurrence, ParseLog, ScanRun, Title
+from .models import ManualMapping, Occurrence, ParseLog, ScanRun, SourceContext, Title
 from .metadata_resolver import MetadataOutcome, MetadataOutcomeStatus, MetadataResolver, OmdbResolver
 from .omdb_client import (
     OmdbClient,
@@ -628,6 +628,7 @@ class ScannerService:
         source_feed_id: Optional[str] = None,
         source_log_id: Optional[str] = None,
         audit_event_identity: Optional[str] = None,
+        source_context: Optional[SourceContext] = None,
     ) -> None:
         if not self.parse_log_repo or self.config.is_dry_run:
             return
@@ -657,6 +658,7 @@ class ScannerService:
             error_message=error_message,
             trace_details=trace_details,
             decision=decision,
+            source_context=source_context,
             event_kind=event_kind,
         )
         self._pending_parse_logs.append(log)
@@ -768,8 +770,9 @@ class ScannerService:
 
                         for entry in entries:
                             run.entries_seen += 1
+                            source_context = self._source_context_for_entry(entry, feed_def)
                             try:
-                                self._process_entry(entry, feed_def, run, section_timings)
+                                self._process_entry(entry, feed_def, source_context, run, section_timings)
                             except OmdbLimitReachedError as e:
                                 logger.warning(f"OMDb limit reached: {e}")
                                 run.error_count += 1
@@ -795,6 +798,7 @@ class ScannerService:
                                         feed_entry_id=getattr(entry, "id", None),
                                         torrent_url=getattr(entry, "link", None),
                                         source_feed_id=feed_def.get("id"),
+                                        source_context=source_context,
                                         section_timings=section_timings,
                                     )
                                 except Exception as log_ex:
@@ -1245,7 +1249,11 @@ class ScannerService:
                         normalized_title=norm_lookup_title,
                         year=omdb_result.year,
                         media_type=omdb_result.media_type,
-                        first_seen_at=log.processed_at or self.now,
+                        first_seen_at=(
+                            log.source_context.observed_at
+                            if log.source_context and log.source_context.observed_at
+                            else log.processed_at or self.now
+                        ),
                         last_seen_at=self.now,
                         updated_at=self.now,
                         imdb_id=omdb_result.imdb_id,
@@ -1267,16 +1275,26 @@ class ScannerService:
                     )
 
                     occ_id = log.id
+                    source_context = log.source_context
                     occ_record = Occurrence(
-                        source_feed_id=log.feed_name or "reparsed",
-                        source_feed_name=log.feed_name or "reparsed",
-                        feed_entry_id=None,
-                        torrent_url="",
+                        source_feed_id=(source_context.source_feed_id if source_context else None)
+                        or log.feed_name
+                        or "reparsed",
+                        source_feed_name=(source_context.source_feed_name if source_context else None)
+                        or log.feed_name
+                        or "reparsed",
+                        feed_entry_id=source_context.feed_entry_id if source_context else None,
+                        torrent_url=(source_context.torrent_url if source_context else None) or "",
                         raw_title=log.raw_title,
                         quality="",
                         rip_type="",
-                        first_seen_at=log.processed_at or self.now,
+                        first_seen_at=(
+                            source_context.observed_at
+                            if source_context and source_context.observed_at
+                            else log.processed_at or self.now
+                        ),
                         last_seen_at=self.now,
+                        source_context=source_context,
                     )
 
                     if not self.config.is_dry_run:
@@ -1293,6 +1311,7 @@ class ScannerService:
                         ignored=False,
                         ignore_reason=None,
                         source_log_id=log.id,
+                        source_context=source_context,
                         section_timings=section_timings,
                         trace_details={
                             "feedType": stored_feed_type,
@@ -1330,10 +1349,27 @@ class ScannerService:
     ) -> Dict[str, int]:
         return self.reparse_unfound_entries(run=run, section_timings=section_timings)
 
+    def _source_context_for_entry(
+        self,
+        entry: Any,
+        feed_def: Dict[str, Optional[str]],
+    ) -> SourceContext:
+        return SourceContext(
+            source_feed_id=feed_def.get("id"),
+            source_feed_name=feed_def.get("name"),
+            feed_type=feed_def.get("type") or "unknown",
+            feed_entry_id=getattr(entry, "id", None),
+            torrent_url=getattr(entry, "link", None),
+            raw_title=getattr(entry, "title", "") or "",
+            source_published_at=_get_entry_datetime(entry),
+            observed_at=self.now,
+        )
+
     def _process_entry(
         self,
         entry: Any,
         feed_def: Dict[str, Optional[str]],
+        source_context: SourceContext,
         run: ScanRun,
         section_timings: Optional[Dict[str, float]] = None,
     ) -> None:
@@ -1354,8 +1390,8 @@ class ScannerService:
         feed_name = feed_def.get("name", "")
         source_feed_id = feed_def.get("id", "")
 
-        entry_dt = _get_entry_datetime(entry)
-        item_time = entry_dt if entry_dt is not None else datetime.datetime.now(datetime.timezone.utc)
+        entry_dt = source_context.source_published_at
+        item_time = source_context.observed_at or self.now
 
         if self.config.force_days > 0:
             if entry_dt is not None:
@@ -1379,6 +1415,7 @@ class ScannerService:
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
                 source_feed_id=source_feed_id,
+                source_context=source_context,
                 section_timings=section_timings,
             )
             return
@@ -1416,6 +1453,7 @@ class ScannerService:
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
                 source_feed_id=source_feed_id,
+                source_context=source_context,
                 section_timings=section_timings,
             )
             return
@@ -1456,6 +1494,7 @@ class ScannerService:
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
                 source_feed_id=source_feed_id,
+                source_context=source_context,
                 section_timings=section_timings,
                 trace_details={**base_trace, "decision": "ignored_parse_only", "decisionDetails": "Parse only mode"},
             )
@@ -1551,6 +1590,7 @@ class ScannerService:
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
                 source_feed_id=source_feed_id,
+                source_context=source_context,
                 section_timings=section_timings,
                 trace_details=trace_details,
             )
@@ -1615,6 +1655,7 @@ class ScannerService:
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
                 source_feed_id=source_feed_id,
+                source_context=source_context,
                 section_timings=section_timings,
                 trace_details={
                     **base_trace,
@@ -1641,6 +1682,7 @@ class ScannerService:
             feed_entry_id=feed_entry_id,
             torrent_url=torrent_url,
             source_feed_id=source_feed_id,
+            source_context=source_context,
             section_timings=section_timings,
             trace_details={
                 **base_trace,
@@ -1689,7 +1731,7 @@ class ScannerService:
         occurrence_id = get_source_item_id(source_feed_id, feed_entry_id, torrent_url)
 
         occurrence_record = Occurrence(
-            source_feed_id=feed_def["name"],  # use name as id for now or pass slug
+            source_feed_id=source_feed_id,
             source_feed_name=feed_def["name"],
             feed_entry_id=feed_entry_id,
             torrent_url=torrent_url,
@@ -1698,6 +1740,7 @@ class ScannerService:
             rip_type=parsed.rip_type,
             first_seen_at=item_time,
             last_seen_at=item_time,
+            source_context=source_context,
         )
 
         # Upsert

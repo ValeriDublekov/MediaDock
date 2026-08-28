@@ -3,7 +3,27 @@ import copy
 import datetime
 from typing import Any, Dict, List, Optional
 
-from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
+from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, SourceContext, Title
+
+
+def merge_source_context(
+    existing: Optional[SourceContext], incoming: Optional[SourceContext]
+) -> Optional[SourceContext]:
+    if existing is None:
+        return copy.deepcopy(incoming)
+    if incoming is None:
+        return copy.deepcopy(existing)
+    observed_values = [value for value in (existing.observed_at, incoming.observed_at) if value is not None]
+    return SourceContext(
+        source_feed_id=existing.source_feed_id or incoming.source_feed_id,
+        source_feed_name=incoming.source_feed_name or existing.source_feed_name,
+        feed_type=existing.feed_type or incoming.feed_type,
+        feed_entry_id=existing.feed_entry_id or incoming.feed_entry_id,
+        torrent_url=existing.torrent_url or incoming.torrent_url,
+        raw_title=existing.raw_title or incoming.raw_title,
+        source_published_at=existing.source_published_at or incoming.source_published_at,
+        observed_at=max(observed_values) if observed_values else None,
+    )
 
 
 def merge_titles(existing: Title, incoming: Title) -> Title:
@@ -76,7 +96,14 @@ def merge_occurrences(existing: Occurrence, incoming: Occurrence) -> Occurrence:
         rip_type=incoming.rip_type if incoming.rip_type is not None else existing.rip_type,
         first_seen_at=first_seen_at,
         last_seen_at=last_seen_at,
+        source_context=merge_source_context(existing.source_context, incoming.source_context),
     )
+
+
+def merge_parse_logs(existing: ParseLog, incoming: ParseLog) -> ParseLog:
+    merged = copy.deepcopy(incoming)
+    merged.source_context = merge_source_context(existing.source_context, incoming.source_context)
+    return merged
 
 
 class TitleRepository(ABC):
@@ -311,7 +338,9 @@ class FakeParseLogRepository(ParseLogRepository):
         self._store: Dict[str, ParseLog] = {}
 
     def add(self, log: ParseLog) -> None:
-        self._store[log.id] = copy.deepcopy(log)
+        existing = self._store.get(log.id)
+        incoming = copy.deepcopy(log)
+        self._store[log.id] = merge_parse_logs(existing, incoming) if existing else incoming
 
     def prune_older_than(self, cutoff: datetime.datetime) -> int:
         to_delete = [log_id for log_id, log in self._store.items() if log.processed_at < cutoff]

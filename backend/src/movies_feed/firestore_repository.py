@@ -14,6 +14,7 @@ from .repository import (
     ScanRunRepository,
     TitleRepository,
     merge_occurrences,
+    merge_parse_logs,
     merge_titles,
 )
 
@@ -260,16 +261,8 @@ class FirestoreTitleRepository(TitleRepository):
         _upsert_tx(transaction)
 
     def upsert_many(self, titles: List[tuple[str, Title]]) -> None:
-        if not titles:
-            return
-        chunk_size = 500
-        for i in range(0, len(titles), chunk_size):
-            chunk = titles[i : i + chunk_size]
-            batch = self.db.batch()
-            for title_id, title in chunk:
-                doc_ref = self.collection_ref.document(title_id)
-                batch.set(doc_ref, title.to_dict())
-            batch.commit()
+        for title_id, title in titles:
+            self.upsert(title_id, title)
 
     def list_all(self) -> List[Title]:
         docs = self.collection_ref.stream()
@@ -356,16 +349,8 @@ class FirestoreOccurrenceRepository(OccurrenceRepository):
         _upsert_tx(transaction)
 
     def upsert_many(self, occurrences: List[tuple[str, str, Occurrence]]) -> None:
-        if not occurrences:
-            return
-        chunk_size = 500
-        for i in range(0, len(occurrences), chunk_size):
-            chunk = occurrences[i : i + chunk_size]
-            batch = self.db.batch()
-            for title_id, occurrence_id, occ in chunk:
-                doc_ref = self._get_occ_ref(title_id, occurrence_id)
-                batch.set(doc_ref, occ.to_dict())
-            batch.commit()
+        for title_id, occurrence_id, occurrence in occurrences:
+            self.upsert(title_id, occurrence_id, occurrence)
 
     def list_by_title(self, title_id: str) -> List[Occurrence]:
         collection_ref = self.db.collection("titles").document(title_id).collection("occurrences")
@@ -452,19 +437,22 @@ class FirestoreParseLogRepository(ParseLogRepository):
 
     def add(self, log: ParseLog) -> None:
         doc_ref = self.collection_ref.document(log.id)
-        doc_ref.set(log.to_dict())
+
+        @firestore.transactional
+        def _add_tx(transaction):
+            snapshot = doc_ref.get(transaction=transaction)
+            stored_log = log
+            if snapshot.exists:
+                existing = parse_log_from_dict(snapshot.to_dict(), doc_id=snapshot.id)
+                stored_log = merge_parse_logs(existing, log)
+            transaction.set(doc_ref, stored_log.to_dict())
+
+        transaction = self.db.transaction()
+        _add_tx(transaction)
 
     def add_many(self, logs: List[ParseLog]) -> None:
-        if not logs:
-            return
-        chunk_size = 500
-        for i in range(0, len(logs), chunk_size):
-            chunk = logs[i : i + chunk_size]
-            batch = self.db.batch()
-            for log in chunk:
-                doc_ref = self.collection_ref.document(log.id)
-                batch.set(doc_ref, log.to_dict())
-            batch.commit()
+        for log in logs:
+            self.add(log)
 
     def prune_older_than(self, cutoff: datetime.datetime) -> int:
         query = self.collection_ref.where("processedAt", "<", cutoff)

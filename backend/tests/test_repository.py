@@ -10,6 +10,7 @@ from movies_feed import (
     OmdbCacheEntry,
     Occurrence,
     ScanRun,
+    SourceContext,
     Title,
     get_cache_key,
     get_fallback_title_id,
@@ -139,6 +140,7 @@ class RepositoryAndIdTests(unittest.TestCase):
         self.assertEqual(merged_earlier.first_seen_at, self.earlier_time)
 
     def test_merge_occurrences_updates_last_seen_at(self) -> None:
+        published_at = self.base_time - datetime.timedelta(days=30)
         existing = Occurrence(
             source_feed_id="feed1",
             source_feed_name="Feed One",
@@ -149,6 +151,16 @@ class RepositoryAndIdTests(unittest.TestCase):
             rip_type="BDRip",
             first_seen_at=self.base_time,
             last_seen_at=self.base_time,
+            source_context=SourceContext(
+                source_feed_id="feed1",
+                source_feed_name="Original Feed Name",
+                feed_type="movie",
+                feed_entry_id="entry1",
+                torrent_url="https://torrent1.com",
+                raw_title="Movie.1999.RAW",
+                source_published_at=published_at,
+                observed_at=self.base_time,
+            ),
         )
 
         incoming = Occurrence(
@@ -161,11 +173,26 @@ class RepositoryAndIdTests(unittest.TestCase):
             rip_type="BDRip",
             first_seen_at=self.later_time,
             last_seen_at=self.later_time,
+            source_context=SourceContext(
+                source_feed_id="feed1",
+                source_feed_name="Renamed Feed",
+                feed_type="movie",
+                feed_entry_id="entry1",
+                torrent_url="https://torrent1.com/changed",
+                raw_title="Changed title",
+                source_published_at=self.later_time,
+                observed_at=self.later_time,
+            ),
         )
 
         merged = merge_occurrences(existing, incoming)
         self.assertEqual(merged.first_seen_at, self.base_time)
         self.assertEqual(merged.last_seen_at, self.later_time)
+        self.assertEqual(merged.source_context.source_feed_id, "feed1")
+        self.assertEqual(merged.source_context.source_feed_name, "Renamed Feed")
+        self.assertEqual(merged.source_context.torrent_url, "https://torrent1.com")
+        self.assertEqual(merged.source_context.source_published_at, published_at)
+        self.assertEqual(merged.source_context.observed_at, self.later_time)
 
     # --- 3. Cache Freshness Tests ---
 
@@ -276,6 +303,42 @@ class RepositoryAndIdTests(unittest.TestCase):
         self.assertEqual(fetched.first_seen_at, self.base_time)
         self.assertEqual(fetched.last_seen_at, self.later_time)
 
+    def test_fake_bulk_and_single_upserts_have_identical_merge_semantics(self) -> None:
+        single_repo = FakeOccurrenceRepository()
+        bulk_repo = FakeOccurrenceRepository()
+        initial = Occurrence(
+            source_feed_id="stable-feed",
+            source_feed_name="Original Name",
+            feed_entry_id="entry-1",
+            torrent_url="https://example.test/1",
+            raw_title="Film 2020",
+            quality="1080p",
+            rip_type="WEB-DL",
+            first_seen_at=self.base_time,
+            last_seen_at=self.base_time,
+        )
+        rescan = Occurrence(
+            source_feed_id="stable-feed",
+            source_feed_name="Renamed Feed",
+            feed_entry_id="entry-1",
+            torrent_url="https://example.test/1",
+            raw_title="Film 2020",
+            quality="2160p",
+            rip_type="WEB-DL",
+            first_seen_at=self.later_time,
+            last_seen_at=self.later_time,
+        )
+
+        single_repo.upsert("title", "occurrence", initial)
+        single_repo.upsert("title", "occurrence", rescan)
+        bulk_repo.upsert_many([("title", "occurrence", initial)])
+        bulk_repo.upsert_many([("title", "occurrence", rescan)])
+
+        self.assertEqual(
+            single_repo.get("title", "occurrence"),
+            bulk_repo.get("title", "occurrence"),
+        )
+
     def test_fake_repositories_use_defensive_copies(self) -> None:
         title_repo = FakeTitleRepository()
         title = Title(
@@ -311,6 +374,30 @@ class RepositoryAndIdTests(unittest.TestCase):
         occurrence.raw_title = "Mutated outside repository"
         self.assertEqual(
             occurrence_repo.get("copied-title", "copied-occurrence").raw_title,
+            "Copied Film 2020",
+        )
+
+        occurrence_with_context = Occurrence(
+            **{
+                **occurrence.__dict__,
+                "raw_title": "Copied Film 2020",
+                "source_context": SourceContext(
+                    source_feed_id="feed1",
+                    source_feed_name="Feed One",
+                    feed_type="movie",
+                    feed_entry_id="entry1",
+                    torrent_url="https://torrent1.com",
+                    raw_title="Copied Film 2020",
+                    source_published_at=self.earlier_time,
+                    observed_at=self.base_time,
+                ),
+            }
+        )
+        occurrence_repo.upsert("copied-title", "context-occurrence", occurrence_with_context)
+        fetched_occurrence = occurrence_repo.get("copied-title", "context-occurrence")
+        fetched_occurrence.source_context.raw_title = "Mutated nested context"
+        self.assertEqual(
+            occurrence_repo.get("copied-title", "context-occurrence").source_context.raw_title,
             "Copied Film 2020",
         )
 

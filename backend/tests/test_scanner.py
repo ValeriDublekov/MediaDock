@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict
 
-from movies_feed.models import ManualMapping, OmdbCacheEntry, ParseLog, Title, Occurrence, ScanRun
+from movies_feed.models import ManualMapping, OmdbCacheEntry, ParseLog, SourceContext, Title, Occurrence, ScanRun
 from movies_feed.omdb_client import OmdbMovieResult, OmdbLimitReachedError, OmdbTransportError, OmdbNoMatchError, OmdbClient, HttpTransport
 from movies_feed.match_policy import parse_broadcast_range
 from movies_feed.repository import (
@@ -167,7 +167,8 @@ class TestScanner(unittest.TestCase):
         )
 
     @staticmethod
-    def make_inline_feed(raw_title: str) -> str:
+    def make_inline_feed(raw_title: str, published_at: str = "") -> str:
+        publication = f"<pubDate>{published_at}</pubDate>" if published_at else ""
         return f'''<?xml version="1.0" encoding="UTF-8"?>
         <rss version="2.0">
             <channel>
@@ -175,6 +176,7 @@ class TestScanner(unittest.TestCase):
                     <title>{raw_title}</title>
                     <link>https://example.com/torrent/series-1</link>
                     <guid>series-guid-1</guid>
+                    {publication}
                 </item>
             </channel>
         </rss>'''
@@ -257,28 +259,38 @@ class TestScanner(unittest.TestCase):
 
     def test_source_ids_use_stable_feed_key_not_display_name(self):
         raw_title = "Матрица / The Matrix (Вачовски) [1999, США, фантастика, BDRip 1080p]"
+        published_at = datetime.datetime(2020, 1, 2, 12, 0, tzinfo=datetime.timezone.utc)
+        first_observed_at = self.now
         config = ScannerConfig(
             rss_feeds={
                 "stable-feed": {
                     "name": "Original Display Name",
-                    "url": self.make_inline_feed(raw_title),
+                    "url": self.make_inline_feed(raw_title, "Thu, 02 Jan 2020 12:00:00 GMT"),
                     "type": "movie",
                 }
             },
             omdb_limit=10,
         )
-        scanner = self.create_scanner(config, MockOmdbClient({"the matrix": self.valid_movie}))
-
-        scanner.run("stable_feed_first")
+        self.create_scanner(config, MockOmdbClient({"the matrix": self.valid_movie})).run("stable_feed_first")
         config.rss_feeds["stable-feed"]["name"] = "Renamed Display Label"
-        scanner.run("stable_feed_second")
+        self.now = first_observed_at + datetime.timedelta(days=1)
+        self.create_scanner(config, MockOmdbClient({"the matrix": self.valid_movie})).run("stable_feed_second")
 
         expected_id = get_source_item_id("stable-feed", "series-guid-1", None)
         occurrences = self.occ_repo.list_by_title(self.valid_movie.imdb_id)
         source_logs = [log for log in self.parse_log_repo.get_all() if log.event_kind == "source"]
         self.assertEqual(len(occurrences), 1)
-        self.assertIsNotNone(self.occ_repo.get(self.valid_movie.imdb_id, expected_id))
+        occurrence = self.occ_repo.get(self.valid_movie.imdb_id, expected_id)
+        self.assertEqual(occurrence.source_feed_id, "stable-feed")
+        self.assertEqual(occurrence.source_feed_name, "Renamed Display Label")
+        self.assertEqual(occurrence.first_seen_at, first_observed_at)
+        self.assertEqual(occurrence.last_seen_at, self.now)
+        self.assertEqual(occurrence.source_context.source_published_at, published_at)
+        self.assertEqual(occurrence.source_context.observed_at, self.now)
         self.assertEqual([log.id for log in source_logs], [expected_id])
+        self.assertEqual(source_logs[0].source_context.source_feed_id, "stable-feed")
+        self.assertEqual(source_logs[0].source_context.source_published_at, published_at)
+        self.assertEqual(source_logs[0].source_context.observed_at, self.now)
 
     def test_equal_guids_from_different_feed_keys_create_distinct_source_items(self):
         raw_title = "Матрица / The Matrix (Вачовски) [1999, США, фантастика, BDRip 1080p]"
@@ -407,6 +419,16 @@ class TestScanner(unittest.TestCase):
             ignore_reason="omdb_not_found",
             processed_at=self.now,
             trace_details={"feedType": "movie"},
+            source_context=SourceContext(
+                source_feed_id="archive",
+                source_feed_name="Archive Display",
+                feed_type="movie",
+                feed_entry_id="archived-entry",
+                torrent_url="https://example.test/archive/1",
+                raw_title="Archived Matrix Release",
+                source_published_at=self.now - datetime.timedelta(days=10),
+                observed_at=self.now - datetime.timedelta(days=2),
+            ),
             event_kind="source",
         )
         self.parse_log_repo.add(retry_log)
@@ -431,6 +453,13 @@ class TestScanner(unittest.TestCase):
             [expected_title_id],
         )
         self.assertIsNotNone(self.occ_repo.get(expected_title_id, retry_log.id))
+        reparsed_occurrence = self.occ_repo.get(expected_title_id, retry_log.id)
+        self.assertEqual(reparsed_occurrence.source_feed_id, "archive")
+        self.assertEqual(reparsed_occurrence.feed_entry_id, "archived-entry")
+        self.assertEqual(reparsed_occurrence.torrent_url, "https://example.test/archive/1")
+        self.assertEqual(reparsed_occurrence.source_context, retry_log.source_context)
+        reparsed_log = next(log for log in self.parse_log_repo.get_all() if log.id == retry_log.id)
+        self.assertEqual(reparsed_log.source_context, retry_log.source_context)
 
     def test_section_timings_recorded(self):
         rss_feeds = {

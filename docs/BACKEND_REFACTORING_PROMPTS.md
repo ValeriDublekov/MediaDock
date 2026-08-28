@@ -20,24 +20,6 @@ implementing an earlier one. If an existing implementation already satisfies a
 bullet, add or verify the regression test and leave the behavior unchanged.
 
 
-## Prompt 4B: Version Source-Aware IDs
-
-```text
-Goal: make source identity stable across feeds and consistent across modes.
-
-Scope: backend/src/movies_feed/ids.py, the smallest affected model/scanner call sites, focused ID tests, and docs/ai/DATA_CONTRACTS.md. Introduce v2 IDs for occurrences and source ParseLogs. An occurrence ID must hash sourceFeedId plus normalized feedEntryId when present, otherwise normalized torrentUrl. A source ParseLog ID must use the same source-item identity and be reusable for retry updates; audit events must use an explicit audit namespace/event identity so they cannot overwrite a source log or erase audit history.
-
-Contract: new writes use v2 IDs. Old v1 documents remain readable and are not reinterpreted as v2; choose and document lazy migration or natural coexistence, but do not bulk-migrate data in this stage. Fallback title IDs must use normalized resolved title, canonical year semantics, and source media type, so RSS and reparse agree when IMDb ID is absent.
-
-Non-goals: do not change timestamps, retry selection, repository merge behavior, proposal application, or parser heuristics.
-
-Work: version the ID algorithms without one-letter variables or unrelated renaming. Keep old helper APIs as compatibility wrappers where practical and document the exact canonical input tuple and algorithm version.
-
-Tests: equal GUIDs from different feeds produce different occurrence/log IDs; URL fallbacks are feed-aware; RSS/reparse fallback title IDs agree; v1 compatibility reads remain explicit; repeated source items remain idempotent.
-
-Done when: ID tests cover collisions and cross-mode equivalence, the algorithm is documented, and the full backend suite passes.
-```
-
 ## Prompt 4C: Wire Observation Time and Repository Merge Semantics
 
 ```text

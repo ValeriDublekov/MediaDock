@@ -10,8 +10,8 @@
 - IDs and upserts are deterministic to make workflow reruns safe.
 
 This document contains the current storage contract. Source context fields are
-defined for occurrences and parse logs but are not populated consistently until
-Prompt 4C. Retry state and the audit-proposal collection are later-stage changes.
+populated consistently for new RSS occurrences and source logs. Retry state and
+the audit-proposal collection are later-stage changes.
 OMDb cache keys are versioned by Prompt 3. A stage that
 changes any of these contracts must update this file, add emulator/fake
 compatibility tests, and document backward-read and migration behavior in the
@@ -181,9 +181,11 @@ alone do not create an inferred `SourceContext`. Missing values are not derived
 from publication, observation, or legacy occurrence timestamps.
 
 `sourcePublishedAt` and `observedAt` are independent. Publication time is never
-used as an observation time. `firstSeenAt` and `lastSeenAt` continue to describe
-scanner observations and retain their existing behavior until Prompt 4C wires
-and merges source context consistently.
+used as an observation time. New RSS writes set `firstSeenAt`, `lastSeenAt`, and
+`observedAt` from the scanner observation time. A repeated sighting preserves
+the earliest `firstSeenAt`, advances `lastSeenAt` and `observedAt`, and preserves
+the original `sourcePublishedAt` and stable source identity. A mutable feed
+display name may be refreshed without changing `sourceFeedId`.
 
 New occurrence writes use the lowercase hexadecimal SHA-256 digest of the UTF-8
 tuple `v2:source:<source-feed-id>:entry:<feed-entry-id>` when a non-empty entry
@@ -199,7 +201,7 @@ The legacy tuple `v1:<feed-entry-id-or-torrent-url>` remains available through
 an explicit compatibility helper. Existing v1 occurrence documents remain
 readable and coexist naturally with v2 documents. They are not reinterpreted,
 renamed, or bulk migrated by Prompt 4B. Repeated v2 sightings produce the same
-document ID; timestamp merge behavior remains owned by Prompt 4C.
+document ID. Single and bulk occurrence upserts apply the same merge contract.
 
 ## `omdbCache/{cacheKey}`
 
@@ -260,6 +262,10 @@ Parse logs may carry the same optional flat source-context fields documented for
 occurrences. Their types and missing-field defaults are identical. A legacy log
 without `feedType`, `sourcePublishedAt`, and `observedAt` has no source context;
 the reader does not synthesize one from `feedName`, `rawTitle`, or `processedAt`.
+Updating a source log preserves its retained source identity and publication
+time while allowing its latest observation time and mutable feed label to
+advance. Reparse writes reuse this retained context rather than deriving source
+identity from `feedName`.
 
 | Field | Type | Missing-field default | Notes |
 | --- | --- | --- | --- |

@@ -406,6 +406,81 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
         self.assertEqual(fetched_updated.first_seen_at.replace(tzinfo=self.utc), self.base_time)
         self.assertEqual(fetched_updated.last_seen_at.replace(tzinfo=self.utc), self.later_time)
 
+    def test_bulk_and_single_upserts_apply_the_same_merge_contract(self) -> None:
+        title_repo = FirestoreTitleRepository(self.db)
+        occurrence_repo = FirestoreOccurrenceRepository(self.db)
+        source_context = SourceContext(
+            source_feed_id="stable-feed",
+            source_feed_name="Original Feed",
+            feed_type="movie",
+            feed_entry_id="entry-1",
+            torrent_url="https://example.test/1",
+            raw_title="Film 2020",
+            source_published_at=self.earlier_time,
+            observed_at=self.base_time,
+        )
+        initial_title = Title(
+            title="Film",
+            normalized_title="film",
+            year=2020,
+            media_type="movie",
+            first_seen_at=self.base_time,
+            last_seen_at=self.base_time,
+            updated_at=self.base_time,
+        )
+        initial_occurrence = Occurrence(
+            source_feed_id="stable-feed",
+            source_feed_name="Original Feed",
+            feed_entry_id="entry-1",
+            torrent_url="https://example.test/1",
+            raw_title="Film 2020",
+            quality="1080p",
+            rip_type="WEB-DL",
+            first_seen_at=self.base_time,
+            last_seen_at=self.base_time,
+            source_context=source_context,
+        )
+        title_repo.upsert("single-title", initial_title)
+        title_repo.upsert_many([("bulk-title", initial_title)])
+        occurrence_repo.upsert("single-title", "occurrence", initial_occurrence)
+        occurrence_repo.upsert_many([("bulk-title", "occurrence", initial_occurrence)])
+
+        updated_title = Title(
+            **{
+                **initial_title.__dict__,
+                "first_seen_at": self.later_time,
+                "last_seen_at": self.later_time,
+                "updated_at": self.later_time,
+            }
+        )
+        updated_occurrence = Occurrence(
+            **{
+                **initial_occurrence.__dict__,
+                "source_feed_name": "Renamed Feed",
+                "first_seen_at": self.later_time,
+                "last_seen_at": self.later_time,
+                "source_context": SourceContext(
+                    **{
+                        **source_context.__dict__,
+                        "source_feed_name": "Renamed Feed",
+                        "source_published_at": self.later_time,
+                        "observed_at": self.later_time,
+                    }
+                ),
+            }
+        )
+        title_repo.upsert("single-title", updated_title)
+        title_repo.upsert_many([("bulk-title", updated_title)])
+        occurrence_repo.upsert("single-title", "occurrence", updated_occurrence)
+        occurrence_repo.upsert_many([("bulk-title", "occurrence", updated_occurrence)])
+
+        self.assertEqual(title_repo.get("single-title"), title_repo.get("bulk-title"))
+        single_occurrence = occurrence_repo.get("single-title", "occurrence")
+        bulk_occurrence = occurrence_repo.get("bulk-title", "occurrence")
+        self.assertEqual(single_occurrence, bulk_occurrence)
+        self.assertEqual(single_occurrence.source_context.source_published_at, self.earlier_time)
+        self.assertEqual(single_occurrence.source_context.observed_at, self.later_time)
+
     def test_omdb_cache_repository_persistence_and_expiry(self) -> None:
         repo = FirestoreOmdbCacheRepository(self.db)
         cache_key = get_cache_key("inception", 2010)
