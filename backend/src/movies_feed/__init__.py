@@ -20,7 +20,7 @@ from .match_policy import (
     normalize_source_type,
     parse_broadcast_range,
 )
-from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
+from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, SourceContext, Title
 from .metadata_resolver import (
     MetadataOutcome,
     MetadataOutcomeStatus,

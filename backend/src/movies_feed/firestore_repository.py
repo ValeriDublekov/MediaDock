@@ -5,7 +5,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 from .match_policy import broadcast_range_from_dict, effective_source_type
-from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, Title
+from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, SourceContext, Title
 from .repository import (
     ManualMappingRepository,
     OmdbCacheRepository,
@@ -104,6 +104,23 @@ def title_from_dict(d: dict) -> Title:
     )
 
 
+def source_context_from_dict(d: dict) -> Optional[SourceContext]:
+    """Reads optional flat provenance fields without inferring legacy context."""
+    context_markers = ("feedType", "sourcePublishedAt", "observedAt")
+    if not any(field_name in d for field_name in context_markers):
+        return None
+    return SourceContext(
+        source_feed_id=d.get("sourceFeedId"),
+        source_feed_name=d.get("sourceFeedName"),
+        feed_type=d.get("feedType"),
+        feed_entry_id=d.get("feedEntryId"),
+        torrent_url=d.get("torrentUrl"),
+        raw_title=d.get("rawTitle"),
+        source_published_at=d.get("sourcePublishedAt"),
+        observed_at=d.get("observedAt"),
+    )
+
+
 def occurrence_from_dict(d: dict) -> Occurrence:
     """Reconstructs an Occurrence model from a camelCase dictionary retrieved from Firestore."""
     return Occurrence(
@@ -116,6 +133,7 @@ def occurrence_from_dict(d: dict) -> Occurrence:
         rip_type=d.get("ripType"),
         first_seen_at=d["firstSeenAt"],
         last_seen_at=d["lastSeenAt"],
+        source_context=source_context_from_dict(d),
     )
 
 
@@ -171,6 +189,8 @@ def parse_log_from_dict(d: dict, doc_id: Optional[str] = None) -> ParseLog:
         error_message=d.get("errorMessage"),
         trace_details=d.get("traceDetails"),
         decision=d.get("decision"),
+        source_context=source_context_from_dict(d),
+        event_kind=d.get("eventKind"),
     )
 
 

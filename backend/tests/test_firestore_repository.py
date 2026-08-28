@@ -18,6 +18,7 @@ from movies_feed import (
     Occurrence,
     OmdbCacheEntry,
     ScanRun,
+    SourceContext,
     ParseLog,
     ManualMapping,
     get_title_id,
@@ -27,12 +28,182 @@ from movies_feed import (
 )
 from movies_feed.firestore_repository import (
     manual_mapping_from_dict,
+    occurrence_from_dict,
     parse_log_from_dict,
     title_from_dict,
 )
 
 
 class DictDeserializationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.utc = datetime.timezone.utc
+        self.published_at = datetime.datetime(2026, 8, 6, 8, 0, tzinfo=self.utc)
+        self.observed_at = datetime.datetime(2026, 8, 7, 10, 0, tzinfo=self.utc)
+
+    def make_source_context(
+        self,
+        source_published_at: Optional[datetime.datetime] = None,
+    ) -> SourceContext:
+        return SourceContext(
+            source_feed_id="movies-feed",
+            source_feed_name="Movies Feed",
+            feed_type="movie",
+            feed_entry_id="entry-123",
+            torrent_url="https://rutracker.org/forum/viewtopic.php?t=123",
+            raw_title="Example Film [2026]",
+            source_published_at=source_published_at,
+            observed_at=self.observed_at,
+        )
+
+    def test_occurrence_source_context_round_trip(self) -> None:
+        first_seen_at = self.observed_at + datetime.timedelta(minutes=1)
+        last_seen_at = self.observed_at + datetime.timedelta(minutes=2)
+        source_context = self.make_source_context(self.published_at)
+        occurrence = Occurrence(
+            source_feed_id="movies-feed",
+            source_feed_name="Movies Feed",
+            feed_entry_id="entry-123",
+            torrent_url="https://rutracker.org/forum/viewtopic.php?t=123",
+            raw_title="Example Film [2026]",
+            quality="1080p",
+            rip_type="WEB-DL",
+            first_seen_at=first_seen_at,
+            last_seen_at=last_seen_at,
+            source_context=source_context,
+        )
+
+        restored = occurrence_from_dict(occurrence.to_dict())
+
+        self.assertEqual(restored.source_context, source_context)
+        self.assertEqual(restored.source_context.source_published_at, self.published_at)
+        self.assertEqual(restored.source_context.observed_at, self.observed_at)
+        self.assertEqual(restored.first_seen_at, first_seen_at)
+        self.assertEqual(restored.last_seen_at, last_seen_at)
+
+    def test_parse_log_source_context_and_event_kinds_round_trip(self) -> None:
+        for event_kind in ("source", "audit_review"):
+            with self.subTest(event_kind=event_kind):
+                source_context = self.make_source_context(self.published_at)
+                log = ParseLog(
+                    id=f"log-{event_kind}",
+                    raw_title="Example Film [2026]",
+                    feed_name="Movies Feed",
+                    parsed_successfully=True,
+                    parsed_title="Example Film",
+                    parsed_year=2026,
+                    omdb_status="found",
+                    ignored=False,
+                    ignore_reason=None,
+                    processed_at=self.observed_at + datetime.timedelta(minutes=3),
+                    source_context=source_context,
+                    event_kind=event_kind,
+                )
+
+                restored = parse_log_from_dict(log.to_dict())
+
+                self.assertEqual(restored.source_context, source_context)
+                self.assertEqual(restored.event_kind, event_kind)
+                self.assertNotEqual(restored.processed_at, restored.source_context.observed_at)
+                self.assertNotEqual(
+                    restored.source_context.source_published_at,
+                    restored.source_context.observed_at,
+                )
+
+    def test_null_source_publication_time_is_preserved(self) -> None:
+        source_context = self.make_source_context()
+        log = ParseLog(
+            id="log-null-publication",
+            raw_title="Example Film [2026]",
+            feed_name="Movies Feed",
+            parsed_successfully=True,
+            parsed_title="Example Film",
+            parsed_year=2026,
+            omdb_status="found",
+            ignored=False,
+            ignore_reason=None,
+            processed_at=self.observed_at,
+            source_context=source_context,
+            event_kind="source",
+        )
+
+        serialized = log.to_dict()
+        restored = parse_log_from_dict(serialized)
+
+        self.assertIn("sourcePublishedAt", serialized)
+        self.assertIsNone(serialized["sourcePublishedAt"])
+        self.assertIsNone(restored.source_context.source_published_at)
+        self.assertEqual(restored.source_context.observed_at, self.observed_at)
+
+    def test_partial_source_context_does_not_erase_existing_flat_fields(self) -> None:
+        source_context = SourceContext(
+            source_feed_id=None,
+            source_feed_name=None,
+            feed_type="movie",
+            feed_entry_id=None,
+            torrent_url=None,
+            raw_title=None,
+            source_published_at=None,
+            observed_at=self.observed_at,
+        )
+        occurrence = Occurrence(
+            source_feed_id="movies-feed",
+            source_feed_name="Movies Feed",
+            feed_entry_id="entry-123",
+            torrent_url="https://example.test/123",
+            raw_title="Example Film [2026]",
+            quality=None,
+            rip_type=None,
+            first_seen_at=self.observed_at,
+            last_seen_at=self.observed_at,
+            source_context=source_context,
+        )
+        log = ParseLog(
+            id="partial-context",
+            raw_title="Example Film [2026]",
+            feed_name="Movies Feed",
+            parsed_successfully=True,
+            parsed_title="Example Film",
+            parsed_year=2026,
+            omdb_status="found",
+            ignored=False,
+            ignore_reason=None,
+            processed_at=self.observed_at,
+            source_context=source_context,
+            event_kind="source",
+        )
+
+        occurrence_data = occurrence.to_dict()
+        log_data = log.to_dict()
+
+        self.assertEqual(occurrence_data["sourceFeedId"], "movies-feed")
+        self.assertEqual(occurrence_data["rawTitle"], "Example Film [2026]")
+        self.assertEqual(log_data["rawTitle"], "Example Film [2026]")
+        self.assertIn("sourcePublishedAt", occurrence_data)
+        self.assertIsNone(occurrence_data["sourcePublishedAt"])
+
+    def test_legacy_documents_do_not_invent_source_context(self) -> None:
+        legacy_occurrence = occurrence_from_dict({
+            "sourceFeedId": "legacy-feed",
+            "sourceFeedName": "Legacy Feed",
+            "feedEntryId": "legacy-entry",
+            "torrentUrl": "https://example.test/legacy",
+            "rawTitle": "Legacy Film 2020",
+            "quality": None,
+            "ripType": None,
+            "firstSeenAt": self.published_at,
+            "lastSeenAt": self.observed_at,
+        })
+        legacy_log = parse_log_from_dict({
+            "rawTitle": "Legacy Film 2020",
+            "feedName": "Legacy Feed",
+            "parsedSuccessfully": True,
+            "processedAt": self.observed_at,
+        }, doc_id="legacy-log")
+
+        self.assertIsNone(legacy_occurrence.source_context)
+        self.assertIsNone(legacy_log.source_context)
+        self.assertIsNone(legacy_log.event_kind)
+
     def test_title_type_fields_round_trip_and_legacy_derivation(self) -> None:
         now = datetime.datetime.now(datetime.timezone.utc)
         broadcast_range = BroadcastRange(start_year=2007, end_year=2015, raw="2007-2015")

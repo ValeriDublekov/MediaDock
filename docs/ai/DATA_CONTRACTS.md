@@ -9,9 +9,10 @@
 - Writers validate and normalize external data before repository calls.
 - IDs and upserts are deterministic to make workflow reruns safe.
 
-This document contains the current storage contract. Parse logs do not yet carry
-complete source/retry context, and there is no audit-proposal collection; those
-are later-stage changes. OMDb cache keys are versioned by Prompt 3. A stage that
+This document contains the current storage contract. Source context fields are
+defined for occurrences and parse logs but are not populated consistently until
+Prompt 4C. Retry state and the audit-proposal collection are later-stage changes.
+OMDb cache keys are versioned by Prompt 3. A stage that
 changes any of these contracts must update this file, add emulator/fake
 compatibility tests, and document backward-read and migration behavior in the
 same change.
@@ -144,6 +145,33 @@ One torrent/feed appearance.
 | `firstSeenAt` | Timestamp | First scanner observation |
 | `lastSeenAt` | Timestamp | Latest scanner observation |
 
+Prompt 4A adds an optional typed source context represented by flat fields on
+the occurrence document. The five pre-existing occurrence source fields remain
+required by the occurrence contract above; their context defaults below apply
+to partial compatibility reads and to parse logs:
+
+| Field | Type | Missing-field default | Notes |
+| --- | --- | --- | --- |
+| `sourceFeedId` | string or null | null | Stable configured feed identity; required on occurrence documents |
+| `sourceFeedName` | string or null | null | Mutable source display label; required on occurrence documents |
+| `feedType` | string or null | null | `movie`, `series`, or `unknown` when retained by a later writer |
+| `feedEntryId` | string or null | null | Original source entry identifier; required but nullable on occurrence documents |
+| `torrentUrl` | string or null | null | Original topic/torrent URL; required as a string on occurrence documents |
+| `rawTitle` | string or null | null | Unmodified source title; required as a string on occurrence documents |
+| `sourcePublishedAt` | Timestamp or null | null | Publication time supplied by the feed; explicit null is preserved |
+| `observedAt` | Timestamp or null | null | Scanner observation time for this source context |
+
+The context is considered present only when at least one Prompt 4A marker field
+(`feedType`, `sourcePublishedAt`, or `observedAt`) exists. Legacy occurrence
+documents already contain several identically named source fields; those fields
+alone do not create an inferred `SourceContext`. Missing values are not derived
+from publication, observation, or legacy occurrence timestamps.
+
+`sourcePublishedAt` and `observedAt` are independent. Publication time is never
+used as an observation time. `firstSeenAt` and `lastSeenAt` continue to describe
+scanner observations and retain their existing behavior until Prompt 4C wires
+and merges source context consistently.
+
 ID rule: deterministic hash of normalized `feedEntryId` when present, otherwise
 normalized torrent URL. Repeated sightings update `lastSeenAt` and do not create
 a second occurrence.
@@ -202,6 +230,22 @@ Prompt 5 introduces explicit terminal/retryable retention semantics.
 | `decision` | string or null | Stable audit decision; the temporary recheck contract uses `needs_review` and never infers it from `errorMessage` |
 | `traceDetails` | map or null | Bounded diagnostics. Match checks may include `expectedSourceType`, `matchDecision`, `matchReasonCode`, `omdbSourceType`, `omdbContentKind`, and `omdbBroadcastRange`. Recheck review logs use `auditOutcome` (`orphan`, `ai_batch_incomplete`, `mismatch_retained`), `omdbOutcome` (`missing_corrected_title`, `confirmed_not_found`, `quota_exhausted`, `transport_error`, `invalid_request`, `unexpected_error`, or `malformed_result`), and `candidateOutcome` where applicable |
 | `processedAt` | Timestamp | Time when entry was processed |
+
+Parse logs may carry the same optional flat source-context fields documented for
+occurrences. Their types and missing-field defaults are identical. A legacy log
+without `feedType`, `sourcePublishedAt`, and `observedAt` has no source context;
+the reader does not synthesize one from `feedName`, `rawTitle`, or `processedAt`.
+
+| Field | Type | Missing-field default | Notes |
+| --- | --- | --- | --- |
+| `eventKind` | string or null | null | `source` for one normal source item, or `audit_review` for a separate audit/review event |
+
+Missing `eventKind` means legacy or unknown and is not interpreted as `source`.
+A normal `source` parse log represents exactly one source item. Retry attempts
+are metadata updates to that source log and must not silently create new IDs.
+Audit and review records use `audit_review`, with their own event identity, and
+must not overwrite source logs. Prompt 4A defines this contract but does not
+change ID generation, retry metadata, scanner writes, or migrate stored data.
 
 The existing-title audit is review-only in the current stage. A complete batch
 must contain exactly one result for every requested ID, and each result must

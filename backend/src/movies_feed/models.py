@@ -1,8 +1,46 @@
 import datetime
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from .match_policy import BroadcastRange
+
+
+@dataclass
+class SourceContext:
+    source_feed_id: Optional[str]
+    source_feed_name: Optional[str]
+    feed_type: Optional[str]
+    feed_entry_id: Optional[str]
+    torrent_url: Optional[str]
+    raw_title: Optional[str]
+    source_published_at: Optional[datetime.datetime]
+    observed_at: Optional[datetime.datetime]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Converts source provenance to flat camelCase Firestore fields."""
+        return {
+            "sourceFeedId": self.source_feed_id,
+            "sourceFeedName": self.source_feed_name,
+            "feedType": self.feed_type,
+            "feedEntryId": self.feed_entry_id,
+            "torrentUrl": self.torrent_url,
+            "rawTitle": self.raw_title,
+            "sourcePublishedAt": self.source_published_at,
+            "observedAt": self.observed_at,
+        }
+
+
+def _merge_source_context(
+    document: Dict[str, Any], source_context: Optional[SourceContext]
+) -> Dict[str, Any]:
+    if source_context is None:
+        return document
+    source_fields = source_context.to_dict()
+    for field_name in document.keys() & source_fields.keys():
+        if source_fields[field_name] is None:
+            del source_fields[field_name]
+    document.update(source_fields)
+    return document
 
 
 @dataclass
@@ -96,10 +134,11 @@ class Occurrence:
     rip_type: Optional[str]
     first_seen_at: datetime.datetime
     last_seen_at: datetime.datetime
+    source_context: Optional[SourceContext] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the Occurrence model to a camelCase Firestore dictionary."""
-        return {
+        res = {
             "sourceFeedId": self.source_feed_id,
             "sourceFeedName": self.source_feed_name,
             "feedEntryId": self.feed_entry_id,
@@ -110,6 +149,7 @@ class Occurrence:
             "firstSeenAt": self.first_seen_at,
             "lastSeenAt": self.last_seen_at,
         }
+        return _merge_source_context(res, self.source_context)
 
 
 @dataclass
@@ -197,6 +237,8 @@ class ParseLog:
     error_message: Optional[str] = None
     trace_details: Optional[Dict[str, Any]] = None
     decision: Optional[str] = None
+    source_context: Optional[SourceContext] = None
+    event_kind: Optional[Literal["source", "audit_review"]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the ParseLog model to a camelCase Firestore dictionary."""
@@ -218,6 +260,9 @@ class ParseLog:
             res["traceDetails"] = self.trace_details
         if self.decision is not None:
             res["decision"] = self.decision
+        _merge_source_context(res, self.source_context)
+        if self.event_kind is not None:
+            res["eventKind"] = self.event_kind
         return res
 
 
