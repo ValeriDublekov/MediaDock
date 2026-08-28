@@ -19,25 +19,6 @@ Each new stage below is intentionally written as `Scope`, `Non-goals`, `Contract
 implementing an earlier one. If an existing implementation already satisfies a
 bullet, add or verify the regression test and leave the behavior unchanged.
 
-
-## Prompt 4C: Wire Observation Time and Repository Merge Semantics
-
-```text
-Goal: populate SourceContext consistently and keep fake/Firestore persistence behavior identical.
-
-Scope: backend/src/movies_feed/scanner.py, repository implementations, focused scanner/repository tests, and directly affected contract documentation. Use the stable configuration key as sourceFeedId; never use the mutable display name as identity. Populate sourcePublishedAt from the feed entry and firstSeenAt/lastSeenAt from scanner observation time. On a rescan of an old publication, lastSeenAt must advance while sourcePublishedAt remains unchanged.
-
-Contract: every persisted occurrence and source log carries the stable feed identity and preserves publication time separately from observation time. Bulk writes apply the same merge rules as single writes.
-
-Non-goals: do not change the v2 ID algorithms from Prompt 4B, retry selection, matching policy, or audit proposal behavior.
-
-Work: pass one SourceContext through RSS and reparse persistence, preserve the original context on updates, and align fake and Firestore upsert_many with single-upsert merge semantics. Preserve defensive copies so dry-run decisions cannot mutate stored models.
-
-Tests: rescan timestamp behavior, mutable feed-name versus stable feed-key identity, source-field round trips, fake/Firestore merge parity, bulk/single upsert parity, and dry-run immutability.
-
-Done when: all new writes carry the documented source context, no source identity depends on display text, and narrow plus full backend tests pass.
-```
-
 ## Prompt 5A: Add Explicit Retry State and Paginated Selection
 
 ```text

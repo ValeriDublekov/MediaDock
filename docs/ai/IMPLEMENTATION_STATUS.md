@@ -22,10 +22,11 @@ MVP wiring is present; production hardening is not complete.
 - Prompt 4A: Optional typed `SourceContext` and source/audit event kinds round-trip without inventing provenance for legacy documents.
 - Prompt 4B: Source-aware v2 occurrence/source-log IDs, isolated audit IDs, canonical fallback title IDs, and explicit v1 natural coexistence are implemented.
 - Prompt 4C: RSS and reparse writes retain stable source context, separate publication from observation time, and use matching single/bulk repository merge semantics with defensive copies.
+- Prompt 5A: Parse logs have explicit retry lifecycle metadata, conservative legacy-state derivation, deterministic paginated retry selection, and retention that preserves old retryable work.
 
 ## Next Prompt
 
-Run Prompt 5A in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+Run Prompt 5B in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 

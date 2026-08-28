@@ -26,7 +26,18 @@ from .match_policy import (
     normalize_source_type,
     parse_broadcast_range,
 )
-from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, SourceContext, Title
+from .models import (
+    ManualMapping,
+    OmdbCacheEntry,
+    Occurrence,
+    ParseLog,
+    ParseLogResolution,
+    RetryCursor,
+    RetryPage,
+    ScanRun,
+    SourceContext,
+    Title,
+)
 from .metadata_resolver import (
     MetadataOutcome,
     MetadataOutcomeStatus,
@@ -48,6 +59,7 @@ from .repository import (
     ScanRunRepository,
     TitleRepository,
     merge_occurrences,
+    merge_parse_logs,
     merge_titles,
 )
 try:

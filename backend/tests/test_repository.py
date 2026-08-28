@@ -5,10 +5,14 @@ import unittest
 from movies_feed import (
     FakeOmdbCacheRepository,
     FakeOccurrenceRepository,
+    FakeParseLogRepository,
     FakeScanRunRepository,
     FakeTitleRepository,
     OmdbCacheEntry,
     Occurrence,
+    ParseLog,
+    ParseLogResolution,
+    RetryCursor,
     ScanRun,
     SourceContext,
     Title,
@@ -16,6 +20,7 @@ from movies_feed import (
     get_fallback_title_id,
     get_occurrence_id,
     get_title_id,
+    merge_parse_logs,
     merge_occurrences,
     merge_titles,
     normalize_title,
@@ -357,6 +362,180 @@ class RepositoryAndIdTests(unittest.TestCase):
         self.assertFalse(fetched_title.ai_validated)
         fetched_title.title = "Mutated outside repository"
         self.assertEqual(title_repo.get("copied-title").title, "Copied Film")
+
+    def test_retryable_page_is_filtered_ordered_and_paginated(self) -> None:
+        repo = FakeParseLogRepository()
+
+        def add(log_id: str, reason: str, offset: int = 0, retry_state=None) -> None:
+            repo.add(ParseLog(
+                id=log_id,
+                raw_title=log_id,
+                feed_name="feed",
+                parsed_successfully=True,
+                parsed_title=log_id,
+                parsed_year=2020,
+                omdb_status="not_found",
+                ignored=True,
+                ignore_reason=reason,
+                processed_at=self.base_time + datetime.timedelta(minutes=offset),
+                retry_state=retry_state,
+            ))
+
+        add("retry-b", "omdb_not_found", 1)
+        add("retry-a", "parse_error", 1)
+        add("excluded", "excluded_country_or_genre", 2)
+        add("resolved", "omdb_not_found", 3, "resolved")
+
+        first = repo.list_retryable(limit=1)
+        self.assertEqual([log.id for log in first.items], ["retry-b"])
+        self.assertEqual(first.next_cursor, RetryCursor(first.items[-1].processed_at, "retry-b"))
+        second = repo.list_retryable(limit=1, cursor=first.next_cursor)
+        self.assertEqual([log.id for log in second.items], ["retry-a"])
+        self.assertIsNone(second.next_cursor)
+        self.assertEqual([log.id for log in repo.list_unmapped(limit=10)], ["retry-b", "retry-a"])
+
+    def test_retryable_work_survives_retention_and_resolution_round_trips(self) -> None:
+        repo = FakeParseLogRepository()
+        old_time = self.base_time - datetime.timedelta(days=10)
+        retryable = ParseLog(
+            id="retryable",
+            raw_title="Retry",
+            feed_name="feed",
+            parsed_successfully=False,
+            parsed_title=None,
+            parsed_year=None,
+            omdb_status="error",
+            ignored=True,
+            ignore_reason="entry_error",
+            processed_at=old_time,
+            attempt_count=2,
+            last_attempt_at=self.earlier_time,
+        )
+        resolved = ParseLog(
+            id="resolved",
+            raw_title="Resolved",
+            feed_name="feed",
+            parsed_successfully=True,
+            parsed_title="Resolved",
+            parsed_year=2020,
+            omdb_status="found",
+            ignored=False,
+            ignore_reason=None,
+            processed_at=old_time,
+            retry_state="resolved",
+            attempt_count=3,
+            last_attempt_at=self.base_time,
+            resolution=ParseLogResolution(
+                resolved_at=self.base_time,
+                outcome="matched",
+                reason="catalog_match",
+                title_id="title-1",
+                occurrence_id="occurrence-1",
+            ),
+        )
+        repo.add(retryable)
+        repo.add(resolved)
+
+        self.assertEqual(repo.prune_older_than(self.base_time), 1)
+        stored = repo.get_all()
+        self.assertEqual([log.id for log in stored], ["retryable"])
+        self.assertEqual(stored[0].attempt_count, 2)
+        self.assertEqual(stored[0].last_attempt_at, self.earlier_time)
+
+    def test_legacy_retry_state_classification_is_conservative(self) -> None:
+        retryable_reasons = (
+            "parse_error",
+            "entry_error",
+            "omdb_not_found",
+            "omdb_limit_reached",
+            "omdb_error",
+        )
+        terminal_reasons = (
+            "excluded_country_or_genre",
+            "parse_only",
+            "media_type_mismatch",
+            "year_mismatch",
+            "no_title",
+            "empty_title",
+            "match_ambiguous",
+            "unknown_failure",
+        )
+        repo = FakeParseLogRepository()
+        for reason in retryable_reasons + terminal_reasons:
+            repo.add(ParseLog(
+                id=reason,
+                raw_title=reason,
+                feed_name="feed",
+                parsed_successfully=reason not in ("parse_error", "no_title", "empty_title"),
+                parsed_title=None,
+                parsed_year=None,
+                omdb_status="error",
+                ignored=True,
+                ignore_reason=reason,
+                processed_at=self.base_time,
+            ))
+        repo.add(ParseLog(
+            id="audit",
+            raw_title="audit",
+            feed_name="feed",
+            parsed_successfully=True,
+            parsed_title="audit",
+            parsed_year=2020,
+            omdb_status="error",
+            ignored=True,
+            ignore_reason="omdb_error",
+            processed_at=self.base_time,
+            event_kind="audit_review",
+        ))
+
+        self.assertEqual(
+            {log.id for log in repo.list_retryable(limit=100).items},
+            set(retryable_reasons),
+        )
+
+    def test_parse_log_merge_preserves_attempt_history_and_resolution(self) -> None:
+        resolution = ParseLogResolution(
+            resolved_at=self.base_time,
+            outcome="matched",
+            reason="catalog_match",
+            title_id="title-1",
+        )
+        existing = ParseLog(
+            id="log",
+            raw_title="Film",
+            feed_name="feed",
+            parsed_successfully=True,
+            parsed_title="Film",
+            parsed_year=2020,
+            omdb_status="found",
+            ignored=False,
+            ignore_reason=None,
+            processed_at=self.base_time,
+            retry_state="resolved",
+            attempt_count=3,
+            last_attempt_at=self.base_time,
+            resolution=resolution,
+        )
+        incoming = ParseLog(
+            id="log",
+            raw_title="Film",
+            feed_name="renamed feed",
+            parsed_successfully=True,
+            parsed_title="Film",
+            parsed_year=2020,
+            omdb_status="found",
+            ignored=False,
+            ignore_reason=None,
+            processed_at=self.later_time,
+            retry_state="resolved",
+            attempt_count=1,
+            last_attempt_at=self.later_time,
+        )
+
+        merged = merge_parse_logs(existing, incoming)
+        self.assertEqual(merged.attempt_count, 3)
+        self.assertEqual(merged.last_attempt_at, self.later_time)
+        self.assertEqual(merged.resolution, resolution)
 
         occurrence_repo = FakeOccurrenceRepository()
         occurrence = Occurrence(

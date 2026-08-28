@@ -10,8 +10,8 @@
 - IDs and upserts are deterministic to make workflow reruns safe.
 
 This document contains the current storage contract. Source context fields are
-populated consistently for new RSS occurrences and source logs. Retry state and
-the audit-proposal collection are later-stage changes.
+populated consistently for new RSS occurrences and source logs. Parse-log retry
+state is explicit; the audit-proposal collection is a later-stage change.
 OMDb cache keys are versioned by Prompt 3. A stage that
 changes any of these contracts must update this file, add emulator/fake
 compatibility tests, and document backward-read and migration behavior in the
@@ -239,9 +239,8 @@ Run IDs may be generated per execution; idempotency is required for catalog data
 
 ## `parseLogs/{logId}`
 
-One RSS parse result log entry. The current implementation retains logs for one
-week (7 days), but retryable work must not be deleted solely because it is old.
-Prompt 5 introduces explicit terminal/retryable retention semantics.
+One RSS parse result log entry. Completed logs are retained for one week (7
+days). Retryable work is never deleted solely because it is old.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -257,6 +256,46 @@ Prompt 5 introduces explicit terminal/retryable retention semantics.
 | `decision` | string or null | Stable audit decision; the temporary recheck contract uses `needs_review` and never infers it from `errorMessage` |
 | `traceDetails` | map or null | Bounded diagnostics. Match checks may include `expectedSourceType`, `matchDecision`, `matchReasonCode`, `omdbSourceType`, `omdbContentKind`, and `omdbBroadcastRange`. Recheck review logs use `auditOutcome` (`orphan`, `ai_batch_incomplete`, `mismatch_retained`), `omdbOutcome` (`missing_corrected_title`, `confirmed_not_found`, `quota_exhausted`, `transport_error`, `invalid_request`, `unexpected_error`, or `malformed_result`), and `candidateOutcome` where applicable |
 | `processedAt` | Timestamp | Time when entry was processed |
+| `retryState` | string | `retryable`, `terminal`, or `resolved`; repository writes materialize a derived state for older callers |
+| `attemptCount` | integer | Non-negative number of retry attempts; defaults to `0` |
+| `lastAttemptAt` | Timestamp or null | Time of the latest retry attempt |
+| `resolution` | map or null | Bounded completion metadata described below; never present on `retryable` records |
+
+`resolution` has an allowlisted shape: required `resolvedAt` Timestamp,
+`outcome` (`matched` or `terminal`), and a non-empty `reason` of at most 128
+characters; optional `titleId` and `occurrenceId` are each at most 256
+characters. Arbitrary evidence, external response bodies, and error blobs do
+not belong in this map.
+
+Allowed lifecycle transitions are `retryable -> retryable`, `retryable ->
+terminal`, and `retryable -> resolved`. A new observation may replace a
+completed source log under its existing deterministic source identity only when
+the source pipeline supplies a new explicit state. Merge operations preserve
+the greatest `attemptCount`, latest `lastAttemptAt`, retained source identity,
+and existing resolution metadata when a completed incoming update omits it.
+
+For legacy documents without a valid `retryState`, repositories derive a
+conservative compatibility state:
+
+| Legacy evidence | Effective state |
+| --- | --- |
+| Non-ignored `omdbStatus=found` | `resolved` |
+| `parse_error`, `entry_error`, `omdb_not_found`, `omdb_limit_reached`, or `omdb_error` | `retryable` |
+| Exclusion, parse-only, type/year rejection, ambiguity, empty/no title, or `audit_review` | `terminal` |
+| Unknown, malformed, or contradictory failure evidence | `terminal` |
+
+Unknown legacy failures are never interpreted as success and are not selected
+for automated retry. Explicit valid state is authoritative.
+
+`list_retryable` returns a bounded page ordered by `processedAt` descending and
+then parse-log document ID descending. Its exclusive typed cursor contains both
+values from the last returned item. Filtering continues through bounded
+Firestore query chunks, so intervening terminal records do not truncate a
+retry page. `list_unmapped` remains a temporary compatibility adapter returning
+the first retry page; later retry orchestration owns continuation across pages.
+
+Age-based retention deletes only completed `terminal` or `resolved` records.
+It does not delete `retryable` records regardless of `processedAt`.
 
 Parse logs may carry the same optional flat source-context fields documented for
 occurrences. Their types and missing-field defaults are identical. A legacy log
@@ -361,6 +400,11 @@ Create only indexes demanded by implemented Firestore errors/queries. The base
 newest-first query may rely on built-in indexes. Any compound media type, country,
 rating, votes, or date query must be reflected in `firestore.indexes.json` and in
 this contract when introduced.
+
+Retry selection uses the `parseLogs` collection index ordered by `processedAt`
+descending and document ID descending. It intentionally does not filter on
+`retryState` in Firestore because legacy documents without that field must pass
+through compatibility classification.
 
 ## Write Ownership Summary
 

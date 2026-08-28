@@ -3,7 +3,62 @@ import copy
 import datetime
 from typing import Any, Dict, List, Optional
 
-from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, SourceContext, Title
+from .models import (
+    ManualMapping,
+    OmdbCacheEntry,
+    Occurrence,
+    ParseLog,
+    RetryCursor,
+    RetryPage,
+    RetryState,
+    ScanRun,
+    SourceContext,
+    Title,
+)
+
+
+_RETRYABLE_REASONS = frozenset({
+    "entry_error",
+    "omdb_error",
+    "omdb_limit_reached",
+    "omdb_not_found",
+    "parse_error",
+})
+_TERMINAL_REASONS = frozenset({
+    "audit_needs_review",
+    "empty_title",
+    "excluded_country_or_genre",
+    "match_ambiguous",
+    "media_type_mismatch",
+    "no_title",
+    "parse_only",
+    "year_mismatch",
+})
+
+
+def effective_retry_state(log: ParseLog) -> RetryState:
+    if log.retry_state is not None:
+        return log.retry_state
+    if log.event_kind == "audit_review":
+        return "terminal"
+    if log.omdb_status == "found" and not log.ignored:
+        return "resolved"
+    if log.ignore_reason in _RETRYABLE_REASONS:
+        return "retryable"
+    if log.ignore_reason in _TERMINAL_REASONS:
+        return "terminal"
+    return "terminal"
+
+
+def _resolution_matches_state(log: ParseLog) -> bool:
+    if log.resolution is None:
+        return False
+    state = effective_retry_state(log)
+    return (
+        state == "resolved" and log.resolution.outcome == "matched"
+    ) or (
+        state == "terminal" and log.resolution.outcome == "terminal"
+    )
 
 
 def merge_source_context(
@@ -103,6 +158,15 @@ def merge_occurrences(existing: Occurrence, incoming: Occurrence) -> Occurrence:
 def merge_parse_logs(existing: ParseLog, incoming: ParseLog) -> ParseLog:
     merged = copy.deepcopy(incoming)
     merged.source_context = merge_source_context(existing.source_context, incoming.source_context)
+    merged.attempt_count = max(existing.attempt_count, incoming.attempt_count)
+    attempt_times = [
+        value
+        for value in (existing.last_attempt_at, incoming.last_attempt_at)
+        if value is not None
+    ]
+    merged.last_attempt_at = max(attempt_times) if attempt_times else None
+    if incoming.resolution is None and _resolution_matches_state(existing):
+        merged.resolution = copy.deepcopy(existing.resolution)
     return merged
 
 
@@ -247,9 +311,17 @@ class ParseLogRepository(ABC):
         """Lists recent parse log entries."""
         pass
 
-    @abstractmethod
     def list_unmapped(self, limit: int = 200) -> List[ParseLog]:
-        """Lists recent unmapped/not_found/error parse logs."""
+        """Compatibility adapter returning the first bounded retry page."""
+        return self.list_retryable(limit=limit).items
+
+    @abstractmethod
+    def list_retryable(
+        self,
+        limit: int = 200,
+        cursor: Optional[RetryCursor] = None,
+    ) -> RetryPage:
+        """Lists retryable parse logs in deterministic newest-first order."""
         pass
 
 
@@ -340,10 +412,16 @@ class FakeParseLogRepository(ParseLogRepository):
     def add(self, log: ParseLog) -> None:
         existing = self._store.get(log.id)
         incoming = copy.deepcopy(log)
+        if incoming.retry_state is None:
+            incoming.retry_state = effective_retry_state(incoming)
         self._store[log.id] = merge_parse_logs(existing, incoming) if existing else incoming
 
     def prune_older_than(self, cutoff: datetime.datetime) -> int:
-        to_delete = [log_id for log_id, log in self._store.items() if log.processed_at < cutoff]
+        to_delete = [
+            log_id
+            for log_id, log in self._store.items()
+            if log.processed_at < cutoff and effective_retry_state(log) != "retryable"
+        ]
         for log_id in to_delete:
             del self._store[log_id]
         return len(to_delete)
@@ -352,13 +430,30 @@ class FakeParseLogRepository(ParseLogRepository):
         sorted_logs = sorted(self._store.values(), key=lambda l: l.processed_at, reverse=True)
         return copy.deepcopy(sorted_logs[:limit])
 
-    def list_unmapped(self, limit: int = 200) -> List[ParseLog]:
-        unmapped = [
-            l for l in self._store.values()
-            if l.omdb_status in ("not_found", "error", "not_parsed", "skipped") or l.ignored
-        ]
-        sorted_unmapped = sorted(unmapped, key=lambda l: l.processed_at, reverse=True)
-        return copy.deepcopy(sorted_unmapped[:limit])
+    def list_retryable(
+        self,
+        limit: int = 200,
+        cursor: Optional[RetryCursor] = None,
+    ) -> RetryPage:
+        if limit <= 0 or limit > 500:
+            raise ValueError("retry page limit must be between 1 and 500")
+        ordered = sorted(
+            (log for log in self._store.values() if effective_retry_state(log) == "retryable"),
+            key=lambda log: (log.processed_at, log.id),
+            reverse=True,
+        )
+        if cursor is not None:
+            ordered = [
+                log
+                for log in ordered
+                if (log.processed_at, log.id) < (cursor.processed_at, cursor.log_id)
+            ]
+        page_items = ordered[:limit]
+        next_cursor = None
+        if len(ordered) > limit:
+            last = page_items[-1]
+            next_cursor = RetryCursor(last.processed_at, last.id)
+        return RetryPage(copy.deepcopy(page_items), next_cursor)
 
     def get_all(self) -> List[ParseLog]:
         return copy.deepcopy(list(self._store.values()))

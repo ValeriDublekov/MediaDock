@@ -20,6 +20,7 @@ from movies_feed import (
     ScanRun,
     SourceContext,
     ParseLog,
+    ParseLogResolution,
     ManualMapping,
     get_title_id,
     get_occurrence_id,
@@ -258,6 +259,74 @@ class DictDeserializationTests(unittest.TestCase):
         self.assertEqual(p.raw_title, "Raw 1")
         self.assertEqual(p.feed_name, "Feed 1")
         self.assertTrue(p.parsed_successfully)
+
+    def test_parse_log_retry_metadata_round_trip_and_legacy_derivation(self) -> None:
+        resolution = ParseLogResolution(
+            resolved_at=self.observed_at,
+            outcome="matched",
+            reason="catalog_match",
+            title_id="title-1",
+            occurrence_id="occurrence-1",
+        )
+        log = ParseLog(
+            id="resolved-log",
+            raw_title="Resolved Film",
+            feed_name="Feed",
+            parsed_successfully=True,
+            parsed_title="Resolved Film",
+            parsed_year=2026,
+            omdb_status="found",
+            ignored=False,
+            ignore_reason=None,
+            processed_at=self.observed_at,
+            retry_state="resolved",
+            attempt_count=2,
+            last_attempt_at=self.observed_at,
+            resolution=resolution,
+        )
+
+        restored = parse_log_from_dict(log.to_dict())
+        self.assertEqual(restored.retry_state, "resolved")
+        self.assertEqual(restored.attempt_count, 2)
+        self.assertEqual(restored.last_attempt_at, self.observed_at)
+        self.assertEqual(restored.resolution, resolution)
+
+        legacy_retryable = parse_log_from_dict({
+            "rawTitle": "Legacy failure",
+            "feedName": "Feed",
+            "parsedSuccessfully": True,
+            "omdbStatus": "not_found",
+            "ignored": True,
+            "ignoreReason": "omdb_not_found",
+            "processedAt": self.observed_at,
+        }, doc_id="legacy-retryable")
+        unknown_legacy = parse_log_from_dict({
+            "rawTitle": "Unknown failure",
+            "feedName": "Feed",
+            "parsedSuccessfully": False,
+            "omdbStatus": "error",
+            "ignored": True,
+            "ignoreReason": "unknown_failure",
+            "processedAt": self.observed_at,
+            "retryState": "invalid",
+            "attemptCount": -5,
+        }, doc_id="legacy-unknown")
+        self.assertEqual(legacy_retryable.retry_state, "retryable")
+        self.assertEqual(unknown_legacy.retry_state, "terminal")
+        self.assertEqual(unknown_legacy.attempt_count, 0)
+
+        legacy_retryable_with_resolution = parse_log_from_dict({
+            "rawTitle": "Contradictory failure",
+            "feedName": "Feed",
+            "parsedSuccessfully": True,
+            "omdbStatus": "error",
+            "ignored": True,
+            "ignoreReason": "omdb_error",
+            "processedAt": self.observed_at,
+            "resolution": resolution.to_dict(),
+        }, doc_id="legacy-contradictory")
+        self.assertEqual(legacy_retryable_with_resolution.retry_state, "retryable")
+        self.assertIsNone(legacy_retryable_with_resolution.resolution)
 
 
 @unittest.skipIf(
@@ -572,6 +641,43 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
 
         remaining = repo.list_recent()
         self.assertEqual(len(remaining), 0)
+
+    def test_parse_log_retry_pagination_and_retention(self) -> None:
+        repo = FirestoreParseLogRepository(self.db)
+
+        def add(log_id: str, reason: str, offset: int, retry_state=None) -> None:
+            repo.add(ParseLog(
+                id=log_id,
+                raw_title=log_id,
+                feed_name="Feed",
+                parsed_successfully=True,
+                parsed_title=log_id,
+                parsed_year=2020,
+                omdb_status="not_found",
+                ignored=True,
+                ignore_reason=reason,
+                processed_at=self.base_time + datetime.timedelta(minutes=offset),
+                retry_state=retry_state,
+            ))
+
+        add("retry-b", "omdb_not_found", 1)
+        add("retry-a", "parse_error", 1)
+        add("excluded", "excluded_country_or_genre", 2)
+        add("resolved", "omdb_not_found", 3, "resolved")
+
+        first = repo.list_retryable(limit=1)
+        self.assertEqual([log.id for log in first.items], ["retry-b"])
+        self.assertIsNotNone(first.next_cursor)
+        second = repo.list_retryable(limit=1, cursor=first.next_cursor)
+        self.assertEqual([log.id for log in second.items], ["retry-a"])
+        self.assertIsNone(second.next_cursor)
+
+        deleted = repo.prune_older_than(self.later_time)
+        self.assertEqual(deleted, 2)
+        self.assertEqual(
+            [log.id for log in repo.list_retryable(limit=10).items],
+            ["retry-b", "retry-a"],
+        )
 
     def test_manual_mapping_repository_persistence(self) -> None:
         repo = FirestoreManualMappingRepository(self.db)

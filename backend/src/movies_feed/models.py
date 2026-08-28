@@ -222,6 +222,54 @@ class ScanRun:
         return res
 
 
+RetryState = Literal["retryable", "terminal", "resolved"]
+ResolutionOutcome = Literal["matched", "terminal"]
+
+
+@dataclass(frozen=True)
+class ParseLogResolution:
+    resolved_at: datetime.datetime
+    outcome: ResolutionOutcome
+    reason: str
+    title_id: Optional[str] = None
+    occurrence_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.resolved_at, datetime.datetime):
+            raise ValueError("resolved_at must be a datetime")
+        if self.outcome not in ("matched", "terminal"):
+            raise ValueError("resolution outcome must be matched or terminal")
+        if not isinstance(self.reason, str) or not self.reason or len(self.reason) > 128:
+            raise ValueError("resolution reason must contain 1..128 characters")
+        for value in (self.title_id, self.occurrence_id):
+            if value is not None and (not isinstance(value, str) or len(value) > 256):
+                raise ValueError("resolution identifiers must not exceed 256 characters")
+
+    def to_dict(self) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "resolvedAt": self.resolved_at,
+            "outcome": self.outcome,
+            "reason": self.reason,
+        }
+        if self.title_id is not None:
+            result["titleId"] = self.title_id
+        if self.occurrence_id is not None:
+            result["occurrenceId"] = self.occurrence_id
+        return result
+
+
+@dataclass(frozen=True)
+class RetryCursor:
+    processed_at: datetime.datetime
+    log_id: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.processed_at, datetime.datetime):
+            raise ValueError("retry cursor processed_at must be a datetime")
+        if not isinstance(self.log_id, str) or not self.log_id:
+            raise ValueError("retry cursor log_id must not be empty")
+
+
 @dataclass
 class ParseLog:
     id: str
@@ -239,6 +287,42 @@ class ParseLog:
     decision: Optional[str] = None
     source_context: Optional[SourceContext] = None
     event_kind: Optional[Literal["source", "audit_review"]] = None
+    retry_state: Optional[RetryState] = None
+    attempt_count: int = 0
+    last_attempt_at: Optional[datetime.datetime] = None
+    resolution: Optional[ParseLogResolution] = None
+
+    def __post_init__(self) -> None:
+        if self.retry_state is not None and self.retry_state not in (
+            "retryable",
+            "terminal",
+            "resolved",
+        ):
+            raise ValueError("invalid retry state")
+        if (
+            not isinstance(self.attempt_count, int)
+            or isinstance(self.attempt_count, bool)
+            or self.attempt_count < 0
+        ):
+            raise ValueError("attempt_count must not be negative")
+        if self.last_attempt_at is not None and not isinstance(
+            self.last_attempt_at, datetime.datetime
+        ):
+            raise ValueError("last_attempt_at must be a datetime")
+        if self.resolution is not None and self.retry_state == "retryable":
+            raise ValueError("retryable parse logs cannot have resolution metadata")
+        if (
+            self.resolution is not None
+            and self.retry_state == "resolved"
+            and self.resolution.outcome != "matched"
+        ):
+            raise ValueError("resolved parse logs require a matched resolution outcome")
+        if (
+            self.resolution is not None
+            and self.retry_state == "terminal"
+            and self.resolution.outcome != "terminal"
+        ):
+            raise ValueError("terminal parse logs require a terminal resolution outcome")
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the ParseLog model to a camelCase Firestore dictionary."""
@@ -263,7 +347,20 @@ class ParseLog:
         _merge_source_context(res, self.source_context)
         if self.event_kind is not None:
             res["eventKind"] = self.event_kind
+        if self.retry_state is not None:
+            res["retryState"] = self.retry_state
+        res["attemptCount"] = self.attempt_count
+        if self.last_attempt_at is not None:
+            res["lastAttemptAt"] = self.last_attempt_at
+        if self.resolution is not None:
+            res["resolution"] = self.resolution.to_dict()
         return res
+
+
+@dataclass(frozen=True)
+class RetryPage:
+    items: List[ParseLog]
+    next_cursor: Optional[RetryCursor]
 
 
 @dataclass

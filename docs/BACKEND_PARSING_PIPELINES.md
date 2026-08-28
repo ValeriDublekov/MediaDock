@@ -29,7 +29,7 @@ are tracked in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 | `match_policy.py` | Shared typed media classification, source-type compatibility, year semantics, broadcast ranges, and exclusions. |
 | `ai_matcher.py` | Gemini batch title extraction, OMDb candidate validation, and stored-match audit. The active prompt strings are currently inline; the files under `prompts/` are not loaded by the current implementation. |
 | `scanner.py` | Orchestrates feeds, matching, filtering, repair, logging, and persistence. |
-| `repository.py` / `firestore_repository.py` | In-memory and Firestore persistence plus title/occurrence merge rules. |
+| `repository.py` / `firestore_repository.py` | In-memory and Firestore persistence, title/occurrence merge rules, and deterministic retry-page selection. |
 
 ### Regex title parsing
 
@@ -72,8 +72,8 @@ The normal RSS path does **not** call Gemini for extraction or candidate validat
 | `recheck-existing` | Stored titles not marked `aiValidated` | No new regex parse | Yes / one run-wide actual-HTTP budget | Audit + conditional validate | Explicit valid flag or review parse logs; no catalog repair |
 | `all` | All of the above | Mixed | One shared budget across phases | Yes in phases 2-3 | Union of all writes |
 
-Non-parse-only runs first load manual mappings and prune parse logs older than
-seven days. The configured trigger (`schedule`, `manual`, or `local`) is
+Non-parse-only runs first load manual mappings and prune completed parse logs
+older than seven days. Retryable work is retained regardless of age. The configured trigger (`schedule`, `manual`, or `local`) is
 metadata only and does not change matching behavior. The CLI preflight requires
 Firebase credentials for Firestore modes, OMDb credentials for modes that can
 query OMDb, and Gemini credentials for AI modes. It returns exit code `0` only
@@ -103,7 +103,9 @@ errors.
 
 ### 2. Parse-log reprocessing (`--mode reparse-unfound`)
 
-1. Read up to 200 recent logs selected when their OMDb status is unresolved **or when `ignored == true`**.
+1. Read the first bounded retry page, ordered by processing time and source-log
+	ID descending. A compatibility adapter excludes completed, audit, filtered,
+	parse-only, type/year-rejected, malformed, and unknown legacy records.
 2. Deduplicate by exact, case-sensitive raw title.
 3. Send batches of 15 raw titles to Gemini with the stored feed type when available; otherwise use `unknown` and allow inference.
 4. Use Gemini's title, year, and media type for an `OmdbResolver` lookup through the shared cache and run-wide HTTP budget.
@@ -187,8 +189,8 @@ map to a non-zero CLI exit code.
 | Resolved for Prompt 1 | A title without occurrences was audited by using its own stored title as the raw source text. | Orphaned or partially written titles could self-validate without any source evidence. | Orphans now persist as `decision=needs_review` and are never sent to the AI audit. |
 | Medium | RSS regex parsing runs twice per entry, including entries later removed by `force_days`. | Duplicate CPU work and possible future divergence between prefetch and processing. | Parse once into an entry context, filter by date first, then use the same parsed result for prefetch and processing. |
 | Medium | Reparse labels every AI item as a movie and does not preserve feed type in parse logs. | Series extraction is biased and differs from normal RSS behavior. | Store `feedType` in `ParseLog` and pass it to AI; use `unknown` rather than a false movie default. |
-| Medium | `list_unmapped()` includes every ignored log, including exclusions, parse-only, quota skips, and already-found type/year rejects. Firestore only examines the newest `limit * 2` logs. | Wasted AI calls and missed older eligible failures. | Query explicit retryable states with a resolution/retry status and paginate until the requested count is reached. |
-| Medium | Unresolved logs are pruned after seven days before reprocessing starts. | A week-long AI outage or retry backlog permanently discards pending work. | Apply retention only to terminal logs; retain or archive retryable work according to explicit attempt/age policy. |
+| Resolved for Prompt 5A | Retry selection previously included every ignored log and could miss eligible work beyond the newest records. | Fake and Firestore repositories now expose bounded deterministic retry pages and derive conservative compatibility state for legacy logs. Scanner continuation and retry execution remain Prompt 5B. | Keep repository parity, cursor, and filtering tests green. |
+| Resolved for Prompt 5A | Unresolved logs were pruned after seven days before reprocessing started. | Age-based retention now removes only terminal/resolved records and preserves retryable work. | Keep old-retryable retention tests green. |
 | Medium | Manual mappings are deleted immediately after IMDb retrieval, before filtering and durable catalog writes. | A later rejection/write failure loses the user's correction. | Delete or mark a mapping consumed only after an atomic successful persistence step. |
 | Medium | Reparse successes are not marked `aiValidated`; repair counters also count upserts as creations. | Repaired data is re-audited and run metrics are inaccurate. | Persist validation provenance and return explicit created/updated/moved/deleted outcomes from repositories. |
 | Resolved for Prompt 4C | Firestore `upsert_many()` overwrote instead of applying the merge contract. | Bulk title, occurrence, and source-log writes now delegate to the same transactional merge path as single writes. | Keep fake/Firestore single-versus-bulk contract tests green. |

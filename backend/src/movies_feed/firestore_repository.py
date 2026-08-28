@@ -3,9 +3,21 @@ import datetime
 from typing import Any, Dict, List, Optional
 import firebase_admin
 from firebase_admin import credentials, firestore
+from google.cloud.firestore_v1.field_path import FieldPath
 
 from .match_policy import broadcast_range_from_dict, effective_source_type
-from .models import ManualMapping, OmdbCacheEntry, Occurrence, ParseLog, ScanRun, SourceContext, Title
+from .models import (
+    ManualMapping,
+    OmdbCacheEntry,
+    Occurrence,
+    ParseLog,
+    ParseLogResolution,
+    RetryCursor,
+    RetryPage,
+    ScanRun,
+    SourceContext,
+    Title,
+)
 from .repository import (
     ManualMappingRepository,
     OmdbCacheRepository,
@@ -13,6 +25,7 @@ from .repository import (
     ParseLogRepository,
     ScanRunRepository,
     TitleRepository,
+    effective_retry_state,
     merge_occurrences,
     merge_parse_logs,
     merge_titles,
@@ -176,7 +189,26 @@ def scan_run_from_dict(d: dict) -> ScanRun:
 def parse_log_from_dict(d: dict, doc_id: Optional[str] = None) -> ParseLog:
     """Reconstructs a ParseLog model from a camelCase dictionary retrieved from Firestore."""
     log_id = d.get("id") or doc_id or ""
-    return ParseLog(
+    retry_state = d.get("retryState")
+    if retry_state not in ("retryable", "terminal", "resolved"):
+        retry_state = None
+    attempt_count = d.get("attemptCount", 0)
+    if not isinstance(attempt_count, int) or isinstance(attempt_count, bool) or attempt_count < 0:
+        attempt_count = 0
+    resolution = None
+    resolution_data = d.get("resolution")
+    if isinstance(resolution_data, dict):
+        try:
+            resolution = ParseLogResolution(
+                resolved_at=resolution_data["resolvedAt"],
+                outcome=resolution_data["outcome"],
+                reason=resolution_data["reason"],
+                title_id=resolution_data.get("titleId"),
+                occurrence_id=resolution_data.get("occurrenceId"),
+            )
+        except (KeyError, TypeError, ValueError):
+            resolution = None
+    log = ParseLog(
         id=log_id,
         raw_title=d.get("rawTitle", ""),
         feed_name=d.get("feedName", ""),
@@ -192,7 +224,21 @@ def parse_log_from_dict(d: dict, doc_id: Optional[str] = None) -> ParseLog:
         decision=d.get("decision"),
         source_context=source_context_from_dict(d),
         event_kind=d.get("eventKind"),
+        retry_state=retry_state,
+        attempt_count=attempt_count,
+        last_attempt_at=d.get("lastAttemptAt"),
+        resolution=resolution,
     )
+    log.retry_state = effective_retry_state(log)
+    if log.retry_state == "retryable" or (
+        log.resolution is not None
+        and (
+            (log.retry_state == "resolved" and log.resolution.outcome != "matched")
+            or (log.retry_state == "terminal" and log.resolution.outcome != "terminal")
+        )
+    ):
+        log.resolution = None
+    return log
 
 
 def manual_mapping_from_dict(d: dict, doc_id: Optional[str] = None) -> ManualMapping:
@@ -445,6 +491,8 @@ class FirestoreParseLogRepository(ParseLogRepository):
             if snapshot.exists:
                 existing = parse_log_from_dict(snapshot.to_dict(), doc_id=snapshot.id)
                 stored_log = merge_parse_logs(existing, log)
+            if stored_log.retry_state is None:
+                stored_log.retry_state = effective_retry_state(stored_log)
             transaction.set(doc_ref, stored_log.to_dict())
 
         transaction = self.db.transaction()
@@ -459,8 +507,10 @@ class FirestoreParseLogRepository(ParseLogRepository):
         docs = list(query.stream())
         deleted_count = 0
         for doc in docs:
-            doc.reference.delete()
-            deleted_count += 1
+            log = parse_log_from_dict(doc.to_dict(), doc_id=doc.id)
+            if effective_retry_state(log) != "retryable":
+                doc.reference.delete()
+                deleted_count += 1
         return deleted_count
 
     def list_recent(self, limit: int = 100) -> List[ParseLog]:
@@ -468,18 +518,47 @@ class FirestoreParseLogRepository(ParseLogRepository):
         docs = query.stream()
         return [parse_log_from_dict(doc.to_dict(), doc_id=doc.id) for doc in docs]
 
-    def list_unmapped(self, limit: int = 200) -> List[ParseLog]:
-        # Query recent parse logs and filter unmapped/ignored
-        query = self.collection_ref.order_by("processedAt", direction=firestore.Query.DESCENDING).limit(limit * 2)
-        docs = query.stream()
-        unmapped = []
-        for doc in docs:
-            log = parse_log_from_dict(doc.to_dict(), doc_id=doc.id)
-            if log.omdb_status in ("not_found", "error", "not_parsed", "skipped") or log.ignored:
-                unmapped.append(log)
-                if len(unmapped) >= limit:
-                    break
-        return unmapped
+    def list_retryable(
+        self,
+        limit: int = 200,
+        cursor: Optional[RetryCursor] = None,
+    ) -> RetryPage:
+        if limit <= 0 or limit > 500:
+            raise ValueError("retry page limit must be between 1 and 500")
+        base_query = self.collection_ref.order_by(
+            "processedAt", direction=firestore.Query.DESCENDING
+        ).order_by(
+            FieldPath.document_id(), direction=firestore.Query.DESCENDING
+        )
+        if cursor is not None:
+            base_query = base_query.start_after({
+                "processedAt": cursor.processed_at,
+                FieldPath.document_id(): self.collection_ref.document(cursor.log_id),
+            })
+
+        selected: List[ParseLog] = []
+        query = base_query
+        chunk_size = min(max(limit * 2, 25), 500)
+        while len(selected) <= limit:
+            docs = list(query.limit(chunk_size).stream())
+            if not docs:
+                break
+            for doc in docs:
+                log = parse_log_from_dict(doc.to_dict(), doc_id=doc.id)
+                if effective_retry_state(log) == "retryable":
+                    selected.append(log)
+                    if len(selected) > limit:
+                        break
+            if len(selected) > limit or len(docs) < chunk_size:
+                break
+            query = base_query.start_after(docs[-1])
+
+        page_items = selected[:limit]
+        next_cursor = None
+        if len(selected) > limit:
+            last = page_items[-1]
+            next_cursor = RetryCursor(last.processed_at, last.id)
+        return RetryPage(page_items, next_cursor)
 
 
 class FirestoreManualMappingRepository(ManualMappingRepository):
