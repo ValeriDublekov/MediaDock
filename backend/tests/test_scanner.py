@@ -2,7 +2,7 @@ import datetime
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from movies_feed.models import ManualMapping, OmdbCacheEntry, ParseLog, SourceContext, Title, Occurrence, ScanRun
 from movies_feed.omdb_client import OmdbMovieResult, OmdbLimitReachedError, OmdbTransportError, OmdbNoMatchError, OmdbClient, HttpTransport
@@ -124,6 +124,40 @@ class TestScanner(unittest.TestCase):
             manual_mapping_repo=self.manual_mapping_repo,
             now=self.now,
             feed_fetcher=StaticTestFeedFetcher(),
+        )
+
+    def make_retry_log(
+        self,
+        log_id: str,
+        raw_title: str,
+        *,
+        source_feed_id: str,
+        feed_entry_id: str,
+        feed_type: str = "movie",
+        processed_at: Optional[datetime.datetime] = None,
+    ) -> ParseLog:
+        return ParseLog(
+            id=log_id,
+            raw_title=raw_title,
+            feed_name=source_feed_id,
+            parsed_successfully=True,
+            parsed_title=None,
+            parsed_year=None,
+            omdb_status="not_found",
+            ignored=True,
+            ignore_reason="omdb_not_found",
+            processed_at=processed_at or self.now,
+            source_context=SourceContext(
+                source_feed_id=source_feed_id,
+                source_feed_name=source_feed_id,
+                feed_type=feed_type,
+                feed_entry_id=feed_entry_id,
+                torrent_url=f"https://example.test/{source_feed_id}/{feed_entry_id}",
+                raw_title=raw_title,
+                source_published_at=self.now - datetime.timedelta(days=2),
+                observed_at=self.now - datetime.timedelta(days=1),
+            ),
+            event_kind="source",
         )
 
     def make_series_result(
@@ -657,6 +691,17 @@ class TestScanner(unittest.TestCase):
             ignore_reason="omdb_not_found",
             processed_at=self.now,
             trace_details={"feedType": "series"},
+            source_context=SourceContext(
+                source_feed_id="series-feed",
+                source_feed_name="Series Feed",
+                feed_type="series",
+                feed_entry_id="unmapped-series-entry",
+                torrent_url="https://example.test/series/unmapped",
+                raw_title="Seasoned Show / Сезон 5 [2012]",
+                source_published_at=self.now - datetime.timedelta(days=2),
+                observed_at=self.now - datetime.timedelta(days=1),
+            ),
+            event_kind="source",
         )
         self.parse_log_repo.add(source_log)
         config = ScannerConfig(mode="reparse-unfound")
@@ -677,6 +722,367 @@ class TestScanner(unittest.TestCase):
         extract_items = mock_ai.batch_extract_titles.call_args.args[0]
         self.assertEqual(extract_items[0]["feed_type"], "series")
         self.assertIsNotNone(self.title_repo.get(result.imdb_id))
+
+    def test_reparse_resolves_retained_manual_mapping_before_gemini(self):
+        source_context = SourceContext(
+            source_feed_id="archive",
+            source_feed_name="Archive Display",
+            feed_type="movie",
+            feed_entry_id="archived-entry",
+            torrent_url="https://example.test/archive/1",
+            raw_title="Archived Matrix Release",
+            source_published_at=self.now - datetime.timedelta(days=10),
+            observed_at=self.now - datetime.timedelta(days=2),
+        )
+        source_log = ParseLog(
+            id=get_source_item_id("archive", "archived-entry", source_context.torrent_url),
+            raw_title="Archived Matrix Release",
+            feed_name="Archive",
+            parsed_successfully=True,
+            parsed_title="Archived Matrix",
+            parsed_year=1999,
+            omdb_status="not_found",
+            ignored=True,
+            ignore_reason="omdb_not_found",
+            processed_at=self.now,
+            source_context=source_context,
+            event_kind="source",
+        )
+        self.parse_log_repo.add(source_log)
+        mapping = ManualMapping(
+            id=source_log.id,
+            raw_title="Unrelated mapping label",
+            parsed_title="Archived Matrix",
+            parsed_year=1999,
+            imdb_id=self.valid_movie.imdb_id,
+            created_at=self.now,
+        )
+        self.manual_mapping_repo.set(mapping)
+
+        scanner = self.create_scanner(
+            ScannerConfig(mode="reparse-unfound"),
+            MockOmdbClient({self.valid_movie.imdb_id: self.valid_movie}),
+        )
+        from unittest.mock import MagicMock
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        mock_ai.batch_extract_titles.side_effect = AssertionError(
+            "retained manual mappings must be resolved before Gemini"
+        )
+        scanner.ai_matcher = mock_ai
+
+        run = scanner.run("retained_manual_mapping")
+
+        title_id = get_title_id_v2(
+            self.valid_movie.imdb_id,
+            self.valid_movie.title,
+            self.valid_movie.year,
+            self.valid_movie.media_type,
+        )
+        occurrence_id = get_source_item_id(
+            source_context.source_feed_id,
+            source_context.feed_entry_id,
+            source_context.torrent_url,
+        )
+        self.assertEqual(run.status, "succeeded")
+        self.assertIsNotNone(self.title_repo.get(title_id))
+        occurrence = self.occ_repo.get(title_id, occurrence_id)
+        self.assertIsNotNone(occurrence)
+        self.assertEqual(occurrence.source_context, source_context)
+        self.assertEqual(occurrence.feed_entry_id, source_context.feed_entry_id)
+        self.assertEqual(occurrence.torrent_url, source_context.torrent_url)
+        resolved_log = next(
+            log for log in self.parse_log_repo.get_all() if log.id == source_log.id
+        )
+        self.assertEqual(resolved_log.retry_state, "resolved")
+        self.assertIsNotNone(resolved_log.resolution)
+        self.assertEqual(resolved_log.resolution.title_id, title_id)
+        self.assertEqual(resolved_log.resolution.occurrence_id, occurrence_id)
+        self.assertEqual(resolved_log.attempt_count, 1)
+        self.assertEqual(self.manual_mapping_repo.get_all(), [])
+
+    def test_reparse_failure_updates_same_log_and_remains_retryable(self):
+        source_log = self.make_retry_log(
+            "retry-failure",
+            "Missing Film (2020)",
+            source_feed_id="archive",
+            feed_entry_id="missing-film",
+        )
+        self.parse_log_repo.add(source_log)
+        scanner = self.create_scanner(
+            ScannerConfig(mode="reparse-unfound"),
+            MockOmdbClient({}),
+        )
+        from unittest.mock import MagicMock
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        mock_ai.batch_extract_titles.return_value = {
+            0: {"title": "Missing Film", "year": 2020, "media_type": "movie"}
+        }
+        scanner.ai_matcher = mock_ai
+        run = ScanRun(started_at=self.now, finished_at=None, status="running", trigger="local")
+
+        stats = scanner.reparse_unfound_entries(
+            run=run,
+            section_timings={"omdb_api": 0.0, "parse_log_write": 0.0},
+        )
+
+        logs = self.parse_log_repo.get_all()
+        self.assertEqual([log.id for log in logs], [source_log.id])
+        self.assertEqual(logs[0].retry_state, "retryable")
+        self.assertEqual(logs[0].attempt_count, 1)
+        self.assertIsNone(logs[0].resolution)
+        self.assertEqual(stats["retried"], 1)
+        self.assertEqual(stats["reparsed_succeeded"], 0)
+        self.assertEqual(stats["reparsed_failed"], 1)
+        self.assertEqual(self.title_repo.list_all(), [])
+
+    def test_reparse_paginates_and_deduplicates_by_source_identity(self):
+        for index in range(201):
+            raw_title = "same title" if index % 2 else "Same Title"
+            self.parse_log_repo.add(
+                self.make_retry_log(
+                    f"retry-page-{index}",
+                    raw_title,
+                    source_feed_id=f"feed-{index}",
+                    feed_entry_id=f"entry-{index}",
+                    processed_at=self.now - datetime.timedelta(minutes=index),
+                )
+            )
+
+        scanner = self.create_scanner(
+            ScannerConfig(mode="reparse-unfound", omdb_limit=10),
+            MockOmdbClient({"the matrix": self.valid_movie}),
+        )
+        from unittest.mock import MagicMock, patch
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        mock_ai.batch_extract_titles.side_effect = lambda items: {
+            item["id"]: {
+                "title": "The Matrix",
+                "year": 1999,
+                "media_type": "movie",
+            }
+            for item in items
+        }
+        scanner.ai_matcher = mock_ai
+        run = ScanRun(started_at=self.now, finished_at=None, status="running", trigger="local")
+
+        with patch("movies_feed.reparse_service.time.sleep") as sleep:
+            stats = scanner.reparse_unfound_entries(
+                run=run,
+                section_timings={"omdb_api": 0.0, "parse_log_write": 0.0},
+            )
+
+        self.assertEqual(stats["unmapped_seen"], 201)
+        self.assertEqual(stats["resolved"], 201)
+        self.assertEqual(stats["reparsed_succeeded"], 201)
+        self.assertEqual(stats["reparsed_failed"], 0)
+        self.assertEqual(mock_ai.batch_extract_titles.call_count, 15)
+        self.assertEqual(sleep.call_count, 14)
+        occurrences = self.occ_repo.list_by_title(self.valid_movie.imdb_id)
+        self.assertEqual(len(occurrences), 201)
+        self.assertEqual(len(self.parse_log_repo.get_all()), 201)
+
+    def test_reparse_skips_duplicate_logs_for_one_source_identity(self):
+        source_log = self.make_retry_log(
+            "primary-source-log",
+            "Same Title",
+            source_feed_id="archive",
+            feed_entry_id="same-entry",
+        )
+        duplicate_log = replace(
+            source_log,
+            id="duplicate-source-log",
+            raw_title="same title",
+        )
+        self.parse_log_repo.add(source_log)
+        self.parse_log_repo.add(duplicate_log)
+        scanner = self.create_scanner(
+            ScannerConfig(mode="reparse-unfound"),
+            MockOmdbClient({"the matrix": self.valid_movie}),
+        )
+        from unittest.mock import MagicMock
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        mock_ai.batch_extract_titles.return_value = {
+            0: {"title": "The Matrix", "year": 1999, "media_type": "movie"}
+        }
+        scanner.ai_matcher = mock_ai
+
+        stats = scanner.reparse_unfound_entries(
+            section_timings={"omdb_api": 0.0, "parse_log_write": 0.0},
+        )
+
+        self.assertEqual(stats["resolved"], 1)
+        self.assertEqual(stats["skipped"], 1)
+        self.assertEqual(mock_ai.batch_extract_titles.call_count, 1)
+        occurrences = self.occ_repo.list_by_title(self.valid_movie.imdb_id)
+        self.assertEqual(len(occurrences), 1)
+        self.assertEqual(len(self.parse_log_repo.get_all()), 2)
+
+    def test_reparse_catalog_write_failure_retries_original_log_and_keeps_mapping(self):
+        source_log = self.make_retry_log(
+            "write-failure",
+            "Write Failure Film (2020)",
+            source_feed_id="archive",
+            feed_entry_id="write-failure-film",
+        )
+        self.parse_log_repo.add(source_log)
+        mapping = ManualMapping(
+            id=get_source_item_id(
+                "archive",
+                "write-failure-film",
+                "https://example.test/archive/write-failure-film",
+            ),
+            raw_title="Write Failure Film",
+            imdb_id=self.valid_movie.imdb_id,
+            created_at=self.now,
+        )
+        self.manual_mapping_repo.set(mapping)
+
+        def failing_upsert(title_id, occurrence_id, occurrence):
+            raise RuntimeError("simulated occurrence write failure")
+
+        self.occ_repo.upsert = failing_upsert
+        scanner = self.create_scanner(
+            ScannerConfig(mode="reparse-unfound"),
+            MockOmdbClient({self.valid_movie.imdb_id: self.valid_movie}),
+        )
+
+        stats = scanner.reparse_unfound_entries(
+            section_timings={"omdb_api": 0.0, "parse_log_write": 0.0},
+        )
+
+        logs = self.parse_log_repo.get_all()
+        self.assertEqual([log.id for log in logs], [source_log.id])
+        self.assertEqual(logs[0].retry_state, "retryable")
+        self.assertEqual(logs[0].attempt_count, 1)
+        self.assertEqual(stats["retried"], 1)
+        self.assertEqual(stats["failed"], 0)
+        self.assertEqual([item.id for item in self.manual_mapping_repo.get_all()], [mapping.id])
+
+    def test_reparse_skips_legacy_retry_without_source_context(self):
+        legacy_log = ParseLog(
+            id="legacy-retry",
+            raw_title="Legacy Film (2020)",
+            feed_name="legacy-feed",
+            parsed_successfully=True,
+            parsed_title="Legacy Film",
+            parsed_year=2020,
+            omdb_status="not_found",
+            ignored=True,
+            ignore_reason="omdb_not_found",
+            processed_at=self.now,
+            trace_details={"feedType": "movie"},
+        )
+        self.parse_log_repo.add(legacy_log)
+        scanner = self.create_scanner(
+            ScannerConfig(mode="reparse-unfound"),
+            MockOmdbClient({"legacy film": self.valid_movie}),
+        )
+        from unittest.mock import MagicMock
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        mock_ai.batch_extract_titles.side_effect = AssertionError(
+            "legacy logs without retained source context must not reach Gemini"
+        )
+        scanner.ai_matcher = mock_ai
+
+        stats = scanner.reparse_unfound_entries(
+            section_timings={"parse_log_write": 0.0},
+        )
+
+        stored_log = self.parse_log_repo.get_all()[0]
+        self.assertEqual(stats["skipped"], 1)
+        self.assertEqual(stats["retried"], 0)
+        self.assertEqual(stored_log.id, legacy_log.id)
+        self.assertEqual(stored_log.retry_state, "retryable")
+        self.assertEqual(stored_log.attempt_count, 1)
+        self.assertIsNone(stored_log.source_context)
+        self.assertEqual(self.title_repo.list_all(), [])
+
+    def test_reparse_manual_mapping_respects_shared_budget(self):
+        source_log = self.make_retry_log(
+            "manual-budget-retry",
+            "Budgeted Film (2020)",
+            source_feed_id="archive",
+            feed_entry_id="budgeted-film",
+        )
+        self.parse_log_repo.add(source_log)
+        mapping = ManualMapping(
+            id=get_source_item_id(
+                "archive",
+                "budgeted-film",
+                "https://example.test/archive/budgeted-film",
+            ),
+            raw_title="Budgeted Film",
+            imdb_id=self.valid_movie.imdb_id,
+            created_at=self.now,
+        )
+        self.manual_mapping_repo.set(mapping)
+        omdb = MockOmdbClient({self.valid_movie.imdb_id: self.valid_movie})
+        scanner = self.create_scanner(
+            ScannerConfig(mode="reparse-unfound", omdb_limit=0),
+            omdb,
+        )
+        from unittest.mock import MagicMock
+        mock_ai = MagicMock()
+        mock_ai.is_available = True
+        mock_ai.batch_extract_titles.side_effect = AssertionError(
+            "manual mapping should be attempted before Gemini even when the budget is exhausted"
+        )
+        scanner.ai_matcher = mock_ai
+
+        stats = scanner.reparse_unfound_entries(
+            section_timings={"parse_log_write": 0.0},
+        )
+
+        self.assertEqual(omdb.request_count, 0)
+        self.assertEqual(stats["retried"], 1)
+        self.assertEqual([item.id for item in self.manual_mapping_repo.get_all()], [mapping.id])
+        stored_log = self.parse_log_repo.get_all()[0]
+        self.assertEqual(stored_log.retry_state, "retryable")
+        self.assertEqual(stored_log.attempt_count, 1)
+
+    def test_reparse_terminal_filter_does_not_consume_manual_mapping(self):
+        source_log = self.make_retry_log(
+            "terminal-filter",
+            "Filtered Film (1999)",
+            source_feed_id="archive",
+            feed_entry_id="filtered-film",
+        )
+        self.parse_log_repo.add(source_log)
+        mapping = ManualMapping(
+            id=get_source_item_id(
+                "archive",
+                "filtered-film",
+                "https://example.test/archive/filtered-film",
+            ),
+            raw_title="Filtered Film",
+            imdb_id=self.valid_movie.imdb_id,
+            created_at=self.now,
+        )
+        self.manual_mapping_repo.set(mapping)
+        scanner = self.create_scanner(
+            ScannerConfig(
+                mode="reparse-unfound",
+                excluded_countries=["USA"],
+            ),
+            MockOmdbClient({self.valid_movie.imdb_id: self.valid_movie}),
+        )
+
+        stats = scanner.reparse_unfound_entries(
+            section_timings={"omdb_api": 0.0, "parse_log_write": 0.0},
+        )
+
+        stored_log = self.parse_log_repo.get_all()[0]
+        self.assertEqual(stats["skipped"], 1)
+        self.assertEqual(stored_log.retry_state, "terminal")
+        self.assertIsNotNone(stored_log.resolution)
+        self.assertEqual(stored_log.resolution.outcome, "terminal")
+        self.assertEqual([item.id for item in self.manual_mapping_repo.get_all()], [mapping.id])
+        self.assertEqual(self.title_repo.list_all(), [])
 
     def test_recheck_candidate_uses_series_broadcast_range(self):
         result = self.make_series_result()
@@ -870,6 +1276,17 @@ class TestScanner(unittest.TestCase):
             ignore_reason="omdb_not_found",
             processed_at=self.now,
             trace_details={"feedType": "movie"},
+            source_context=SourceContext(
+                source_feed_id="test-feed",
+                source_feed_name="test_feed",
+                feed_type="movie",
+                feed_entry_id="unmapped-after-rss-entry",
+                torrent_url="https://example.test/unmapped-after-rss",
+                raw_title="Unmapped Film (2020)",
+                source_published_at=self.now - datetime.timedelta(days=2),
+                observed_at=self.now - datetime.timedelta(days=1),
+            ),
+            event_kind="source",
         ))
         config = ScannerConfig(
             rss_feeds=rss_feeds,

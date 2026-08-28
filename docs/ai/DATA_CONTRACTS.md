@@ -251,7 +251,7 @@ days). Retryable work is never deleted solely because it is old.
 | `parsedYear` | number or null | Extracted year if present |
 | `omdbStatus` | string | `found`, `not_found`, `skipped`, `error`, `not_parsed` |
 | `ignored` | boolean | True if entry was filtered/skipped |
-| `ignoreReason` | string or null | `no_title`, `parse_error`, `entry_error`, `omdb_not_found`, `excluded_country_or_genre`, `media_type_mismatch`, `year_mismatch`, `match_ambiguous`, `omdb_limit_reached`, `omdb_error`, `audit_needs_review`, `empty_title`, `parse_only`, or null |
+| `ignoreReason` | string or null | `no_title`, `parse_error`, `entry_error`, `omdb_not_found`, `excluded_country_or_genre`, `media_type_mismatch`, `year_mismatch`, `match_ambiguous`, `omdb_limit_reached`, `omdb_error`, `source_context_missing`, `manual_mapping_error`, `ai_result_missing`, `ai_title_missing`, `ai_year_invalid`, `ai_media_type_missing`, `reparse_processing_error`, `catalog_persistence_error`, `audit_needs_review`, `empty_title`, `parse_only`, or null |
 | `errorMessage` | string or null | Error or exception details if an error occurred |
 | `decision` | string or null | Stable audit decision; the temporary recheck contract uses `needs_review` and never infers it from `errorMessage` |
 | `traceDetails` | map or null | Bounded diagnostics. Match checks may include `expectedSourceType`, `matchDecision`, `matchReasonCode`, `omdbSourceType`, `omdbContentKind`, and `omdbBroadcastRange`. Recheck review logs use `auditOutcome` (`orphan`, `ai_batch_incomplete`, `mismatch_retained`), `omdbOutcome` (`missing_corrected_title`, `confirmed_not_found`, `quota_exhausted`, `transport_error`, `invalid_request`, `unexpected_error`, or `malformed_result`), and `candidateOutcome` where applicable |
@@ -292,7 +292,7 @@ then parse-log document ID descending. Its exclusive typed cursor contains both
 values from the last returned item. Filtering continues through bounded
 Firestore query chunks, so intervening terminal records do not truncate a
 retry page. `list_unmapped` remains a temporary compatibility adapter returning
-the first retry page; later retry orchestration owns continuation across pages.
+the first retry page; `ReparseService` owns continuation across pages.
 
 Age-based retention deletes only completed `terminal` or `resolved` records.
 It does not delete `retryable` records regardless of `processedAt`.
@@ -304,7 +304,12 @@ the reader does not synthesize one from `feedName`, `rawTitle`, or `processedAt`
 Updating a source log preserves its retained source identity and publication
 time while allowing its latest observation time and mutable feed label to
 advance. Reparse writes reuse this retained context rather than deriving source
-identity from `feedName`.
+identity from `feedName`. Reparse requires enough context to reproduce the v2
+source-item ID: a source feed ID plus a feed entry ID or torrent URL. It never
+creates an occurrence for a log that does not meet this requirement. Such a log
+remains retryable after its attempt metadata is updated. Reparse deduplicates by
+the computed source identity even if duplicate logs have different IDs or
+raw-title casing.
 
 | Field | Type | Missing-field default | Notes |
 | --- | --- | --- | --- |
@@ -321,6 +326,16 @@ same log. Audit/review logs instead use the SHA-256 digest of the UTF-8 tuple
 overwriting a source log even when their descriptive identity text matches.
 Legacy v1 ParseLogs remain readable and may be updated under their existing ID;
 they are never treated as if their digest encoded v2 source identity.
+
+Reparse success updates the original source log in place with
+`retryState=resolved`, `resolution.outcome=matched`, and the canonical title
+and occurrence IDs. Retryable extraction, resolver, or persistence failures
+update that same log with `retryState=retryable`, incremented attempt metadata,
+retained context, and no resolution. Deterministic match rejection uses
+`retryState=terminal` and `resolution.outcome=terminal`; it does not create
+catalog data. Manual mappings are consumed only after filtering and durable
+title, occurrence, and source-log writes succeed. Dry-run does not consume
+mappings or mutate logs/catalog data.
 
 The existing-title audit is review-only in the current stage. A complete batch
 must contain exactly one result for every requested ID, and each result must

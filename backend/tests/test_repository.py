@@ -449,6 +449,14 @@ class RepositoryAndIdTests(unittest.TestCase):
             "omdb_not_found",
             "omdb_limit_reached",
             "omdb_error",
+            "source_context_missing",
+            "manual_mapping_error",
+            "ai_result_missing",
+            "ai_title_missing",
+            "ai_year_invalid",
+            "ai_media_type_missing",
+            "reparse_processing_error",
+            "catalog_persistence_error",
         )
         terminal_reasons = (
             "excluded_country_or_genre",

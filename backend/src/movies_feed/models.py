@@ -280,7 +280,7 @@ class ParseLog:
     parsed_year: Optional[int]
     omdb_status: str  # 'found', 'not_found', 'skipped', 'error', 'not_parsed'
     ignored: bool
-    ignore_reason: Optional[str]  # 'no_title', 'parse_error', 'entry_error', 'omdb_not_found', 'excluded_country_or_genre', 'omdb_limit_reached', 'omdb_error', 'empty_title', 'parse_only', None
+    ignore_reason: Optional[str]  # Includes source, OMDb, and reparse retry reasons; None for a successful source item.
     processed_at: datetime.datetime
     error_message: Optional[str] = None
     trace_details: Optional[Dict[str, Any]] = None

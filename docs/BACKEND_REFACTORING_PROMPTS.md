@@ -19,23 +19,6 @@ Each new stage below is intentionally written as `Scope`, `Non-goals`, `Contract
 implementing an earlier one. If an existing implementation already satisfies a
 bullet, add or verify the regression test and leave the behavior unchanged.
 
-## Prompt 5A: Add Explicit Retry State and Paginated Selection
-
-```text
-Goal: make reparse-unfound a bounded repository workflow without invoking AI yet.
-
-Scope: backend/src/movies_feed/models.py, repository interfaces, fake and Firestore parse-log repositories, repository contract tests, and docs/ai/DATA_CONTRACTS.md. Add explicit retry metadata: retryState (`retryable`, `terminal`, or `resolved`), attemptCount, lastAttemptAt, and bounded resolution metadata. Add paginated list_retryable methods with a stable cursor/order.
-
-Contract: only genuinely retryable parse/OMDb failures are selectable. Exclusions, parse-only records, confirmed type/year rejection, malformed terminal input, and resolved records are not selectable. Retryable work is not deleted solely because it is older than seven days; retention may prune terminal records only. Preserve old logs by deriving a conservative compatibility state and never treating unknown legacy failures as confirmed success.
-
-Non-goals: do not call Gemini or OMDb, resolve manual mappings, recreate occurrences, or change parser/AI schemas.
-
-Work: replace broad list_unmapped selection behind a compatibility adapter, define cursor semantics and any required Firestore indexes, and document state transitions and retention.
-
-Tests: fake/Firestore selection parity, pagination beyond the first page, terminal versus retryable filtering, retention of old retryable work, attempt/resolution round trips, and deterministic ordering.
-
-Done when: repository tests pass without network services, the scanner can request a bounded retry page, and the full backend suite is green.
-```
 
 ## Prompt 5B: Rebuild Reparse Around Retained Source Context
 

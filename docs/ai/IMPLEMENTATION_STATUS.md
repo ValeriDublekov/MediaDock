@@ -23,15 +23,16 @@ MVP wiring is present; production hardening is not complete.
 - Prompt 4B: Source-aware v2 occurrence/source-log IDs, isolated audit IDs, canonical fallback title IDs, and explicit v1 natural coexistence are implemented.
 - Prompt 4C: RSS and reparse writes retain stable source context, separate publication from observation time, and use matching single/bulk repository merge semantics with defensive copies.
 - Prompt 5A: Parse logs have explicit retry lifecycle metadata, conservative legacy-state derivation, deterministic paginated retry selection, and retention that preserves old retryable work.
+- Prompt 5B: Reparse traverses all retry pages, resolves retained manual mappings before Gemini, deduplicates by v2 source identity, preserves source provenance, updates the original log lifecycle, and consumes mappings only after durable writes.
 
 ## Next Prompt
 
-Run Prompt 5B in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+Run Prompt 6A in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 
 - Firebase project identifiers and an authorized user account must be configured for production.
-- Production launch still requires the later retry, source-context, proposal, and application stages.
+- Production launch still requires AI validation, proposal, and application stages.
 - The Firestore rules emulator could not run in this local environment because Java is unavailable; CI installs Java 21 and runs the same rules test.
 
 
@@ -41,6 +42,7 @@ Run Prompt 5B in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 - Allowlist addition requires a manual write to the Firestore database using Firebase Console until an admin control plane exists.
 - The current `AiMatcher` payload needs compatibility review before changing the model to Gemini 3.6/3.7; full AI hardening remains Prompt 6.
 - Unpaginated local filtering currently handles all pages loaded into memory, which may become slow if thousands of entries are retained locally.
+- Legacy retry logs without enough retained source context remain retryable but are skipped by automated reparse until an operator supplies recoverable provenance.
 
 ## Update Rules
 

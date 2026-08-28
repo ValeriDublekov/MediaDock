@@ -23,6 +23,14 @@ _RETRYABLE_REASONS = frozenset({
     "omdb_limit_reached",
     "omdb_not_found",
     "parse_error",
+    "source_context_missing",
+    "manual_mapping_error",
+    "ai_result_missing",
+    "ai_title_missing",
+    "ai_year_invalid",
+    "ai_media_type_missing",
+    "reparse_processing_error",
+    "catalog_persistence_error",
 })
 _TERMINAL_REASONS = frozenset({
     "audit_needs_review",

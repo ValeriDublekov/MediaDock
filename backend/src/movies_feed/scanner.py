@@ -44,6 +44,7 @@ from .repository import (
 from .rutracker_parser import ParsedTitle, iter_feed_definitions, parse_rutracker_title
 from .ai_matcher import AiMatcher
 from .feed_fetcher import FeedFetcher
+from .reparse_service import ReparseService
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,7 @@ class ScannerService:
         self._pending_parse_logs: List[ParseLog] = []
         self._pending_titles: Dict[str, Title] = {}
         self._pending_occurrences: Dict[tuple[str, str], Occurrence] = {}
+        self._pending_manual_mappings: Dict[str, ManualMapping] = {}
         self._manual_mappings_by_id: Dict[str, ManualMapping] = {}
         self._manual_mappings_by_raw_title: Dict[str, ManualMapping] = {}
         self._manual_mappings_by_parsed_title: Dict[str, ManualMapping] = {}
@@ -522,6 +524,49 @@ class ScannerService:
             if m.parsed_title:
                 self._manual_mappings_by_parsed_title[normalize_title(m.parsed_title)] = m
 
+    def _find_manual_mapping(
+        self,
+        *,
+        source_item_id: Optional[str] = None,
+        legacy_item_id: Optional[str] = None,
+        raw_title: Optional[str] = None,
+        parsed_title: Optional[str] = None,
+    ) -> Optional[ManualMapping]:
+        mapping = (
+            self._manual_mappings_by_id.get(source_item_id or "")
+            or self._manual_mappings_by_id.get(legacy_item_id or "")
+        )
+        if mapping is not None and mapping.id not in self._pending_manual_mappings:
+            return mapping
+        if mapping is not None:
+            return None
+        if raw_title:
+            mapping = self._manual_mappings_by_raw_title.get(raw_title.strip().lower())
+            if mapping is not None and mapping.id not in self._pending_manual_mappings:
+                return mapping
+            if mapping is not None:
+                return None
+        if parsed_title:
+            mapping = self._manual_mappings_by_parsed_title.get(normalize_title(parsed_title))
+            if mapping is not None and mapping.id not in self._pending_manual_mappings:
+                return mapping
+        return None
+
+    def _consume_manual_mapping(self, manual_mapping: ManualMapping) -> None:
+        if self.config.is_dry_run or not self.manual_mapping_repo:
+            return
+        self.manual_mapping_repo.delete(manual_mapping.id)
+        if self._manual_mappings_by_id.get(manual_mapping.id) == manual_mapping:
+            self._manual_mappings_by_id.pop(manual_mapping.id, None)
+        if manual_mapping.raw_title:
+            raw_key = manual_mapping.raw_title.strip().lower()
+            if self._manual_mappings_by_raw_title.get(raw_key) == manual_mapping:
+                self._manual_mappings_by_raw_title.pop(raw_key, None)
+        if manual_mapping.parsed_title:
+            parsed_key = normalize_title(manual_mapping.parsed_title)
+            if self._manual_mappings_by_parsed_title.get(parsed_key) == manual_mapping:
+                self._manual_mappings_by_parsed_title.pop(parsed_key, None)
+
     def _get_title(self, title_id: str) -> Optional[Title]:
         if title_id in self._session_titles:
             return self._session_titles[title_id]
@@ -594,6 +639,11 @@ class ScannerService:
             occs_to_upsert = [(tid, oid, occ) for (tid, oid), occ in self._pending_occurrences.items()]
             self.occurrence_repo.upsert_many(occs_to_upsert)
             self._pending_occurrences.clear()
+
+        pending_mappings = list(self._pending_manual_mappings.values())
+        self._pending_manual_mappings.clear()
+        for manual_mapping in pending_mappings:
+            self._consume_manual_mapping(manual_mapping)
 
         if section_timings is not None:
             section_timings["db_upsert"] += (time.perf_counter() - t0)
@@ -1106,241 +1156,37 @@ class ScannerService:
         run: Optional[ScanRun] = None,
         section_timings: Optional[Dict[str, float]] = None,
     ) -> Dict[str, int]:
-        """
-        Gathers unmapped/not found parse logs, uses AI to re-extract clean titles,
-        queries OMDb and validates candidates. If successful, writes Title and Occurrence to database.
-        """
-        stats = {
-            "unmapped_seen": 0,
-            "reparsed_succeeded": 0,
-            "reparsed_failed": 0,
-        }
-
         if not self.parse_log_repo:
-            return stats
+            return {
+                "unmapped_seen": 0,
+                "retryable_seen": 0,
+                "resolved": 0,
+                "retried": 0,
+                "skipped": 0,
+                "failed": 0,
+                "reparsed_succeeded": 0,
+                "reparsed_failed": 0,
+            }
 
-        unmapped_logs = self.parse_log_repo.list_unmapped(limit=200)
-        if not unmapped_logs:
-            logger.info("No unmapped logs found for re-parsing.")
-            return stats
-
-        logger.info(f"Starting AI re-parsing of {len(unmapped_logs)} unmapped entries...")
-        stats["unmapped_seen"] = len(unmapped_logs)
-
-        seen_raw_titles = set()
-        unique_logs = []
-        for log in unmapped_logs:
-            if log.raw_title and log.raw_title not in seen_raw_titles:
-                seen_raw_titles.add(log.raw_title)
-                unique_logs.append(log)
-
-        batch_size = 15
-        total_batches = (len(unique_logs) + batch_size - 1) // batch_size
-        for batch_idx, i in enumerate(range(0, len(unique_logs), batch_size), start=1):
-            chunk = unique_logs[i : i + batch_size]
-            items_to_extract = [
-                {
-                    "id": idx,
-                    "raw_title": log.raw_title,
-                    "feed_type": self._parse_log_feed_type(log) or "unknown",
-                }
-                for idx, log in enumerate(chunk)
-            ]
-
-            logger.info(
-                f"[AI Reparse] Batch {batch_idx}/{total_batches}: re-parsing {len(chunk)} unmapped entries "
-                f"(items {i + 1}-{i + len(chunk)} of {len(unique_logs)})..."
-            )
-
-            extracted_results = {}
-            if self.ai_matcher and self.ai_matcher.is_available:
-                try:
-                    extracted_results = self.ai_matcher.batch_extract_titles(items_to_extract)
-                except Exception as e:
-                    logger.warning(f"AI batch_extract_titles failed: {e}")
-
-            if items_to_extract and not extracted_results:
-                self._record_phase_error(run, "AI reparse phase incomplete")
-                logger.error(
-                    f"[AI Reparse] AI matcher failed or returned no results on batch {batch_idx}/{total_batches} "
-                    f"(rate limit or API error). Stopping remaining unmapped re-parse batches immediately."
-                )
-                break
-
-            if len(extracted_results) < len(items_to_extract):
-                self._record_phase_error(run, "AI reparse phase returned incomplete results")
-
-            if batch_idx < total_batches and self.ai_matcher and self.ai_matcher.is_available:
-                time.sleep(5.0)
-
-            for idx, log in enumerate(chunk):
-                if idx not in extracted_results:
-                    stats["reparsed_failed"] += 1
-                    continue
-                ai_data = extracted_results.get(idx, {})
-                title = ai_data.get("title")
-                year = ai_data.get("year")
-                media_type = ai_data.get("media_type")
-                stored_feed_type = self._parse_log_feed_type(log)
-                ai_source_type = normalize_source_type(media_type)
-                expected_source_type = stored_feed_type or (
-                    ai_source_type if ai_source_type != "unknown" else None
-                )
-
-                if not title:
-                    stats["reparsed_failed"] += 1
-                    continue
-
-                resolver_outcome = self.metadata_resolver.resolve_title(
-                    title,
-                    year,
-                    media_type=expected_source_type,
-                    section_timings=section_timings,
-                )
-                self._sync_omdb_attempts(run)
-                omdb_result = (
-                    resolver_outcome.result
-                    if resolver_outcome.status is MetadataOutcomeStatus.FOUND
-                    else None
-                )
-                if resolver_outcome.status not in (
-                    MetadataOutcomeStatus.FOUND,
-                    MetadataOutcomeStatus.CONFIRMED_NOT_FOUND,
-                ):
-                    self._record_metadata_outcome_failure(run, resolver_outcome, "reparse")
-
-                is_valid = False
-                if omdb_result:
-                    match_decision = self._evaluate_match(
-                        expected_source_type=expected_source_type,
-                        omdb_result=omdb_result,
-                        source_year=year if type(year) is int else None,
-                    )
-                    is_valid = match_decision.is_accepted
-                    if is_valid and self.ai_matcher and self.ai_matcher.is_available:
-                        clean_rep = clean_title_for_comparison(title)
-                        clean_cand = clean_title_for_comparison(omdb_result.title)
-                        if clean_rep != clean_cand:
-                            try:
-                                v_res = self.ai_matcher.batch_validate_omdb_matches([{
-                                    "id": 0,
-                                    "raw_title": log.raw_title,
-                                    "feed_type": expected_source_type or "unknown",
-                                    "omdb_title": omdb_result.title,
-                                    "omdb_year": omdb_result.year,
-                                    "omdb_type": omdb_result.media_type,
-                                }]).get(0)
-                                if v_res and not v_res.get("is_match", True):
-                                    is_valid = False
-                            except Exception as e:
-                                logger.warning(f"AI candidate validation check failed: {e}")
-
-                if omdb_result and is_valid:
-                    norm_lookup_title = normalize_title(omdb_result.title)
-                    title_id = get_title_id_v2(
-                        omdb_result.imdb_id,
-                        omdb_result.title,
-                        omdb_result.year,
-                        effective_source_type(omdb_result.media_type, omdb_result.source_type),
-                    )
-
-                    title_record = Title(
-                        title=omdb_result.title,
-                        normalized_title=norm_lookup_title,
-                        year=omdb_result.year,
-                        media_type=omdb_result.media_type,
-                        first_seen_at=(
-                            log.source_context.observed_at
-                            if log.source_context and log.source_context.observed_at
-                            else log.processed_at or self.now
-                        ),
-                        last_seen_at=self.now,
-                        updated_at=self.now,
-                        imdb_id=omdb_result.imdb_id,
-                        imdb_rating=omdb_result.rating,
-                        imdb_votes=omdb_result.votes,
-                        metascore=omdb_result.metascore,
-                        genres=omdb_result.genres,
-                        countries=omdb_result.countries,
-                        director=omdb_result.director,
-                        plot=omdb_result.plot,
-                        poster_url=omdb_result.poster_url,
-                        runtime=omdb_result.runtime,
-                        awards=omdb_result.awards,
-                        box_office=omdb_result.box_office,
-                        ratings=omdb_result.ratings,
-                        source_type=effective_source_type(omdb_result.media_type, omdb_result.source_type),
-                        content_kind=omdb_result.content_kind,
-                        broadcast_range=omdb_result.broadcast_range,
-                    )
-
-                    occ_id = log.id
-                    source_context = log.source_context
-                    occ_record = Occurrence(
-                        source_feed_id=(source_context.source_feed_id if source_context else None)
-                        or log.feed_name
-                        or "reparsed",
-                        source_feed_name=(source_context.source_feed_name if source_context else None)
-                        or log.feed_name
-                        or "reparsed",
-                        feed_entry_id=source_context.feed_entry_id if source_context else None,
-                        torrent_url=(source_context.torrent_url if source_context else None) or "",
-                        raw_title=log.raw_title,
-                        quality="",
-                        rip_type="",
-                        first_seen_at=(
-                            source_context.observed_at
-                            if source_context and source_context.observed_at
-                            else log.processed_at or self.now
-                        ),
-                        last_seen_at=self.now,
-                        source_context=source_context,
-                    )
-
-                    if not self.config.is_dry_run:
-                        self.title_repo.upsert(title_id, title_record)
-                        self.occurrence_repo.upsert(title_id, occ_id, occ_record)
-
-                    self._log_parse_entry(
-                        raw_title=log.raw_title,
-                        feed_name=log.feed_name or "reparsed",
-                        parsed_successfully=True,
-                        parsed_title=title,
-                        parsed_year=year,
-                        omdb_status="found",
-                        ignored=False,
-                        ignore_reason=None,
-                        source_log_id=log.id,
-                        source_context=source_context,
-                        section_timings=section_timings,
-                        trace_details={
-                            "feedType": stored_feed_type,
-                            "expectedSourceType": expected_source_type,
-                            "matchDecision": match_decision.status,
-                            "matchReasonCode": match_decision.reason_code,
-                            "omdbSourceType": effective_source_type(
-                                omdb_result.media_type,
-                                omdb_result.source_type,
-                            ),
-                            "omdbContentKind": omdb_result.content_kind,
-                            "omdbBroadcastRange": (
-                                omdb_result.broadcast_range.to_dict()
-                                if omdb_result.broadcast_range is not None
-                                else None
-                            ),
-                        },
-                    )
-                    stats["reparsed_succeeded"] += 1
-                    if run:
-                        run.titles_created += 1
-                        run.occurrences_created += 1
-                else:
-                    stats["reparsed_failed"] += 1
-
-            self._flush_parse_logs(section_timings)
-
-        logger.info(f"AI re-parsing completed: {stats}")
-        return stats
+        self._load_manual_mappings()
+        reparse_service = ReparseService(
+            parse_log_repo=self.parse_log_repo,
+            title_repo=self.title_repo,
+            occurrence_repo=self.occurrence_repo,
+            metadata_resolver=self.metadata_resolver,
+            ai_matcher=self.ai_matcher,
+            now=self.now,
+            is_dry_run=self.config.is_dry_run,
+            manual_mapping_lookup=self._find_manual_mapping,
+            manual_mapping_consume=self._consume_manual_mapping,
+            parse_log_feed_type=self._parse_log_feed_type,
+            evaluate_match=self._evaluate_match,
+            match_ignore_reason=self._match_ignore_reason,
+            record_phase_error=self._record_phase_error,
+            record_metadata_outcome_failure=self._record_metadata_outcome_failure,
+            sync_omdb_attempts=self._sync_omdb_attempts,
+        )
+        return reparse_service.run(run=run, section_timings=section_timings)
 
     def _reparse_unfound_entries(
         self,
@@ -1505,11 +1351,11 @@ class ScannerService:
         # Check if there is a manual IMDb mapping provided for this title
         entry_log_id = get_source_item_id(source_feed_id, feed_entry_id, torrent_url)
         legacy_entry_log_id = get_occurrence_id_v1(feed_entry_id, torrent_url)
-        manual_mapping = (
-            self._manual_mappings_by_id.get(entry_log_id)
-            or self._manual_mappings_by_id.get(legacy_entry_log_id)
-            or self._manual_mappings_by_raw_title.get(raw_title.strip().lower())
-            or (self._manual_mappings_by_parsed_title.get(normalize_title(parsed.title)) if parsed.title else None)
+        manual_mapping = self._find_manual_mapping(
+            source_item_id=entry_log_id,
+            legacy_item_id=legacy_entry_log_id,
+            raw_title=raw_title,
+            parsed_title=parsed.title,
         )
 
         if manual_mapping and manual_mapping.imdb_id:
@@ -1535,14 +1381,6 @@ class ScannerService:
         if resolver_outcome.status is MetadataOutcomeStatus.FOUND:
             omdb_result = resolver_outcome.result
             used_manual_mapping = manual_mapping is not None and bool(manual_mapping.imdb_id)
-            if used_manual_mapping:
-                if not self.config.is_dry_run and self.manual_mapping_repo:
-                    self.manual_mapping_repo.delete(manual_mapping.id)
-                self._manual_mappings_by_id.pop(manual_mapping.id, None)
-                if manual_mapping.raw_title:
-                    self._manual_mappings_by_raw_title.pop(manual_mapping.raw_title.strip().lower(), None)
-                if manual_mapping.parsed_title:
-                    self._manual_mappings_by_parsed_title.pop(normalize_title(manual_mapping.parsed_title), None)
         else:
             run.ignored_entries += 1
             self._record_metadata_outcome_failure(run, resolver_outcome, "rss")
@@ -1750,3 +1588,6 @@ class ScannerService:
             # Simulate creation tracking for dry run without storing
             run.titles_created += 1
             run.occurrences_created += 1
+
+        if used_manual_mapping and manual_mapping is not None and not self.config.is_dry_run:
+            self._pending_manual_mappings[manual_mapping.id] = manual_mapping
