@@ -8,6 +8,7 @@ from movies_feed.cli import (
     EXIT_FAILURE,
     EXIT_PARTIAL,
     EXIT_SUCCESS,
+    EXIT_CONFIGURATION_ERROR,
     _sanitize_diagnostic,
     exit_code_for_status,
     main,
@@ -178,6 +179,41 @@ class TestCliConfiguration(unittest.TestCase):
                 EXIT_FAILURE,
             )
 
+    def test_main_rejects_parse_only_with_apply_proposals(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "movies_feed.cli.load_config", return_value={}
+        ):
+            self.assertEqual(
+                main(["--fake-repos", "--parse-only", "--mode", "apply-proposals"]),
+                EXIT_CONFIGURATION_ERROR,
+            )
+
+    def test_main_accepts_apply_proposals(self) -> None:
+        run = ScanRun(
+            started_at=datetime.datetime.now(datetime.timezone.utc),
+            finished_at=datetime.datetime.now(datetime.timezone.utc),
+            status="succeeded",
+            trigger="local",
+        )
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "movies_feed.cli.load_config", return_value={}
+        ), patch("movies_feed.cli.ScannerService") as scanner_type:
+            scanner_type.return_value.run.return_value = run
+            self.assertEqual(
+                main([
+                    "--fake-repos",
+                    "--mode", "apply-proposals",
+                    "--proposal-id", "prop-123",
+                    "--reject-proposal"
+                ]),
+                EXIT_SUCCESS,
+            )
+
+        scanner_config = scanner_type.call_args.kwargs["config"]
+        self.assertEqual(scanner_config.mode, "apply-proposals")
+        self.assertEqual(scanner_config.proposal_id, "prop-123")
+        self.assertTrue(scanner_config.reject_proposal)
+
     def test_main_passes_fixture_as_separate_scanner_input(self) -> None:
         fixture_path = "backend/tests/fixtures/movies_feed.atom"
         run = ScanRun(
@@ -235,7 +271,7 @@ class TestParseOnlyExecution(unittest.TestCase):
         scanner = ScannerService(
             config=ScannerConfig(
                 rss_feeds={},
-                feed_file="backend/tests/fixtures/movies_feed.atom",
+                feed_file="tests/fixtures/movies_feed.atom",
                 is_parse_only=True,
                 mode="rss",
             ),

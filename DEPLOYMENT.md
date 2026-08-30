@@ -190,7 +190,16 @@ tests confirm it still matches current paths. Never temporarily allow public acc
 ### Firestore data
 
 Use provider-supported backup/export appropriate to the selected plan before any
-bulk migration. The legacy JSON importer is not a production backup mechanism.
+bulk migration or production destructive execution (e.g., applying audit proposals). The legacy JSON importer is not a production backup mechanism.
+
+#### Concurrency and Limits
+
+When executing bulk catalog operations (such as applying audit proposals):
+- Application operations use a compare-and-set lease on the `AuditProposal` to transition to `applying`.
+- Concurrent proposals modifying occurrences for the same source title are prevented by lease checks.
+- A stale lease (crashed worker) will be recovered to `failed` on the next attempt; the proposal must be reviewed and restarted rather than blindly applying old evidence.
+- Writes (occurrences, titles, logs) perform individual deterministic upserts and deletes. They do NOT execute in a single global batch. If an operation exceeds Firestore batch limits or crashes mid-execution, the failure is localized. The source Title and source Occurrences may be partially moved.
+- The operator must ensure a backup/export checkpoint exists before running destructive repairs. In the event of an unrecoverable failure during a multi-write application, the documented operator recovery action is to restore from the latest export or to manually reconstruct the remaining occurrences using the `failed` proposal's planned target.
 
 ## Secret Rotation
 

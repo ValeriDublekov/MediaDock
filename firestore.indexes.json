@@ -15,6 +15,20 @@
       ]
     },
     {
+      "collectionGroup": "auditProposals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "sourceTitleId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "parseLogs",
       "queryScope": "COLLECTION",
       "fields": [

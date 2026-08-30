@@ -20,41 +20,6 @@ implementing an earlier one. If an existing implementation already satisfies a
 bullet, add or verify the regression test and leave the behavior unchanged.
 
 
-
-## Prompt 8A: Implement the Proposal Application Service
-
-```text
-Goal: add a backend-only, recoverable executor using repository interfaces and fake repositories first.
-
-Scope: application service, proposal state machine abstractions, fake-repository tests, and directly affected contract documentation. Re-read and verify source title, named occurrence IDs, policy version, and approved target before writing. Move only named occurrences, preserve source identity/timestamps, merge into an existing target using repository semantics, and remove the old title only when it has no remaining occurrences.
-
-Contract: approved -> applying -> applied or failed is idempotent; stale source data returns to review/failed without applying old evidence. Dry-run produces a plan with zero repository mutation. Confirmed rejection changes only proposal state. Same source/target is a no-op with an explicit result. A repeated or interrupted application must be recoverable.
-
-Non-goals: do not add frontend UI, Firestore-specific leases, or destructive production enablement in this stage.
-
-Work: make the service return explicit planned/applied/skipped/failed outcomes and keep failure details bounded and secret-free.
-
-Tests: partial cluster moves, target already exists, same source/target, stale proposal, repeated/interrupted execution, last-occurrence cleanup, batch-like failure, confirmed rejection, and dry-run.
-
-Done when: fake-repository application behavior is complete and deterministic, with no Firestore or live-service dependency in the tests.
-```
-
-## Prompt 8B: Add Firestore Concurrency and Operator Controls
-
-```text
-Goal: make approved-repair execution safe under concurrency and platform limits.
-
-Scope: Firestore proposal repository/application adapter, CLI command or mode, emulator tests, operational documentation, and no frontend files. Use a compare-and-set/lease transition for applying, define stale-lease recovery, and prevent two proposals from moving the same occurrence concurrently. Document exact failure-point behavior for writes crossing Firestore batch limits.
-
-Contract: require an operator-visible backup/export or equivalent recovery checkpoint before production destructive execution. The CLI must expose dry-run, confirmed rejection, bounded error reporting, and the documented exit status. A stale proposal must return to review/failed rather than apply old evidence.
-
-Non-goals: do not change proposal meaning, occurrence-cluster audit logic, or add browser approval UI.
-
-Tests: emulator CAS/lease races, stale recovery, concurrent occurrence protection, batch-limit failure/retry, CLI dry-run, stale proposal, target merge, last-occurrence cleanup, and no-secret failure details.
-
-Done when: fake and emulator behavior agree, operator recovery is documented, and the complete backend suite plus emulator contract tests pass.
-```
-
 ## Prompt 9A: Make RSS Ingestion Single-Pass
 
 ```text

@@ -533,6 +533,11 @@ class AuditProposalRepository(ABC):
         pass
 
     @abstractmethod
+    def acquire_lease(self, proposal_id: str, lease_duration: datetime.timedelta, now: datetime.datetime) -> bool:
+        """Attempts to acquire a lease on an 'approved' or stale 'applying' proposal, transitioning it to 'applying'."""
+        pass
+
+    @abstractmethod
     def delete(self, proposal_id: str) -> None:
         """Deletes an AuditProposal by ID."""
         pass
@@ -576,6 +581,39 @@ class FakeAuditProposalRepository(AuditProposalRepository):
 
     def list_all(self) -> List[AuditProposal]:
         return [copy.deepcopy(p) for p in self._store.values()]
+
+    def acquire_lease(self, proposal_id: str, lease_duration: datetime.timedelta, now: datetime.datetime) -> bool:
+        proposal = self._store.get(proposal_id)
+        if not proposal:
+            return False
+        
+        if proposal.status == "applying":
+            # Stale lease recovery
+            if proposal.leased_until is None or now >= proposal.leased_until:
+                # Recover
+                proposal.status = "failed"
+                proposal.leased_until = None
+                proposal.updated_at = now
+                return False
+            else:
+                # Currently leased
+                return False
+                
+        if proposal.status != "approved":
+            return False
+
+        # Prevent concurrent moves for the same source title
+        for other_proposal in self._store.values():
+            if (other_proposal.id != proposal_id 
+                and other_proposal.source_title_id == proposal.source_title_id 
+                and other_proposal.status == "applying"):
+                if other_proposal.leased_until is not None and now < other_proposal.leased_until:
+                    return False
+
+        proposal.status = "applying"
+        proposal.leased_until = now + lease_duration
+        proposal.updated_at = now
+        return True
 
     def delete(self, proposal_id: str) -> None:
         if proposal_id in self._store:

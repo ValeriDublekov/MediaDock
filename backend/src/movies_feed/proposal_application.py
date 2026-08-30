@@ -32,6 +32,8 @@ class ProposalApplicationService:
 
     def _mark_state(self, proposal: AuditProposal, status: str) -> None:
         proposal.status = status # type: ignore
+        if status in ("applied", "failed", "rejected", "pending"):
+            proposal.leased_until = None
         proposal.updated_at = self.clock()
         self.proposal_repo.upsert(proposal)
 
@@ -57,9 +59,22 @@ class ProposalApplicationService:
         if proposal.status == "pending":
             return ProposalApplicationResult(proposal_id, "failed", "Proposal must be approved before application")
 
-        # Must be approved or applying (recoverable)
-        if not dry_run and proposal.status == "approved":
-            self._mark_state(proposal, "applying")
+        if not dry_run and proposal.status in ("approved", "applying"):
+            lease_duration = datetime.timedelta(minutes=5)
+            acquired = self.proposal_repo.acquire_lease(proposal_id, lease_duration, self.clock())
+            if not acquired:
+                proposal = self.proposal_repo.get(proposal_id)
+                if not proposal:
+                    return ProposalApplicationResult(proposal_id, "failed", f"Proposal {proposal_id} not found")
+                
+                # Check if acquire_lease recovered a stale lease to failed
+                if proposal.status == "failed":
+                    return ProposalApplicationResult(proposal_id, "failed", "Proposal lease was stale and recovered to failed")
+                return ProposalApplicationResult(proposal_id, "skipped", "Could not acquire lease (concurrent application or unrecovered stale state)")
+            # Re-fetch proposal after acquiring lease to have correct status and leased_until
+            proposal = self.proposal_repo.get(proposal_id)
+            if not proposal:
+                return ProposalApplicationResult(proposal_id, "failed", f"Proposal {proposal_id} not found")
 
         source_title = self.title_repo.get(proposal.source_title_id)
         if not source_title:

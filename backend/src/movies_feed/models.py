@@ -108,6 +108,7 @@ class AuditProposal:
     created_at: datetime.datetime
     updated_at: datetime.datetime
     status: AuditProposalStatus = "pending"
+    leased_until: Optional[datetime.datetime] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip():
@@ -159,6 +160,9 @@ class AuditProposal:
             "updatedAt": self.updated_at,
             "status": self.status,
         }
+        if self.leased_until is not None:
+            res["leasedUntil"] = self.leased_until
+        return res
 
 
 def audit_proposal_from_dict(d: dict, doc_id: Optional[str] = None) -> AuditProposal:
@@ -174,6 +178,10 @@ def audit_proposal_from_dict(d: dict, doc_id: Optional[str] = None) -> AuditProp
     status = d.get("status", "pending")
     if status not in VALID_AUDIT_PROPOSAL_STATUSES:
         status = "pending"
+        
+    leased_until = d.get("leasedUntil")
+    if leased_until is not None and not isinstance(leased_until, datetime.datetime):
+        leased_until = None
 
     confidence = d.get("confidence", 0.0)
     try:
@@ -194,6 +202,7 @@ def audit_proposal_from_dict(d: dict, doc_id: Optional[str] = None) -> AuditProp
         created_at=created_at,
         updated_at=updated_at,
         status=status,
+        leased_until=leased_until,
     )
 
 

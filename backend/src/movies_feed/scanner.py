@@ -47,6 +47,7 @@ from .rutracker_parser import ParsedTitle, iter_feed_definitions, parse_rutracke
 from .ai_matcher import AiMatcher
 from .feed_fetcher import FeedFetcher
 from .reparse_service import ReparseService
+from .proposal_application import ProposalApplicationService, ProposalApplicationResult
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +64,12 @@ class ScannerConfig:
     trigger: str = "manual"
     force_days: int = 0
     audit_days: int = 0  # 0 = unlimited
-    mode: str = "rss"  # "rss", "recheck-existing", "reparse-unfound", "all"
+    mode: str = "rss"  # "rss", "recheck-existing", "reparse-unfound", "apply-proposals", "all"
     feed_file: Optional[str] = None
     feed_file_name: str = "fixture"
     feed_file_type: Optional[str] = "movie"
+    proposal_id: Optional[str] = None
+    reject_proposal: bool = False
 
 
 def _get_entry_datetime(entry: Any) -> Optional[datetime.datetime]:
@@ -870,29 +873,36 @@ class ScannerService:
                         run.error_count += 1
                         run.error_summary.append(err_text)
             else:
-                logger.info(f"--> [Phase 1/3] RSS feed processing SKIPPED (mode is '{self.config.mode}')")
+                logger.info(f"--> [Phase 1/4] RSS feed processing SKIPPED (mode is '{self.config.mode}')")
 
             if self.config.is_parse_only:
-                logger.info("--> [Phase 2/3] AI Database Audit SKIPPED (parse-only mode)")
-                logger.info("--> [Phase 3/3] AI Unmapped Reparsing SKIPPED (parse-only mode)")
+                logger.info("--> [Phase 2/4] AI Database Audit SKIPPED (parse-only mode)")
+                logger.info("--> [Phase 3/4] AI Unmapped Reparsing SKIPPED (parse-only mode)")
+                logger.info("--> [Phase 4/4] Proposal Application SKIPPED (parse-only mode)")
             else:
                 # 2. AI Database Recheck & Fix (if mode is "recheck-existing" or "all")
                 if self.config.mode in ("recheck-existing", "all"):
-                    logger.info("--> [Phase 2/3] AI Audit & Repair of existing database titles...")
+                    logger.info("--> [Phase 2/4] AI Audit & Repair of existing database titles...")
                     t0_recheck = time.perf_counter()
                     self.recheck_existing_titles(run=run, section_timings=section_timings)
                     section_timings["ai_recheck"] += (time.perf_counter() - t0_recheck)
                 else:
-                    logger.info(f"--> [Phase 2/3] AI Database Audit SKIPPED (mode is '{self.config.mode}')")
+                    logger.info(f"--> [Phase 2/4] AI Database Audit SKIPPED (mode is '{self.config.mode}')")
 
                 # 3. AI Reparse Unfound Titles (if mode is "reparse-unfound" or "all")
                 if self.config.mode in ("reparse-unfound", "all"):
-                    logger.info("--> [Phase 3/3] AI Reparsing of unmapped/unfound titles...")
+                    logger.info("--> [Phase 3/4] AI Reparsing of unmapped/unfound titles...")
                     t0_reparse = time.perf_counter()
                     self.reparse_unfound_entries(run=run, section_timings=section_timings)
                     section_timings["ai_reparse"] += (time.perf_counter() - t0_reparse)
+                # 4. Apply proposals (if mode is "apply-proposals" or "all")
+                if self.config.mode in ("apply-proposals", "all"):
+                    logger.info("--> [Phase 4/4] Applying approved audit proposals...")
+                    t0_apply = time.perf_counter()
+                    self._apply_proposals(run=run, section_timings=section_timings)
+                    section_timings["apply_proposals"] = section_timings.get("apply_proposals", 0.0) + (time.perf_counter() - t0_apply)
                 else:
-                    logger.info(f"--> [Phase 3/3] AI Unmapped Reparsing SKIPPED (mode is '{self.config.mode}')")
+                    logger.info(f"--> [Phase 4/4] Proposal Application SKIPPED (mode is '{self.config.mode}')")
 
             run.status = "succeeded" if run.error_count == 0 else "partial"
         except Exception as e:
@@ -1295,12 +1305,41 @@ class ScannerService:
         )
         return reparse_service.run(run=run, section_timings=section_timings)
 
-    def _reparse_unfound_entries(
+    def _apply_proposals(
         self,
         run: Optional[ScanRun] = None,
         section_timings: Optional[Dict[str, float]] = None,
-    ) -> Dict[str, int]:
-        return self.reparse_unfound_entries(run=run, section_timings=section_timings)
+    ) -> None:
+        if not self.audit_proposal_repo:
+            return
+
+        app_service = ProposalApplicationService(
+            proposal_repo=self.audit_proposal_repo,
+            title_repo=self.title_repo,
+            occurrence_repo=self.occurrence_repo,
+            now=self.now,
+        )
+
+        if self.config.proposal_id:
+            logger.info(f"Applying explicit proposal {self.config.proposal_id}")
+            res = app_service.apply_proposal(
+                self.config.proposal_id, 
+                dry_run=self.config.is_dry_run, 
+                reject=self.config.reject_proposal
+            )
+            logger.info(f"Proposal {self.config.proposal_id} outcome: {res.outcome} ({res.reason})")
+            if res.outcome == "failed" and run:
+                run.error_count += 1
+                run.error_summary.append(f"Proposal {self.config.proposal_id} failed: {res.reason}")
+        else:
+            logger.info("Applying all approved proposals")
+            approved_proposals = self.audit_proposal_repo.list_by_status("approved", limit=1000)
+            for prop in approved_proposals:
+                res = app_service.apply_proposal(prop.id, dry_run=self.config.is_dry_run)
+                logger.info(f"Proposal {prop.id} outcome: {res.outcome} ({res.reason})")
+                if res.outcome == "failed" and run:
+                    run.error_count += 1
+                    run.error_summary.append(f"Proposal {prop.id} failed: {res.reason}")
 
     def _source_context_for_entry(
         self,

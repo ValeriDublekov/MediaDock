@@ -274,7 +274,7 @@ class TestScanner(unittest.TestCase):
         rss_feeds = {
             "test_feed": {
                 "name": "test_feed",
-                "url": "backend/tests/fixtures/movies_feed.atom",
+                "url": "tests/fixtures/movies_feed.atom",
                 "type": "movie"
             }
         }
@@ -503,7 +503,7 @@ class TestScanner(unittest.TestCase):
         rss_feeds = {
             "test_feed": {
                 "name": "test_feed",
-                "url": "backend/tests/fixtures/movies_feed.atom",
+                "url": "tests/fixtures/movies_feed.atom",
                 "type": "movie"
             }
         }
@@ -553,7 +553,7 @@ class TestScanner(unittest.TestCase):
         rss_feeds = {
             "test_feed": {
                 "name": "test_feed",
-                "url": "backend/tests/fixtures/movies_feed.atom",
+                "url": "tests/fixtures/movies_feed.atom",
                 "type": "movie"
             }
         }
@@ -586,7 +586,7 @@ class TestScanner(unittest.TestCase):
         rss_feeds = {
             "test_feed": {
                 "name": "test_feed",
-                "url": "backend/tests/fixtures/movies_feed.atom",
+                "url": "tests/fixtures/movies_feed.atom",
                 "type": "movie"
             }
         }
@@ -1110,7 +1110,7 @@ class TestScanner(unittest.TestCase):
         rss_feeds = {
             "test_feed": {
                 "name": "test_feed",
-                "url": "backend/tests/fixtures/movies_feed.atom",
+                "url": "tests/fixtures/movies_feed.atom",
                 "type": "movie"
             }
         }
@@ -1142,7 +1142,7 @@ class TestScanner(unittest.TestCase):
         rss_feeds = {
             "test_feed": {
                 "name": "test_feed",
-                "url": "backend/tests/fixtures/movies_feed.atom",
+                "url": "tests/fixtures/movies_feed.atom",
                 "type": "movie"
             }
         }
@@ -1708,7 +1708,7 @@ class TestScanner(unittest.TestCase):
         rss_feeds = {
             "test_feed": {
                 "name": "test_feed",
-                "url": "backend/tests/fixtures/movies_feed.atom",
+                "url": "tests/fixtures/movies_feed.atom",
                 "type": "movie"
             }
         }

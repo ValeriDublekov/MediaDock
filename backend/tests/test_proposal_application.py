@@ -128,6 +128,50 @@ class TestProposalApplicationService(unittest.TestCase):
         self.assertEqual(res.reason, "Same source and target")
         self.assertEqual(self.proposal_repo.get("p1").status, "applied")
 
+    def test_stale_lease_recovery(self) -> None:
+        self._make_title("t1", "Source Title", 2020, "movie")
+        self._make_occ("t1", "occ1")
+        
+        p = self._make_proposal(
+            "p1", "t1", "applying", ["occ1"], 
+            {"title": "Target Title", "year": 2021, "mediaType": "movie"}
+        )
+        # Set lease to be in the past
+        p.leased_until = self.now - datetime.timedelta(minutes=1)
+        self.proposal_repo.upsert(p)
+        
+        res = self.service.apply_proposal("p1")
+        self.assertEqual(res.outcome, "failed")
+        self.assertEqual(res.reason, "Proposal lease was stale and recovered to failed")
+        self.assertEqual(self.proposal_repo.get("p1").status, "failed")
+        self.assertIsNone(self.proposal_repo.get("p1").leased_until)
+
+    def test_concurrent_source_title_locked(self) -> None:
+        self._make_title("t1", "Source Title", 2020, "movie")
+        self._make_occ("t1", "occ1")
+        self._make_occ("t1", "occ2")
+        
+        # p2 is applying on t1 with a valid lease
+        p2 = self._make_proposal(
+            "p2", "t1", "applying", ["occ2"], 
+            {"title": "Target Title 2", "year": 2022, "mediaType": "movie"}
+        )
+        p2.leased_until = self.now + datetime.timedelta(minutes=5)
+        self.proposal_repo.upsert(p2)
+        
+        p1 = self._make_proposal(
+            "p1", "t1", "approved", ["occ1"], 
+            {"title": "Target Title", "year": 2021, "mediaType": "movie"}
+        )
+        self.proposal_repo.upsert(p1)
+        
+        res = self.service.apply_proposal("p1")
+        self.assertEqual(res.outcome, "skipped")
+        self.assertIn("Could not acquire lease", res.reason)
+        
+        # p1 should still be approved
+        self.assertEqual(self.proposal_repo.get("p1").status, "approved")
+
     def test_stale_proposal(self) -> None:
         p = self._make_proposal(
             "p1", "t1", "approved", ["occ1"], 
@@ -145,22 +189,20 @@ class TestProposalApplicationService(unittest.TestCase):
         self._make_occ("t1", "occ1")
         self._make_occ("t1", "occ2")
         
-        p = self._make_proposal(
-            "p1", "t1", "applying", ["occ1", "occ2"], 
-            {"title": "Target Title", "year": 2021, "mediaType": "movie"}
-        )
-        self.proposal_repo.upsert(p)
-        
         # Simulate interruption: occ1 already moved, occ2 not
         target_id = get_title_id_v2(None, "Target Title", 2021, "movie")
         self._make_title(target_id, "Target Title", 2021, "movie")
         
-        # We also need to construct occ1 first, and then upsert
-        # but self._make_occ can be used
-        # Wait, occ1 is currently in "t1". I need to move it to target_id.
         occ1 = self.occ_repo.get("t1", "occ1")
         self.occ_repo.upsert(target_id, "occ1", occ1)
         self.occ_repo.delete("t1", "occ1")
+        
+        # Proposal is restarted (approved again after a failure)
+        p = self._make_proposal(
+            "p1", "t1", "approved", ["occ1", "occ2"], 
+            {"title": "Target Title", "year": 2021, "mediaType": "movie"}
+        )
+        self.proposal_repo.upsert(p)
         
         res = self.service.apply_proposal("p1")
         self.assertEqual(res.outcome, "applied")

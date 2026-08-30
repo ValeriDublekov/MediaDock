@@ -742,6 +742,71 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
         self.assertEqual(len(remaining), 1)
         self.assertEqual(remaining[0].id, "web-doc-456")
 
+    def test_audit_proposal_lease_semantics(self) -> None:
+        repo = FirestoreAuditProposalRepository(self.db)
+        proposal_id = "test-lease-prop"
+        source_title_id = "tt_lease_source"
+        proposal = AuditProposal(
+            id=proposal_id,
+            source_title_id=source_title_id,
+            occurrence_ids=["occ-1"],
+            raw_title_cluster=["The Matrix"],
+            current_metadata={"title": "Matrix"},
+            proposed_metadata={"title": "The Matrix", "imdbId": "tt0133093"},
+            evidence={"score": 0.98},
+            confidence=0.98,
+            policy_version="v1",
+            created_at=self.base_time,
+            updated_at=self.base_time,
+            status="approved",
+        )
+        repo.upsert(proposal)
+
+        # 1. Acquire lease
+        lease_duration = datetime.timedelta(minutes=5)
+        now1 = datetime.datetime.now(self.utc)
+        acquired = repo.acquire_lease(proposal_id, lease_duration, now1)
+        self.assertTrue(acquired)
+        
+        fetched = repo.get(proposal_id)
+        self.assertEqual(fetched.status, "applying")
+        self.assertIsNotNone(fetched.leased_until)
+        
+        # 2. Re-acquiring active lease should fail
+        now2 = now1 + datetime.timedelta(minutes=1)
+        acquired = repo.acquire_lease(proposal_id, lease_duration, now2)
+        self.assertFalse(acquired)
+        fetched2 = repo.get(proposal_id)
+        self.assertEqual(fetched2.status, "applying") # Still applying
+
+        # 3. Stale lease recovery
+        now3 = now1 + datetime.timedelta(minutes=10) # Lease expired
+        acquired = repo.acquire_lease(proposal_id, lease_duration, now3)
+        self.assertFalse(acquired)
+        fetched3 = repo.get(proposal_id)
+        self.assertEqual(fetched3.status, "failed")
+        self.assertIsNone(fetched3.leased_until)
+
+        # 4. Concurrent source title test
+        prop2 = copy.deepcopy(proposal)
+        prop2.id = "test-lease-prop-2"
+        prop2.status = "approved"
+        repo.upsert(prop2)
+        
+        # Set prop1 back to approved
+        proposal.status = "approved"
+        repo.upsert(proposal)
+        
+        # Acquire prop1
+        self.assertTrue(repo.acquire_lease(proposal_id, lease_duration, now1))
+        
+        # Attempt to acquire prop2 (same source title), should fail because prop1 is applying
+        self.assertFalse(repo.acquire_lease("test-lease-prop-2", lease_duration, now1))
+        
+        # Cleanup
+        repo.delete(proposal_id)
+        repo.delete("test-lease-prop-2")
+
     def test_audit_proposal_repository_persistence(self) -> None:
         repo = FirestoreAuditProposalRepository(self.db)
         proposal_id = "prop-persistence-123"

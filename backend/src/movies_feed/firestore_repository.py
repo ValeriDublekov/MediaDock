@@ -673,6 +673,51 @@ class FirestoreAuditProposalRepository(AuditProposalRepository):
         docs = self.collection_ref.stream()
         return [audit_proposal_from_dict(doc.to_dict(), doc_id=doc.id) for doc in docs]
 
+    def acquire_lease(self, proposal_id: str, lease_duration: datetime.timedelta, now: datetime.datetime) -> bool:
+        doc_ref = self.collection_ref.document(proposal_id)
+
+        @firestore.transactional
+        def _acquire_tx(transaction):
+            snapshot = doc_ref.get(transaction=transaction)
+            if not snapshot.exists:
+                return False
+                
+            data = snapshot.to_dict() or {}
+            existing = audit_proposal_from_dict(data, doc_id=snapshot.id)
+            
+            if existing.status == "applying":
+                if existing.leased_until is None or now >= existing.leased_until:
+                    existing.status = "failed"
+                    existing.leased_until = None
+                    existing.updated_at = now
+                    transaction.set(doc_ref, existing.to_dict())
+                    return False
+                else:
+                    return False
+                    
+            if existing.status != "approved":
+                return False
+                
+            # Prevent concurrent moves for the same source title
+            applying_query = self.collection_ref.where(
+                "sourceTitleId", "==", existing.source_title_id
+            ).where("status", "==", "applying")
+            for doc in applying_query.stream(transaction=transaction):
+                if doc.id != snapshot.id:
+                    other_data = doc.to_dict() or {}
+                    other_leased_until = other_data.get("leasedUntil")
+                    if other_leased_until is not None and now < other_leased_until:
+                        return False
+                
+            existing.status = "applying"
+            existing.leased_until = now + lease_duration
+            existing.updated_at = now
+            transaction.set(doc_ref, existing.to_dict())
+            return True
+
+        transaction = self.db.transaction()
+        return _acquire_tx(transaction)
+
     def delete(self, proposal_id: str) -> None:
         doc_ref = self.collection_ref.document(proposal_id)
         doc_ref.delete()

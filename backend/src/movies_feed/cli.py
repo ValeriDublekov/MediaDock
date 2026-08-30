@@ -32,7 +32,7 @@ from .repository import (
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_MODES = frozenset({"rss", "recheck-existing", "reparse-unfound", "all"})
+SUPPORTED_MODES = frozenset({"rss", "recheck-existing", "reparse-unfound", "apply-proposals", "all"})
 AI_MODES = frozenset({"recheck-existing", "reparse-unfound", "all"})
 OMDB_MODES = frozenset({"rss", "recheck-existing", "reparse-unfound", "all"})
 MAX_SCANNER_DAYS = 30
@@ -220,8 +220,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--fake-repos", action="store_true", help="Use in-memory repositories instead of Firestore")
     parser.add_argument("--force-days", type=str, default="0", help="Force scan entries N days back")
     parser.add_argument("--audit-days", type=str, default="0", help="Audit existing records N days back (0 = unlimited)")
-    parser.add_argument("--mode", type=str, default="rss", choices=["rss", "recheck-existing", "reparse-unfound", "all"], help="Scan mode: 'rss' (feed scan), 'recheck-existing' (AI check stored titles), 'reparse-unfound' (AI reparse unmapped titles), or 'all'")
+    parser.add_argument("--mode", type=str, default="rss", choices=["rss", "recheck-existing", "reparse-unfound", "apply-proposals", "all"], help="Scan mode: 'rss' (feed scan), 'recheck-existing' (AI check stored titles), 'reparse-unfound' (AI reparse unmapped titles), 'apply-proposals' (Apply approved repairs), or 'all'")
     parser.add_argument("--feed-file", type=str, default=None, help="Read one explicit local RSS/Atom fixture instead of configured network feeds")
+    parser.add_argument("--proposal-id", type=str, default=None, help="Explicit proposal ID for apply-proposals mode")
+    parser.add_argument("--reject-proposal", action="store_true", help="Reject instead of applying the explicit proposal")
     parser.add_argument("--feed-type", type=str, choices=["movie", "series"], default=None, help="Configured type for --feed-file (default: movie)")
     
     parser.add_argument("--trigger", type=str, default=None, choices=["schedule", "manual", "local"], help="Trigger type (schedule, manual, local)")
@@ -310,7 +312,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "rss": "Standard RSS feed scan: Reads feeds, parses titles, queries OMDb, updates catalog.",
         "recheck-existing": "AI Audit & Repair mode: Audits existing DB titles with AI and fixes/prunes mismatches.",
         "reparse-unfound": "AI Reparse mode: Uses AI to re-extract and match unmapped titles from parse logs.",
-        "all": "Full run: Executes RSS scan -> AI Audit & Repair -> AI Reparse sequentially.",
+        "apply-proposals": "Apply approved audit proposals to the database.",
+        "all": "Full run: Executes RSS scan -> AI Audit & Repair -> AI Reparse -> Apply Proposals sequentially.",
     }
     logger.info(f" Mode Info     : {mode_descriptions.get(args.mode, 'Unknown mode')}")
     logger.info("--------------------------------------------------")
@@ -330,6 +333,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         mode=args.mode,
         feed_file=args.feed_file,
         feed_file_type=feed_file_type,
+        proposal_id=args.proposal_id,
+        reject_proposal=args.reject_proposal,
     )
 
     if args.fake_repos or args.parse_only:
