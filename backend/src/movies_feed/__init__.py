@@ -92,3 +92,8 @@ except ImportError:
 
 __version__ = "0.1.0"
 
+
+from .proposal_application import (
+    ProposalApplicationResult,
+    ProposalApplicationService,
+)

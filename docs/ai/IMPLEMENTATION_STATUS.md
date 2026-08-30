@@ -27,10 +27,11 @@ MVP wiring is present; production hardening is not complete.
 - Prompt 6A: Shared validation in `ai_validator.py` strictly validates Gemini responses with bounded payloads, exact types/ranges (`movie`/`series`), and fail-closed confidence thresholds (0.70 extraction/candidate, 0.80 audit).
 - Prompt 6B: Injected clock/sleep dependencies, deterministic retry policy (429/5xx/timeout), 403 cooldowns, header-only key transport (`x-goog-api-key`), bounded responses, and secret-safe structured logging in `AiMatcher`.
 - Prompt 7A: Defined idempotent `AuditProposal` storage contract, deterministic proposal IDs, status transition validation, evidence size limit (32 KiB), secret redaction, and Fake/Firestore repository parity.
+- Prompt 8A: Implemented Proposal Application Service, proposal state machine abstractions, and fake-repository tests with `apply_proposal`, dry-run, and target merging support.
 
 ## Next Prompt
 
-Run Prompt 7B in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+Run Prompt 8B in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 

@@ -378,6 +378,15 @@ Allowed status transitions are strictly enforced at the repository boundary:
 
 Applied and rejected proposals are terminal unless a documented new policy version generates a new deterministic proposal.
 
+### Application Semantics
+
+- The proposal application process is idempotent (`approved` -> `applying` -> `applied` or `failed`).
+- Stale source data (the source title no longer exists or the occurrences are missing) returns the proposal to `failed` without applying evidence.
+- Dry-run mode produces a plan with zero repository mutation.
+- Same source/target resolution is a no-op that explicitly skips.
+- Target titles are merged with preserving earliest `firstSeenAt` and latest `lastSeenAt` from occurrences.
+- A source title is deleted only when it has no remaining occurrences.
+
 ### Occurrence-Level Validation Metadata Location
 
 Occurrence documents located at `titles/{titleId}/occurrences/{occurrenceId}` store occurrence-level validation metadata:
