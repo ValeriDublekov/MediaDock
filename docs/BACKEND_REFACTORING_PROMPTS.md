@@ -20,42 +20,6 @@ implementing an earlier one. If an existing implementation already satisfies a
 bullet, add or verify the regression test and leave the behavior unchanged.
 
 
-## Prompt 6B: Isolate Gemini Transport and Rate Control
-
-```text
-Goal: make Gemini transport behavior deterministic, secret-safe, and testable.
-
-Scope: backend/src/movies_feed/ai_matcher.py, focused transport tests, and operational/model documentation. Keep the configured model ID unchanged and send the Gemini key through an x-goog-api-key header for both models.list and generateContent. Inject clock/sleep dependencies for inter-request delay, retry backoff, and forbidden cooldown. Cap response-body size before parsing.
-
-Contract: classify 429/5xx/timeouts as retryable according to one documented policy; classify authentication, forbidden, invalid-model, and other terminal errors separately. Enforce the configured delay between requests and expose accurate API-call/item statistics. Do not let a failed capability or transport call silently become a successful empty result.
-
-Non-goals: do not change the Prompt 6A response schema/thresholds, scanner retry selection, or catalog mutation behavior.
-
-Work: preserve the already completed model capability preflight and header boundary, replace direct time.sleep/time sources with injectable dependencies, and keep logs bounded and secret-free.
-
-Tests: timeout-then-success, 429/5xx retry exhaustion, forbidden response, enforced delay/cooldown, response-size limit, header-only key transport, and accurate statistics.
-
-Done when: transport tests run without sleeping or live API calls, retry classes are documented, and narrow plus full backend tests pass.
-```
-
-## Prompt 7A: Define AuditProposal Storage
-
-```text
-Goal: create an idempotent review-proposal contract before changing audit behavior.
-
-Scope: AuditProposal model, fake and Firestore repositories, serialization/tests, Firestore indexes if required, and docs/ai/DATA_CONTRACTS.md. Document collection path `/auditProposals/{proposalId}`, allowed status transitions, occurrence-level validation metadata location, maximum evidence size of 32 KiB, and secret-redaction rules before implementing persistence.
-
-Contract: a proposal identifies sourceTitleId, exact occurrence IDs/raw-title cluster, current metadata, proposed resolved metadata, deterministic/AI evidence, numeric confidence, policy version, created/updated timestamps, and status. Use deterministic IDs derived from source title, cluster identity, and policy version. Allowed transitions are pending -> approved/rejected, approved -> applying, applying -> applied/failed, and failed -> pending; applied/rejected are terminal unless a documented new policy version creates a new proposal.
-
-Non-goals: do not change recheck-existing, move occurrences, apply proposals, or add frontend approval UI.
-
-Work: validate bounds and redaction at the repository boundary, implement fake/Firestore parity, and add only indexes demanded by actual queries.
-
-Tests: serialization round trips, deterministic reruns, status-transition rejection, evidence bounds/redaction, fake/Firestore repository contract, and required index/query behavior.
-
-Done when: proposal persistence is independently green and the contract is complete enough for Prompt 7B to write proposals without inventing fields.
-```
-
 ## Prompt 7B: Audit Occurrence Clusters
 
 ```text

@@ -2,6 +2,7 @@
 
 from .ids import (
     get_audit_event_id,
+    get_audit_proposal_id,
     get_cache_key,
     get_fallback_title_id,
     get_fallback_title_id_v1,
@@ -27,6 +28,12 @@ from .match_policy import (
     parse_broadcast_range,
 )
 from .models import (
+    ALLOWED_AUDIT_PROPOSAL_TRANSITIONS,
+    MAX_AUDIT_PROPOSAL_EVIDENCE_BYTES,
+    VALID_AUDIT_PROPOSAL_STATUSES,
+    AuditProposal,
+    AuditProposalStatus,
+    InvalidStatusTransitionError,
     ManualMapping,
     OmdbCacheEntry,
     Occurrence,
@@ -37,6 +44,10 @@ from .models import (
     ScanRun,
     SourceContext,
     Title,
+    audit_proposal_from_dict,
+    is_valid_proposal_status_transition,
+    measure_evidence_size_bytes,
+    redact_secrets,
 )
 from .metadata_resolver import (
     MetadataOutcome,
@@ -46,6 +57,8 @@ from .metadata_resolver import (
     RequestBudget,
 )
 from .repository import (
+    AuditProposalRepository,
+    FakeAuditProposalRepository,
     FakeManualMappingRepository,
     FakeOmdbCacheRepository,
     FakeOccurrenceRepository,
@@ -64,15 +77,18 @@ from .repository import (
 )
 try:
     from .firestore_repository import (
+        FirestoreAuditProposalRepository,
         FirestoreTitleRepository,
         FirestoreOccurrenceRepository,
         FirestoreOmdbCacheRepository,
         FirestoreParseLogRepository,
         FirestoreScanRunRepository,
         FirestoreManualMappingRepository,
+        audit_proposal_from_dict,
         get_firestore_client,
     )
 except ImportError:
     pass
 
 __version__ = "0.1.0"
+

@@ -7,12 +7,15 @@ from typing import Optional
 from google.cloud import firestore as cloud_firestore
 
 from movies_feed import (
+    AuditProposal,
+    FirestoreAuditProposalRepository,
     FirestoreTitleRepository,
     FirestoreOccurrenceRepository,
     FirestoreOmdbCacheRepository,
     FirestoreScanRunRepository,
     FirestoreParseLogRepository,
     FirestoreManualMappingRepository,
+    InvalidStatusTransitionError,
     get_firestore_client,
     Title,
     Occurrence,
@@ -28,6 +31,7 @@ from movies_feed import (
     BroadcastRange,
 )
 from movies_feed.firestore_repository import (
+    audit_proposal_from_dict,
     manual_mapping_from_dict,
     occurrence_from_dict,
     parse_log_from_dict,
@@ -248,6 +252,29 @@ class DictDeserializationTests(unittest.TestCase):
         m2 = manual_mapping_from_dict(d2, doc_id="doc-web-456")
         self.assertEqual(m2.id, "doc-web-456")
         self.assertEqual(m2.raw_title, "Web Movie 2024")
+
+    def test_audit_proposal_deserialization_round_trip(self) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        d = {
+            "id": "prop-123",
+            "sourceTitleId": "tt0133093",
+            "occurrenceIds": ["occ-1"],
+            "rawTitleCluster": ["The Matrix 1999"],
+            "currentMetadata": {"title": "Matrix"},
+            "proposedMetadata": {"title": "The Matrix", "imdbId": "tt0133093"},
+            "evidence": {"score": 0.98},
+            "confidence": 0.98,
+            "policyVersion": "v1",
+            "createdAt": now,
+            "updatedAt": now,
+            "status": "pending",
+        }
+        proposal = audit_proposal_from_dict(d, doc_id="prop-fallback")
+        self.assertEqual(proposal.id, "prop-123")
+        self.assertEqual(proposal.source_title_id, "tt0133093")
+        self.assertEqual(proposal.confidence, 0.98)
+        self.assertEqual(proposal.status, "pending")
+
 
     def test_parse_log_deserialization_with_and_without_id_key(self) -> None:
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -714,4 +741,54 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
         remaining = repo.get_all()
         self.assertEqual(len(remaining), 1)
         self.assertEqual(remaining[0].id, "web-doc-456")
+
+    def test_audit_proposal_repository_persistence(self) -> None:
+        repo = FirestoreAuditProposalRepository(self.db)
+        proposal_id = "prop-persistence-123"
+
+        proposal = AuditProposal(
+            id=proposal_id,
+            source_title_id="tt0133093",
+            occurrence_ids=["occ-1"],
+            raw_title_cluster=["The Matrix 1999 1080p"],
+            current_metadata={"title": "Matrix"},
+            proposed_metadata={"title": "The Matrix", "imdbId": "tt0133093"},
+            evidence={"score": 0.98},
+            confidence=0.98,
+            policy_version="v1",
+            created_at=self.base_time,
+            updated_at=self.base_time,
+            status="pending",
+        )
+
+        repo.upsert(proposal)
+
+        fetched = repo.get(proposal_id)
+        self.assertIsNotNone(fetched)
+        self.assertEqual(fetched.id, proposal_id)
+        self.assertEqual(fetched.source_title_id, "tt0133093")
+        self.assertEqual(fetched.status, "pending")
+
+        pending_list = repo.list_by_status("pending")
+        self.assertEqual(len(pending_list), 1)
+        self.assertEqual(pending_list[0].id, proposal_id)
+
+        source_list = repo.list_by_source_title("tt0133093")
+        self.assertEqual(len(source_list), 1)
+        self.assertEqual(source_list[0].id, proposal_id)
+
+        # Transition to approved
+        proposal.status = "approved"
+        repo.upsert(proposal)
+        updated = repo.get(proposal_id)
+        self.assertEqual(updated.status, "approved")
+
+        # Invalid transition approved -> pending
+        proposal.status = "pending"
+        with self.assertRaises(InvalidStatusTransitionError):
+            repo.upsert(proposal)
+
+        repo.delete(proposal_id)
+        self.assertIsNone(repo.get(proposal_id))
+
 

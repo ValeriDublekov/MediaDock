@@ -89,6 +89,11 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /auditProposals/{proposalId} {
+      allow read: if isAllowlisted();
+      allow write: if false;
+    }
+
     match /manualMappings/{mappingId} {
       allow read: if isAllowlisted();
       allow create: if isAdmin() &&

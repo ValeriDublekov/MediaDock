@@ -24,6 +24,9 @@ describe('TriggerScannerModal', () => {
   });
 
   it('renders an unconfigured state when the public repository is unknown', () => {
+    vi.stubEnv('VITE_GITHUB_OWNER', '');
+    vi.stubEnv('VITE_GITHUB_REPO', '');
+
     render(<TriggerScannerModal />);
 
     expect(screen.getByTestId('trigger-scanner-unconfigured')).toBeInTheDocument();

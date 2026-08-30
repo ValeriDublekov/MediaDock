@@ -216,14 +216,18 @@ class TestScanner(unittest.TestCase):
         </rss>'''
 
     def add_recheck_occurrence(self, title_id: str, raw_title: str = "Stored Film 2020 1080p") -> None:
+        feed_entry_id = f"{title_id}-entry"
+        torrent_url = f"https://example.test/{title_id}"
+        from movies_feed.ids import get_source_item_id
+        occ_id = get_source_item_id("test-feed", feed_entry_id, torrent_url)
         self.occ_repo.upsert(
             title_id,
-            f"{title_id}-occurrence",
+            occ_id,
             Occurrence(
                 source_feed_id="test-feed",
                 source_feed_name="Test Feed",
-                feed_entry_id=f"{title_id}-entry",
-                torrent_url=f"https://example.test/{title_id}",
+                feed_entry_id=feed_entry_id,
+                torrent_url=torrent_url,
                 raw_title=raw_title,
                 quality="1080p",
                 rip_type="WEB-DL",

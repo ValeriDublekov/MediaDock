@@ -346,6 +346,51 @@ retained in the review log and never move occurrences or delete a title.
 Titles with no occurrences are persisted as `decision=needs_review` with
 `auditOutcome=orphan` and are never compared with their stored title.
 
+## `auditProposals/{proposalId}`
+
+Idempotent review proposals generated during existing-title audits before moving occurrences or modifying catalog titles.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `id` | string | Deterministic proposal ID derived from `sourceTitleId`, raw title cluster, and `policyVersion` |
+| `sourceTitleId` | string | Source title ID currently anchoring the occurrences |
+| `occurrenceIds` | string[] | Exact list of occurrence IDs proposed for re-linking or update |
+| `rawTitleCluster` | string[] | Cluster of raw torrent/feed title strings represented |
+| `currentMetadata` | map | Snapshot of existing title metadata (title, year, imdbId, mediaType) |
+| `proposedMetadata` | map | Proposed corrected metadata (resolved title, year, imdbId, mediaType) |
+| `evidence` | map | Deterministic and AI evidence dictionary (bounded to 32 KiB, secrets redacted) |
+| `confidence` | number | Numeric confidence score in range `0.0..1.0` |
+| `policyVersion` | string | Policy version string (e.g. `v1`) |
+| `createdAt` | Timestamp | Initial creation timestamp (preserved across updates) |
+| `updatedAt` | Timestamp | Last update timestamp |
+| `status` | string | One of `pending`, `approved`, `rejected`, `applying`, `applied`, `failed` |
+
+### Status Transitions
+
+Allowed status transitions are strictly enforced at the repository boundary:
+- `pending -> approved`
+- `pending -> rejected`
+- `approved -> applying`
+- `applying -> applied`
+- `applying -> failed`
+- `failed -> pending`
+- `s -> s` (same status update)
+
+Applied and rejected proposals are terminal unless a documented new policy version generates a new deterministic proposal.
+
+### Occurrence-Level Validation Metadata Location
+
+Occurrence documents located at `titles/{titleId}/occurrences/{occurrenceId}` store occurrence-level validation metadata:
+- `validationStatus` (`string` or null): validation status (e.g., `verified`, `flagged`, `pending_review`).
+- `validationPolicyVersion` (`string` or null): policy version used when verifying the occurrence.
+- `validatedAt` (`Timestamp` or null): timestamp of occurrence validation.
+- `validationReason` (`string` or null): human-readable summary of validation rationale.
+
+### Evidence Bounds and Secret Redaction
+
+- Maximum evidence size: **32 KiB (32,768 bytes)** serialized UTF-8 payload.
+- Secret redaction: repository implementations automatically strip and redact Google API keys (`AIzaSy...`), Bearer authorization tokens, sensitive URL query parameters (`apikey`, `api_key`, `key`, `token`, `secret`, `password`), and dictionary keys matching sensitive patterns before persistence.
+
 ## `manualMappings/{mappingId}`
 
 Manual IMDb ID override mappings provided by admins for unfound titles.
@@ -445,6 +490,7 @@ Bounded inputs and outputs:
 | `omdbCache/**` | Denied | Denied | Allowed |
 | `scanRuns/**` | Denied by default | Denied | Allowed |
 | `parseLogs/**` | Allowlisted | Denied | Allowed |
+| `auditProposals/**` | Allowlisted | Denied | Allowed |
 | `manualMappings/**` | Allowlisted | Admin only | Allowed |
 | `allowlist/**` | Own access check only | Denied | Allowed |
 | `users/{uid}/**` | Own validated paths | Future own validated paths | Optional |

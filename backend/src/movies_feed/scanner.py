@@ -12,6 +12,7 @@ import feedparser
 from .ids import (
     clean_title_for_comparison,
     get_audit_event_id,
+    get_audit_proposal_id,
     get_occurrence_id_v1,
     get_source_item_id,
     get_title_id_v2,
@@ -24,7 +25,7 @@ from .match_policy import (
     get_exclusion_reason as policy_get_exclusion_reason,
     normalize_source_type,
 )
-from .models import ManualMapping, Occurrence, ParseLog, ScanRun, SourceContext, Title
+from .models import AuditProposal, ManualMapping, Occurrence, ParseLog, ScanRun, SourceContext, Title
 from .metadata_resolver import MetadataOutcome, MetadataOutcomeStatus, MetadataResolver, OmdbResolver
 from .omdb_client import (
     OmdbClient,
@@ -38,6 +39,7 @@ from .repository import (
     ParseLogRepository,
     ScanRunRepository,
     TitleRepository,
+    AuditProposalRepository,
     merge_occurrences,
     merge_titles,
 )
@@ -87,6 +89,7 @@ class ScannerService:
         run_repo: ScanRunRepository,
         parse_log_repo: Optional[ParseLogRepository] = None,
         manual_mapping_repo: Optional[ManualMappingRepository] = None,
+        audit_proposal_repo: Optional[AuditProposalRepository] = None,
         ai_matcher: Optional[AiMatcher] = None,
         now: Optional[datetime.datetime] = None,
         feed_fetcher: Optional[FeedFetcher] = None,
@@ -100,6 +103,7 @@ class ScannerService:
         self.run_repo = run_repo
         self.parse_log_repo = parse_log_repo
         self.manual_mapping_repo = manual_mapping_repo
+        self.audit_proposal_repo = audit_proposal_repo
         self.ai_matcher = ai_matcher
         self.now = now or datetime.datetime.now(datetime.timezone.utc)
         self.feed_fetcher = feed_fetcher or FeedFetcher()
@@ -603,6 +607,8 @@ class ScannerService:
         if existing_occ is None:
             run.occurrences_created += 1
             merged_occ = occurrence_record
+            merged_title.ai_validated = False
+            merged_title.ai_checked_at = None
         else:
             merged_occ = merge_occurrences(existing_occ, occurrence_record)
         occ_key = (title_id, occurrence_id)
@@ -935,7 +941,14 @@ class ScannerService:
             "needs_review": 0,
             "ai_failures": 0,
             "omdb_failures": 0,
+            "clusters_checked": 0,
+            "valid_clusters": 0,
+            "proposals": 0,
+            "retryable_failures": 0,
+            "orphans": 0,
         }
+
+        CURRENT_POLICY_VERSION = "v1"
 
         all_titles = self.title_repo.list_all_ids_and_titles()
         if not all_titles:
@@ -996,6 +1009,7 @@ class ScannerService:
             for idx, (title_id, title_record) in enumerate(chunk):
                 occs = self.occurrence_repo.list_by_title(title_id)
                 if not occs:
+                    stats["orphans"] += 1
                     stats["needs_review"] += 1
                     self._record_recheck_needs_review(
                         title_id=title_id,
@@ -1009,31 +1023,51 @@ class ScannerService:
                     )
                     continue
 
-                raw_title = occs[0].raw_title
-                feed_name = occs[0].source_feed_name
-                ai_id = len(items_to_audit)
-                items_to_audit.append({
-                    "id": ai_id,
-                    "raw_title": raw_title,
-                    "feed_name": feed_name,
-                    "current_omdb_title": title_record.title,
-                    "current_omdb_year": title_record.year,
-                    "current_omdb_type": title_record.media_type,
-                    "current_omdb_source_type": effective_source_type(title_record.media_type, title_record.source_type),
-                    "current_content_kind": title_record.content_kind,
-                    "current_broadcast_range": (
-                        title_record.broadcast_range.to_dict()
-                        if title_record.broadcast_range is not None
-                        else None
-                    ),
-                    "current_imdb_id": title_record.imdb_id,
-                })
-                chunk_context.append((ai_id, title_id, title_record, occs, raw_title, feed_name))
+                clusters = {}
+                for occ in occs:
+                    cluster_id = (occ.source_feed_id, occ.raw_title)
+                    if cluster_id not in clusters:
+                        clusters[cluster_id] = []
+                    clusters[cluster_id].append(occ)
+
+                for cluster_id, cluster_occs in clusters.items():
+                    is_valid = all(
+                        o.validation_status == "valid" 
+                        and o.validation_policy_version == CURRENT_POLICY_VERSION
+                        for o in cluster_occs
+                    )
+                    
+                    if is_valid:
+                        stats["valid_clusters"] += 1
+                        continue
+
+                    raw_title = cluster_id[1]
+                    feed_name = cluster_occs[0].source_feed_name
+                    ai_id = len(items_to_audit)
+                    
+                    items_to_audit.append({
+                        "id": ai_id,
+                        "raw_title": raw_title,
+                        "feed_name": feed_name,
+                        "current_omdb_title": title_record.title,
+                        "current_omdb_year": title_record.year,
+                        "current_omdb_type": title_record.media_type,
+                        "current_omdb_source_type": effective_source_type(title_record.media_type, title_record.source_type),
+                        "current_content_kind": title_record.content_kind,
+                        "current_broadcast_range": (
+                            title_record.broadcast_range.to_dict()
+                            if title_record.broadcast_range is not None
+                            else None
+                        ),
+                        "current_imdb_id": title_record.imdb_id,
+                    })
+                    chunk_context.append((ai_id, title_id, title_record, cluster_occs, raw_title, feed_name))
 
             stats["titles_checked"] += len(chunk)
 
             if not items_to_audit:
                 self._flush_parse_logs(section_timings)
+                self._check_aggregate_validity(chunk, CURRENT_POLICY_VERSION)
                 continue
 
             audit_results: Any = {}
@@ -1048,6 +1082,7 @@ class ScannerService:
 
             if not self._validate_recheck_batch(items_to_audit, audit_results):
                 stats["ai_failures"] += 1
+                stats["retryable_failures"] += len(items_to_audit)
                 self._record_phase_error(run, "AI recheck phase incomplete")
                 logger.error(
                     f"[AI Recheck] {batch_failure_reason} on batch {batch_idx}/{total_batches}. "
@@ -1068,19 +1103,29 @@ class ScannerService:
                 self._flush_parse_logs(section_timings)
                 break
 
-            for ai_id, title_id, title_record, occs, raw_title, feed_name in chunk_context:
+            for ai_id, title_id, title_record, cluster_occs, raw_title, feed_name in chunk_context:
+                stats["clusters_checked"] += 1
                 ai_res = audit_results[ai_id]
                 deterministic_decision = self._evaluate_existing_title_match(title_record, raw_title)
-                if ai_res["is_valid_match"] is True and not deterministic_decision.is_rejected:
-                    validated_title = copy.deepcopy(title_record)
-                    validated_title.ai_validated = True
-                    validated_title.ai_checked_at = self.now
-                    if not self.config.is_dry_run:
-                        self.title_repo.upsert(title_id, validated_title)
+                
+                confidence = float(ai_res.get("confidence", 0.0) if ai_res.get("confidence") is not None else 0.0)
+                is_valid = ai_res["is_valid_match"] is True and not deterministic_decision.is_rejected
+                
+                if is_valid:
                     stats["validated"] += 1
+                    stats["valid_clusters"] += 1
+                    if not self.config.is_dry_run:
+                        for occ in cluster_occs:
+                            occ.validation_status = "valid"
+                            occ.validation_policy_version = CURRENT_POLICY_VERSION
+                            occ.validated_at = self.now
+                            occ.validation_reason = ai_res.get("reason")
+                            occ_id = get_source_item_id(occ.source_feed_id, occ.feed_entry_id, occ.torrent_url)
+                            self.occurrence_repo.upsert(title_id, occ_id, occ)
                 else:
                     stats["mismatches_found"] += 1
                     stats["needs_review"] += 1
+                    stats["proposals"] += 1
                     corr_title = ai_res.get("corrected_title")
                     corr_year = ai_res.get("corrected_year")
                     corr_media_type = ai_res.get("corrected_media_type")
@@ -1094,7 +1139,9 @@ class ScannerService:
                         corr_media_type = None
                     else:
                         reason = ai_res.get("reason") or "AI detected a mismatch"
+                    
                     logger.info(f"Mismatch for title '{title_record.title}' (raw: '{raw_title}'): {reason}")
+                    
                     suggestion = self._inspect_recheck_suggestion(
                         raw_title=raw_title,
                         corrected_title=corr_title,
@@ -1109,6 +1156,7 @@ class ScannerService:
                     )
                     if suggestion["omdb_status"] == "error":
                         stats["omdb_failures"] += 1
+                        
                     trace_details = {
                         "aiReason": reason,
                         "policyReasonCode": deterministic_decision.reason_code,
@@ -1123,7 +1171,7 @@ class ScannerService:
                     self._record_recheck_needs_review(
                         title_id=title_id,
                         title_record=title_record,
-                        occurrences=occs,
+                        occurrences=cluster_occs,
                         raw_title=raw_title,
                         feed_name=feed_name,
                         audit_outcome="mismatch_retained",
@@ -1134,8 +1182,50 @@ class ScannerService:
                         trace_details=trace_details,
                         section_timings=section_timings,
                     )
+                    
+                    proposal_id = get_audit_proposal_id(
+                        source_title_id=title_id,
+                        cluster_identity=[raw_title],
+                        policy_version=CURRENT_POLICY_VERSION
+                    )
+                    occ_ids = [get_source_item_id(o.source_feed_id, o.feed_entry_id, o.torrent_url) for o in cluster_occs]
+                    prop = AuditProposal(
+                        id=proposal_id,
+                        source_title_id=title_id,
+                        occurrence_ids=occ_ids,
+                        raw_title_cluster=[raw_title],
+                        current_metadata={
+                            "title": title_record.title,
+                            "year": title_record.year,
+                            "media_type": title_record.media_type,
+                            "imdb_id": title_record.imdb_id,
+                        },
+                        proposed_metadata={
+                            "title": corr_title,
+                            "year": corr_year,
+                            "media_type": corr_media_type,
+                        },
+                        evidence={
+                            "reason": reason,
+                            "policy_reason_code": deterministic_decision.reason_code,
+                            "ai_confidence": confidence,
+                            "source_feed_name": feed_name,
+                            "omdb_outcome": suggestion["omdb_outcome"],
+                        },
+                        confidence=confidence,
+                        policy_version=CURRENT_POLICY_VERSION,
+                        created_at=self.now,
+                        updated_at=self.now,
+                        status="pending"
+                    )
+                    if not self.config.is_dry_run and self.audit_proposal_repo:
+                        existing_prop = self.audit_proposal_repo.get(proposal_id)
+                        if existing_prop:
+                            prop.created_at = existing_prop.created_at
+                        self.audit_proposal_repo.upsert(prop)
 
             self._flush_parse_logs(section_timings)
+            self._check_aggregate_validity(chunk, CURRENT_POLICY_VERSION)
 
             # Brief rate-limit pause between AI batches if more remain
             if batch_idx < total_batches and self.ai_matcher and self.ai_matcher.is_available:
@@ -1143,6 +1233,23 @@ class ScannerService:
 
         logger.info(f"AI database recheck completed: {stats}")
         return stats
+
+    def _check_aggregate_validity(self, chunk: List[tuple[str, Title]], policy_version: str) -> None:
+        if self.config.is_dry_run:
+            return
+        for title_id, title_record in chunk:
+            occs = self.occurrence_repo.list_by_title(title_id)
+            if not occs:
+                continue
+            is_aggregate_valid = all(
+                o.validation_status == "valid" and o.validation_policy_version == policy_version
+                for o in occs
+            )
+            if is_aggregate_valid and not title_record.ai_validated:
+                validated_title = copy.deepcopy(title_record)
+                validated_title.ai_validated = True
+                validated_title.ai_checked_at = self.now
+                self.title_repo.upsert(title_id, validated_title)
 
     def _recheck_existing_titles(
         self,

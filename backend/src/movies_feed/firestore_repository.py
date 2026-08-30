@@ -1,3 +1,4 @@
+import copy
 import os
 import datetime
 from typing import Any, Dict, List, Optional
@@ -7,6 +8,8 @@ from google.cloud.firestore_v1.field_path import FieldPath
 
 from .match_policy import broadcast_range_from_dict, effective_source_type
 from .models import (
+    AuditProposal,
+    InvalidStatusTransitionError,
     ManualMapping,
     OmdbCacheEntry,
     Occurrence,
@@ -17,8 +20,11 @@ from .models import (
     ScanRun,
     SourceContext,
     Title,
+    VALID_AUDIT_PROPOSAL_STATUSES,
+    is_valid_proposal_status_transition,
 )
 from .repository import (
+    AuditProposalRepository,
     ManualMappingRepository,
     OmdbCacheRepository,
     OccurrenceRepository,
@@ -253,6 +259,43 @@ def manual_mapping_from_dict(d: dict, doc_id: Optional[str] = None) -> ManualMap
         parsed_year=d.get("parsedYear"),
         created_by=d.get("createdBy"),
     )
+
+
+def audit_proposal_from_dict(d: dict, doc_id: Optional[str] = None) -> AuditProposal:
+    """Reconstructs an AuditProposal model from a camelCase dictionary retrieved from Firestore."""
+    proposal_id = d.get("id") or doc_id or ""
+    created_at = d.get("createdAt")
+    if not isinstance(created_at, datetime.datetime):
+        created_at = datetime.datetime.now(datetime.timezone.utc)
+    updated_at = d.get("updatedAt")
+    if not isinstance(updated_at, datetime.datetime):
+        updated_at = datetime.datetime.now(datetime.timezone.utc)
+
+    status = d.get("status", "pending")
+    if status not in VALID_AUDIT_PROPOSAL_STATUSES:
+        status = "pending"
+
+    confidence = d.get("confidence", 0.0)
+    try:
+        confidence = float(confidence)
+    except (ValueError, TypeError):
+        confidence = 0.0
+
+    return AuditProposal(
+        id=proposal_id,
+        source_title_id=d.get("sourceTitleId", ""),
+        occurrence_ids=list(d.get("occurrenceIds") or []),
+        raw_title_cluster=list(d.get("rawTitleCluster") or []),
+        current_metadata=dict(d.get("currentMetadata") or {}),
+        proposed_metadata=dict(d.get("proposedMetadata") or {}),
+        evidence=dict(d.get("evidence") or {}),
+        confidence=confidence,
+        policy_version=d.get("policyVersion", "v1"),
+        created_at=created_at,
+        updated_at=updated_at,
+        status=status,
+    )
+
 
 
 
@@ -577,4 +620,61 @@ class FirestoreManualMappingRepository(ManualMappingRepository):
     def delete(self, mapping_id: str) -> None:
         doc_ref = self.collection_ref.document(mapping_id)
         doc_ref.delete()
+
+
+class FirestoreAuditProposalRepository(AuditProposalRepository):
+    def __init__(self, db: Optional[firestore.firestore.Client] = None) -> None:
+        self.db = db if db is not None else get_firestore_client()
+        self.collection_ref = self.db.collection("auditProposals")
+
+    def get(self, proposal_id: str) -> Optional[AuditProposal]:
+        doc_ref = self.collection_ref.document(proposal_id)
+        snapshot = doc_ref.get()
+        if snapshot.exists:
+            data = snapshot.to_dict()
+            if not data:
+                return None
+            return audit_proposal_from_dict(data, doc_id=snapshot.id)
+        return None
+
+    def upsert(self, proposal: AuditProposal) -> None:
+        doc_ref = self.collection_ref.document(proposal.id)
+
+        @firestore.transactional
+        def _upsert_tx(transaction):
+            snapshot = doc_ref.get(transaction=transaction)
+            incoming = copy.deepcopy(proposal)
+            if snapshot.exists:
+                data = snapshot.to_dict() or {}
+                existing = audit_proposal_from_dict(data, doc_id=snapshot.id)
+                if not is_valid_proposal_status_transition(existing.status, incoming.status):
+                    raise InvalidStatusTransitionError(
+                        f"Cannot transition proposal '{incoming.id}' from '{existing.status}' to '{incoming.status}'"
+                    )
+                incoming.created_at = min(existing.created_at, incoming.created_at)
+            transaction.set(doc_ref, incoming.to_dict())
+
+        transaction = self.db.transaction()
+        _upsert_tx(transaction)
+
+    def list_by_status(self, status: str, limit: int = 100) -> List[AuditProposal]:
+        if limit <= 0:
+            return []
+        query = self.collection_ref.where("status", "==", status).limit(limit)
+        docs = query.stream()
+        return [audit_proposal_from_dict(doc.to_dict(), doc_id=doc.id) for doc in docs]
+
+    def list_by_source_title(self, source_title_id: str) -> List[AuditProposal]:
+        query = self.collection_ref.where("sourceTitleId", "==", source_title_id)
+        docs = query.stream()
+        return [audit_proposal_from_dict(doc.to_dict(), doc_id=doc.id) for doc in docs]
+
+    def list_all(self) -> List[AuditProposal]:
+        docs = self.collection_ref.stream()
+        return [audit_proposal_from_dict(doc.to_dict(), doc_id=doc.id) for doc in docs]
+
+    def delete(self, proposal_id: str) -> None:
+        doc_ref = self.collection_ref.document(proposal_id)
+        doc_ref.delete()
+
 

@@ -4,6 +4,8 @@ import datetime
 from typing import Any, Dict, List, Optional
 
 from .models import (
+    AuditProposal,
+    InvalidStatusTransitionError,
     ManualMapping,
     OmdbCacheEntry,
     Occurrence,
@@ -14,6 +16,7 @@ from .models import (
     ScanRun,
     SourceContext,
     Title,
+    is_valid_proposal_status_transition,
 )
 
 
@@ -160,6 +163,10 @@ def merge_occurrences(existing: Occurrence, incoming: Occurrence) -> Occurrence:
         first_seen_at=first_seen_at,
         last_seen_at=last_seen_at,
         source_context=merge_source_context(existing.source_context, incoming.source_context),
+        validation_status=incoming.validation_status or existing.validation_status,
+        validation_policy_version=incoming.validation_policy_version or existing.validation_policy_version,
+        validation_reason=incoming.validation_reason or existing.validation_reason,
+        validated_at=incoming.validated_at or existing.validated_at,
     )
 
 
@@ -497,4 +504,81 @@ class FakeManualMappingRepository(ManualMappingRepository):
     def delete(self, mapping_id: str) -> None:
         if mapping_id in self._store:
             del self._store[mapping_id]
+
+
+class AuditProposalRepository(ABC):
+    @abstractmethod
+    def get(self, proposal_id: str) -> Optional[AuditProposal]:
+        """Fetches an AuditProposal by its ID."""
+        pass
+
+    @abstractmethod
+    def upsert(self, proposal: AuditProposal) -> None:
+        """Stores or updates an AuditProposal, enforcing valid status transitions and bounds."""
+        pass
+
+    @abstractmethod
+    def list_by_status(self, status: str, limit: int = 100) -> List[AuditProposal]:
+        """Lists AuditProposals filtered by status."""
+        pass
+
+    @abstractmethod
+    def list_by_source_title(self, source_title_id: str) -> List[AuditProposal]:
+        """Lists AuditProposals for a specific source title ID."""
+        pass
+
+    @abstractmethod
+    def list_all(self) -> List[AuditProposal]:
+        """Lists all AuditProposals in the repository."""
+        pass
+
+    @abstractmethod
+    def delete(self, proposal_id: str) -> None:
+        """Deletes an AuditProposal by ID."""
+        pass
+
+
+class FakeAuditProposalRepository(AuditProposalRepository):
+    def __init__(self) -> None:
+        self._store: Dict[str, AuditProposal] = {}
+
+    def get(self, proposal_id: str) -> Optional[AuditProposal]:
+        proposal = self._store.get(proposal_id)
+        return copy.deepcopy(proposal) if proposal is not None else None
+
+    def upsert(self, proposal: AuditProposal) -> None:
+        incoming = copy.deepcopy(proposal)
+        existing = self._store.get(incoming.id)
+        if existing is not None:
+            if not is_valid_proposal_status_transition(existing.status, incoming.status):
+                raise InvalidStatusTransitionError(
+                    f"Cannot transition proposal '{incoming.id}' from '{existing.status}' to '{incoming.status}'"
+                )
+            incoming.created_at = min(existing.created_at, incoming.created_at)
+        self._store[incoming.id] = incoming
+
+    def list_by_status(self, status: str, limit: int = 100) -> List[AuditProposal]:
+        if limit <= 0:
+            return []
+        matching = [
+            copy.deepcopy(p)
+            for p in self._store.values()
+            if p.status == status
+        ]
+        return matching[:limit]
+
+    def list_by_source_title(self, source_title_id: str) -> List[AuditProposal]:
+        return [
+            copy.deepcopy(p)
+            for p in self._store.values()
+            if p.source_title_id == source_title_id
+        ]
+
+    def list_all(self) -> List[AuditProposal]:
+        return [copy.deepcopy(p) for p in self._store.values()]
+
+    def delete(self, proposal_id: str) -> None:
+        if proposal_id in self._store:
+            del self._store[proposal_id]
+
 

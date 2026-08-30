@@ -1,6 +1,6 @@
 import hashlib
 import re
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 
 def _sha256_id(canonical_value: str) -> str:
@@ -156,3 +156,35 @@ def get_cache_key(
         f"{normalized_media_type}:{normalized_identity}"
     )
     return hashlib.sha256(raw_str.encode("utf-8")).hexdigest()
+
+
+def get_audit_proposal_id(
+    source_title_id: str,
+    cluster_identity: Union[str, Sequence[str]],
+    policy_version: str = "v1",
+) -> str:
+    """Generates a deterministic v2 ID for an audit proposal.
+
+    Derived from the source title, normalized cluster identity, and policy version.
+    """
+    normalized_source_title_id = source_title_id.strip() if isinstance(source_title_id, str) else ""
+    if not normalized_source_title_id:
+        raise ValueError("source_title_id is required for an audit proposal ID")
+
+    if isinstance(cluster_identity, (list, tuple, set)):
+        cleaned_cluster = ",".join(sorted(str(c).strip() for c in cluster_identity if str(c).strip()))
+    elif isinstance(cluster_identity, str):
+        cleaned_cluster = cluster_identity.strip()
+    else:
+        cleaned_cluster = str(cluster_identity).strip()
+
+    if not cleaned_cluster:
+        raise ValueError("cluster_identity is required for an audit proposal ID")
+
+    normalized_policy_version = policy_version.strip() if isinstance(policy_version, str) else "v1"
+    if not normalized_policy_version:
+        normalized_policy_version = "v1"
+
+    canonical_raw = f"v2:proposal:{normalized_source_title_id}:{cleaned_cluster}:{normalized_policy_version}"
+    return _sha256_id(canonical_raw)
+

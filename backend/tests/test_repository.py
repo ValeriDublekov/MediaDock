@@ -3,11 +3,14 @@ import hashlib
 import unittest
 
 from movies_feed import (
+    AuditProposal,
+    FakeAuditProposalRepository,
     FakeOmdbCacheRepository,
     FakeOccurrenceRepository,
     FakeParseLogRepository,
     FakeScanRunRepository,
     FakeTitleRepository,
+    InvalidStatusTransitionError,
     OmdbCacheEntry,
     Occurrence,
     ParseLog,
@@ -16,6 +19,7 @@ from movies_feed import (
     ScanRun,
     SourceContext,
     Title,
+    get_audit_proposal_id,
     get_cache_key,
     get_fallback_title_id,
     get_occurrence_id,
@@ -706,4 +710,50 @@ class RepositoryAndIdTests(unittest.TestCase):
         repo.delete_by_title("t1")
         self.assertEqual(len(repo.list_by_title("t1")), 0)
         self.assertEqual(len(repo.list_by_title("t2")), 1)
+
+    def test_get_audit_proposal_id(self) -> None:
+        source_id = "tt0133093"
+        cluster = ["The Matrix 1999 1080p", "The Matrix 1999 720p"]
+        pid = get_audit_proposal_id(source_id, cluster, "v1")
+        self.assertEqual(len(pid), 64)
+        # Idempotent with reordered list
+        self.assertEqual(pid, get_audit_proposal_id(source_id, ["The Matrix 1999 720p", "The Matrix 1999 1080p"], "v1"))
+
+    def test_fake_audit_proposal_repository_lifecycle(self) -> None:
+        repo = FakeAuditProposalRepository()
+        proposal = AuditProposal(
+            id="p1",
+            source_title_id="t1",
+            occurrence_ids=["occ-1"],
+            raw_title_cluster=["Raw Matrix"],
+            current_metadata={"title": "Matrix"},
+            proposed_metadata={"title": "The Matrix", "imdbId": "tt0133093"},
+            evidence={"score": 0.95},
+            confidence=0.95,
+            policy_version="v1",
+            created_at=self.earlier_time,
+            updated_at=self.base_time,
+            status="pending",
+        )
+        repo.upsert(proposal)
+        self.assertEqual(repo.get("p1").status, "pending")
+        self.assertEqual(len(repo.list_by_status("pending")), 1)
+        self.assertEqual(len(repo.list_by_source_title("t1")), 1)
+
+        # Transition to approved
+        proposal.status = "approved"
+        proposal.updated_at = self.later_time
+        repo.upsert(proposal)
+        updated = repo.get("p1")
+        self.assertEqual(updated.status, "approved")
+        self.assertEqual(updated.created_at, self.earlier_time)
+
+        # Invalid transition approved -> pending
+        proposal.status = "pending"
+        with self.assertRaises(InvalidStatusTransitionError):
+            repo.upsert(proposal)
+
+        repo.delete("p1")
+        self.assertIsNone(repo.get("p1"))
+
 

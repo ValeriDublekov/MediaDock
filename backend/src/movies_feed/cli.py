@@ -14,6 +14,7 @@ from .firestore_repository import (
     FirestoreScanRunRepository,
     FirestoreTitleRepository,
     FirestoreManualMappingRepository,
+    FirestoreAuditProposalRepository,
     get_firestore_client,
 )
 from .omdb_client import OmdbClient
@@ -26,6 +27,7 @@ from .repository import (
     FakeScanRunRepository,
     FakeTitleRepository,
     FakeManualMappingRepository,
+    FakeAuditProposalRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -337,6 +339,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         run_repo = FakeScanRunRepository()
         parse_log_repo = FakeParseLogRepository()
         manual_mapping_repo = FakeManualMappingRepository()
+        audit_proposal_repo = FakeAuditProposalRepository()
     else:
         db = get_firestore_client()
         title_repo = FirestoreTitleRepository(db)
@@ -345,6 +348,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         run_repo = FirestoreScanRunRepository(db)
         parse_log_repo = FirestoreParseLogRepository(db)
         manual_mapping_repo = FirestoreManualMappingRepository(db)
+        audit_proposal_repo = FirestoreAuditProposalRepository(db)
 
     ai_matcher = AiMatcher()
     if args.mode in AI_MODES and ai_matcher.is_available:
@@ -365,6 +369,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         run_repo=run_repo,
         parse_log_repo=parse_log_repo,
         manual_mapping_repo=manual_mapping_repo,
+        audit_proposal_repo=audit_proposal_repo,
         ai_matcher=ai_matcher,
     )
 
