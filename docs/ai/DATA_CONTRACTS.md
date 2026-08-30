@@ -421,6 +421,22 @@ descending and document ID descending. It intentionally does not filter on
 `retryState` in Firestore because legacy documents without that field must pass
 through compatibility classification.
 
+## AI Validation Contract
+
+All AI extraction, candidate validation, and audit operations through `AiMatcher` enforce strict schema verification, bounded payloads, and confidence thresholds before returning results:
+
+| Operation | Minimum Confidence | Output Fields | Fail-Closed Policy |
+| --- | --- | --- | --- |
+| `batch_extract_titles` | `0.70` | `id`, `title`, `year` (nullable int), `mediaType` (`movie` \| `series`), `confidence` (float `0.0..1.0`) | On missing IDs, malformed fields, unknown types, or confidence `< 0.70`, returns empty dict `{}`. |
+| `batch_validate_omdb_matches` | `0.70` | `id`, `is_match` (bool), `confidence` (float `0.0..1.0`), `reason` (string) | On missing IDs, malformed types, or confidence `< 0.70`, returns empty dict `{}`. |
+| `batch_recheck_matches` | `0.80` | `id`, `is_valid_match` (bool), `confidence` (float `0.0..1.0`), `reason` (string), `corrected_title`, `corrected_year`, `corrected_media_type` | On missing/duplicate IDs, invalid types, or confidence `< 0.80`, returns empty dict `{}`. Callers retain existing catalog state without mutation. |
+
+Bounded inputs and outputs:
+- Raw titles and candidate titles are trimmed and bounded to 500 characters.
+- Response payloads are capped at 5 MiB.
+- Years must be within valid range (`1880..2100`) or `None`.
+- Media type must strictly be `movie` or `series`.
+
 ## Write Ownership Summary
 
 | Path | Browser read | Browser write | Admin scanner write |

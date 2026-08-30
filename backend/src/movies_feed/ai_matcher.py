@@ -3,14 +3,40 @@ import logging
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 import urllib.request
 import urllib.error
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
+
+from .ai_validator import (
+    DEFAULT_MIN_AUDIT_CONFIDENCE,
+    DEFAULT_MIN_CANDIDATE_VALIDATION_CONFIDENCE,
+    DEFAULT_MIN_EXTRACTION_CONFIDENCE,
+    MAX_RESPONSE_BYTES,
+    validate_batch_extract_results,
+    validate_batch_recheck_results,
+    validate_batch_validate_omdb_results,
+)
 
 logger = logging.getLogger(__name__)
 
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+
+
+def _load_prompt_template(filename: str) -> str:
+    prompt_file = PROMPTS_DIR / filename
+    if prompt_file.is_file():
+        return prompt_file.read_text(encoding="utf-8")
+    raise FileNotFoundError(f"Prompt template file not found: {prompt_file}")
+
+
+def _bound_text(text: Any, max_length: int = 500) -> str:
+    if not isinstance(text, str):
+        return ""
+    return text[:max_length]
 
 
 class GeminiModelCapabilityError(ValueError):
@@ -175,7 +201,11 @@ class AiMatcher:
             try:
                 attempt_t0 = time.perf_counter()
                 with urllib.request.urlopen(req, timeout=120) as resp:
-                    resp_bytes = resp.read()
+                    resp_bytes = resp.read(MAX_RESPONSE_BYTES + 1)
+                    if len(resp_bytes) > MAX_RESPONSE_BYTES:
+                        logger.error(f"[Gemini API #{call_id}] Response body exceeded maximum allowed size {MAX_RESPONSE_BYTES} bytes.")
+                        self.failed_calls += 1
+                        return None
                     resp_json = json.loads(resp_bytes.decode("utf-8"))
                     candidates = resp_json.get("candidates", [])
                     finished_time_str = datetime.now().strftime("%H:%M:%S")
@@ -252,31 +282,39 @@ class AiMatcher:
 
         return None
 
-    def batch_extract_titles(self, items: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    def batch_extract_titles(
+        self,
+        items: List[Dict[str, Any]],
+        min_confidence: float = DEFAULT_MIN_EXTRACTION_CONFIDENCE,
+    ) -> Dict[int, Dict[str, Any]]:
         """
         Batch extracts clean title, year, and media type from noisy torrent raw titles.
         items: [{"id": 0, "raw_title": "...", "feed_type": "movie"|"series"}]
         Returns dict keyed by item id:
         {
-           0: {"title": "Dune: Part Two", "year": 2024, "media_type": "movie", "confidence": "high"}
+           0: {"id": 0, "title": "Dune: Part Two", "year": 2024, "media_type": "movie", "confidence": 0.95}
         }
         """
         if not self.is_available or not items:
             return {}
 
-        prompt = (
-            "You are an expert movie and TV series metadata parser. "
-            "Given a JSON array of torrent titles from RuTracker/trackers and their expected feed type, "
-            "extract the clean original international English/Latin title (or native transliterated title), "
-            "release year (integer), and media type ('movie' or 'series').\n\n"
-            "Rules:\n"
-            "1. Remove Russian translated titles before the slash ('/'). Use the original/international title.\n"
-            "2. Remove author names, directors in brackets like '(реж. Denis Villeneuve)', and codec tags.\n"
-            "3. If seasons/episodes are present (e.g. 'Сезон 1', '[01-08 из 08]', 'S01'), treat that as a series marker.\n"
-            "4. When feed_type is 'movie' or 'series', it is authoritative for source type; do not silently change it because of a marker.\n"
-            "5. When feed_type is 'unknown', infer the source type from the title and its markers.\n\n"
-            f"Input items:\n{json.dumps(items, ensure_ascii=False)}"
-        )
+        expected_ids: Set[int] = set()
+        bounded_items: List[Dict[str, Any]] = []
+        for it in items:
+            if not isinstance(it, dict) or type(it.get("id")) is not int:
+                return {}
+            expected_ids.add(it["id"])
+            bounded_items.append({
+                "id": it["id"],
+                "raw_title": _bound_text(it.get("raw_title", "")),
+                "feed_type": str(it.get("feed_type") or "unknown")[:50],
+            })
+
+        if len(expected_ids) != len(items):
+            return {}
+
+        template = _load_prompt_template("extract_titles.txt")
+        prompt = template.format(items_json=json.dumps(bounded_items, ensure_ascii=False))
 
         schema = {
             "type": "ARRAY",
@@ -287,9 +325,9 @@ class AiMatcher:
                     "title": {"type": "STRING"},
                     "year": {"type": "INTEGER", "nullable": True},
                     "media_type": {"type": "STRING", "enum": ["movie", "series"]},
-                    "confidence": {"type": "STRING", "enum": ["high", "medium", "low"]}
+                    "confidence": {"type": "NUMBER"}
                 },
-                "required": ["id", "title", "media_type"]
+                "required": ["id", "title", "media_type", "confidence"]
             }
         }
 
@@ -297,41 +335,54 @@ class AiMatcher:
             prompt,
             schema,
             action_name="batch_extract_titles",
-            item_count=len(items),
+            item_count=len(bounded_items),
         )
-        if not result or not isinstance(result, list):
+        if result is None:
             return {}
 
-        out = {}
-        for entry in result:
-            if isinstance(entry, dict) and "id" in entry:
-                out[entry["id"]] = entry
-        logger.info(f"[AiMatcher] Extracted title metadata for {len(out)}/{len(items)} items.")
-        return out
+        validated = validate_batch_extract_results(result, expected_ids, min_confidence=min_confidence)
+        if validated:
+            logger.info(f"[AiMatcher] Extracted title metadata for {len(validated)}/{len(items)} items.")
+        else:
+            logger.warning(f"[AiMatcher] batch_extract_titles validation failed or returned low confidence.")
+        return validated
 
-    def batch_validate_omdb_matches(self, candidates: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    def batch_validate_omdb_matches(
+        self,
+        candidates: List[Dict[str, Any]],
+        min_confidence: float = DEFAULT_MIN_CANDIDATE_VALIDATION_CONFIDENCE,
+    ) -> Dict[int, Dict[str, Any]]:
         """
         Validates whether OMDb results match the original torrent titles to eliminate false positives.
         candidates: [{"id": 0, "raw_title": "...", "feed_type": "...", "omdb_title": "...", "omdb_year": 2024, "omdb_type": "movie"}]
         Returns dict keyed by candidate id:
         {
-           0: {"is_match": True, "confidence": 0.95, "reason": "Exact match"}
+           0: {"id": 0, "is_match": True, "confidence": 0.95, "reason": "Exact match"}
         }
         """
         if not self.is_available or not candidates:
             return {}
 
-        prompt = (
-            "You are a strict film and TV series verification agent. "
-            "Given a list of torrent titles and candidate OMDb matches, decide if each OMDb match is genuinely "
-            "the movie/series described in the torrent title. "
-            "PRINCIPLE: It is much better to mark an item as NOT a match (is_match=false) than to accept a wrong title.\n\n"
-            "Rules:\n"
-            "1. If torrent is a TV series and OMDb result is a movie (or vice versa), is_match MUST be false.\n"
-            "2. Apply the one-year release-year tolerance only to movies. A series torrent year can be a later season/release year, while OMDb Year commonly contains the show's first broadcast year; that difference alone is NOT a mismatch.\n"
-            "3. If titles are completely unrelated (e.g. searching 'Fallout' matched a 1995 documentary 'Fallout'), is_match MUST be false.\n\n"
-            f"Candidate pairs:\n{json.dumps(candidates, ensure_ascii=False)}"
-        )
+        expected_ids: Set[int] = set()
+        bounded_candidates: List[Dict[str, Any]] = []
+        for c in candidates:
+            if not isinstance(c, dict) or type(c.get("id")) is not int:
+                return {}
+            expected_ids.add(c["id"])
+            bounded_candidates.append({
+                "id": c["id"],
+                "raw_title": _bound_text(c.get("raw_title", "")),
+                "feed_type": str(c.get("feed_type") or "unknown")[:50],
+                "omdb_title": _bound_text(c.get("omdb_title", "")),
+                "omdb_year": c.get("omdb_year") if type(c.get("omdb_year")) is int else None,
+                "omdb_type": str(c.get("omdb_type") or "unknown")[:50],
+            })
+
+        if len(expected_ids) != len(candidates):
+            return {}
+
+        template = _load_prompt_template("validate_omdb_matches.txt")
+        prompt = template.format(candidates_json=json.dumps(bounded_candidates, ensure_ascii=False))
 
         schema = {
             "type": "ARRAY",
@@ -351,19 +402,23 @@ class AiMatcher:
             prompt,
             schema,
             action_name="batch_validate_omdb_matches",
-            item_count=len(candidates),
+            item_count=len(bounded_candidates),
         )
-        if not result or not isinstance(result, list):
+        if result is None:
             return {}
 
-        out = {}
-        for entry in result:
-            if isinstance(entry, dict) and "id" in entry:
-                out[entry["id"]] = entry
-        logger.info(f"[AiMatcher] Validated OMDb matches for {len(out)}/{len(candidates)} candidates.")
-        return out
+        validated = validate_batch_validate_omdb_results(result, expected_ids, min_confidence=min_confidence)
+        if validated:
+            logger.info(f"[AiMatcher] Validated OMDb matches for {len(validated)}/{len(candidates)} candidates.")
+        else:
+            logger.warning(f"[AiMatcher] batch_validate_omdb_matches validation failed or returned low confidence.")
+        return validated
 
-    def batch_recheck_matches(self, items: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    def batch_recheck_matches(
+        self,
+        items: List[Dict[str, Any]],
+        min_confidence: float = DEFAULT_MIN_AUDIT_CONFIDENCE,
+    ) -> Dict[int, Dict[str, Any]]:
         """
         Audits existing database titles and their torrent raw titles.
         Determines whether the currently assigned OMDb metadata is correct.
@@ -381,7 +436,9 @@ class AiMatcher:
         Returns:
         {
             0: {
+                "id": 0,
                 "is_valid_match": False,
+                "confidence": 0.90,
                 "corrected_title": "Alien: Romulus",
                 "corrected_year": 2024,
                 "corrected_media_type": "movie",
@@ -392,19 +449,27 @@ class AiMatcher:
         if not self.is_available or not items:
             return {}
 
-        prompt = (
-            "You are an expert movie and TV series metadata auditor and correction agent.\n"
-            "You are given pairs of raw torrent titles (from RuTracker / media trackers) and the currently assigned OMDb metadata stored in the database.\n"
-            "Evaluate whether each stored OMDb metadata entry is a TRUE, ACCURATE match for the torrent release.\n\n"
-            "Verification criteria:\n"
-            "1. If the torrent is for a TV series (has season/episode info, e.g. S01, Сезон 1) but the current OMDb item is a movie, it is INVALID (is_valid_match=false).\n"
-            "2. If the torrent is for a movie but the current OMDb item is a TV series, it is INVALID.\n"
-            "3. Apply the one-year release-year tolerance only to movies. A raw series year can identify a later season/release, while OMDb Year commonly identifies the series' first broadcast year; do NOT mark a series invalid solely for that difference.\n"
-            "4. If the title is an unrelated movie (e.g. remake vs original, wrong film with similar word, documentary matched as feature film), it is INVALID.\n"
-            "5. If INVALID, extract the exact original clean English/Latin title, release year, and media type ('movie' or 'series') from the raw torrent title so a new OMDb lookup can be performed.\n"
-            "6. If VALID (the torrent is indeed for the specified movie/series), set is_valid_match=true.\n\n"
-            f"Items to audit:\n{json.dumps(items, ensure_ascii=False)}"
-        )
+        expected_ids: Set[int] = set()
+        bounded_items: List[Dict[str, Any]] = []
+        for it in items:
+            if not isinstance(it, dict) or type(it.get("id")) is not int:
+                return {}
+            expected_ids.add(it["id"])
+            bounded_items.append({
+                "id": it["id"],
+                "raw_title": _bound_text(it.get("raw_title", "")),
+                "feed_name": _bound_text(it.get("feed_name", ""), max_length=100),
+                "current_omdb_title": _bound_text(it.get("current_omdb_title", "")),
+                "current_omdb_year": it.get("current_omdb_year") if type(it.get("current_omdb_year")) is int else None,
+                "current_omdb_type": str(it.get("current_omdb_type") or "")[:50],
+                "current_imdb_id": str(it.get("current_imdb_id") or "")[:20],
+            })
+
+        if len(expected_ids) != len(items):
+            return {}
+
+        template = _load_prompt_template("recheck_matches.txt")
+        prompt = template.format(items_json=json.dumps(bounded_items, ensure_ascii=False))
 
         schema = {
             "type": "ARRAY",
@@ -413,12 +478,13 @@ class AiMatcher:
                 "properties": {
                     "id": {"type": "INTEGER"},
                     "is_valid_match": {"type": "BOOLEAN"},
+                    "confidence": {"type": "NUMBER"},
                     "corrected_title": {"type": "STRING", "nullable": True},
                     "corrected_year": {"type": "INTEGER", "nullable": True},
                     "corrected_media_type": {"type": "STRING", "enum": ["movie", "series"], "nullable": True},
                     "reason": {"type": "STRING"}
                 },
-                "required": ["id", "is_valid_match"]
+                "required": ["id", "is_valid_match", "confidence"]
             }
         }
 
@@ -426,31 +492,14 @@ class AiMatcher:
             prompt,
             schema,
             action_name="batch_recheck_matches",
-            item_count=len(items),
+            item_count=len(bounded_items),
         )
-        if not result or not isinstance(result, list):
+        if result is None:
             return {}
 
-        requested_ids = [item.get("id") for item in items]
-        if (
-            any(type(item_id) is not int for item_id in requested_ids)
-            or len(set(requested_ids)) != len(requested_ids)
-            or len(result) != len(requested_ids)
-        ):
-            return {}
-
-        out = {}
-        for entry in result:
-            if (
-                not isinstance(entry, dict)
-                or type(entry.get("id")) is not int
-                or entry["id"] not in requested_ids
-                or entry["id"] in out
-                or type(entry.get("is_valid_match")) is not bool
-            ):
-                return {}
-            out[entry["id"]] = entry
-        if set(out) != set(requested_ids):
-            return {}
-        logger.info(f"[AiMatcher] Audited {len(out)}/{len(items)} database titles.")
-        return out
+        validated = validate_batch_recheck_results(result, expected_ids, min_confidence=min_confidence)
+        if validated:
+            logger.info(f"[AiMatcher] Audited {len(validated)}/{len(items)} database titles.")
+        else:
+            logger.warning(f"[AiMatcher] batch_recheck_matches validation failed or returned low confidence.")
+        return validated

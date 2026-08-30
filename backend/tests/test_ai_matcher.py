@@ -82,14 +82,14 @@ class TestAiMatcher(unittest.TestCase):
                 "title": "Dune: Part Two",
                 "year": 2024,
                 "media_type": "movie",
-                "confidence": "high"
+                "confidence": 0.95,
             },
             {
                 "id": 1,
                 "title": "Fallout",
                 "year": 2024,
                 "media_type": "series",
-                "confidence": "high"
+                "confidence": 0.90,
             }
         ]
 
@@ -103,8 +103,39 @@ class TestAiMatcher(unittest.TestCase):
         self.assertEqual(res[0]["title"], "Dune: Part Two")
         self.assertEqual(res[0]["year"], 2024)
         self.assertEqual(res[0]["media_type"], "movie")
+        self.assertEqual(res[0]["confidence"], 0.95)
         self.assertEqual(res[1]["title"], "Fallout")
         self.assertEqual(res[1]["media_type"], "series")
+        self.assertEqual(res[1]["confidence"], 0.90)
+
+    @patch.object(AiMatcher, "_call_gemini")
+    def test_batch_extract_titles_fails_closed_on_low_confidence_or_malformed(self, mock_call):
+        matcher = AiMatcher(api_key="valid_key")
+        items = [
+            {"id": 0, "raw_title": "Film A", "feed_type": "movie"},
+            {"id": 1, "raw_title": "Film B", "feed_type": "movie"},
+        ]
+
+        # Low confidence (< 0.70)
+        mock_call.return_value = [
+            {"id": 0, "title": "Film A", "year": 2024, "media_type": "movie", "confidence": 0.65},
+            {"id": 1, "title": "Film B", "year": 2024, "media_type": "movie", "confidence": 0.90},
+        ]
+        self.assertEqual(matcher.batch_extract_titles(items), {})
+
+        # Invalid media type
+        mock_call.return_value = [
+            {"id": 0, "title": "Film A", "year": 2024, "media_type": "game", "confidence": 0.95},
+            {"id": 1, "title": "Film B", "year": 2024, "media_type": "movie", "confidence": 0.90},
+        ]
+        self.assertEqual(matcher.batch_extract_titles(items), {})
+
+        # Empty title
+        mock_call.return_value = [
+            {"id": 0, "title": "   ", "year": 2024, "media_type": "movie", "confidence": 0.95},
+            {"id": 1, "title": "Film B", "year": 2024, "media_type": "movie", "confidence": 0.90},
+        ]
+        self.assertEqual(matcher.batch_extract_titles(items), {})
 
     @patch.object(AiMatcher, "_call_gemini")
     def test_batch_validate_omdb_matches(self, mock_call):
@@ -118,7 +149,7 @@ class TestAiMatcher(unittest.TestCase):
             {
                 "id": 1,
                 "is_match": False,
-                "confidence": 0.1,
+                "confidence": 0.85,
                 "reason": "Series matched to an old 1995 movie documentary"
             }
         ]
@@ -145,7 +176,31 @@ class TestAiMatcher(unittest.TestCase):
         res = matcher.batch_validate_omdb_matches(candidates)
         self.assertEqual(len(res), 2)
         self.assertTrue(res[0]["is_match"])
+        self.assertEqual(res[0]["confidence"], 0.98)
         self.assertFalse(res[1]["is_match"])
+        self.assertEqual(res[1]["confidence"], 0.85)
+
+    @patch.object(AiMatcher, "_call_gemini")
+    def test_batch_validate_omdb_matches_fails_closed_on_low_confidence_or_malformed(self, mock_call):
+        matcher = AiMatcher(api_key="valid_key")
+        candidates = [
+            {"id": 0, "raw_title": "Dune 2", "omdb_title": "Dune"},
+            {"id": 1, "raw_title": "Fallout", "omdb_title": "Fallout"},
+        ]
+
+        # Low confidence (< 0.70)
+        mock_call.return_value = [
+            {"id": 0, "is_match": True, "confidence": 0.50, "reason": "maybe"},
+            {"id": 1, "is_match": True, "confidence": 0.90, "reason": "yes"},
+        ]
+        self.assertEqual(matcher.batch_validate_omdb_matches(candidates), {})
+
+        # Non-boolean is_match
+        mock_call.return_value = [
+            {"id": 0, "is_match": "true", "confidence": 0.90, "reason": "yes"},
+            {"id": 1, "is_match": True, "confidence": 0.90, "reason": "yes"},
+        ]
+        self.assertEqual(matcher.batch_validate_omdb_matches(candidates), {})
 
     @patch.object(AiMatcher, "_call_gemini")
     def test_batch_recheck_matches(self, mock_call):
@@ -153,6 +208,7 @@ class TestAiMatcher(unittest.TestCase):
             {
                 "id": 0,
                 "is_valid_match": True,
+                "confidence": 0.95,
                 "reason": "Correct match",
                 "corrected_title": None,
                 "corrected_year": None,
@@ -161,6 +217,7 @@ class TestAiMatcher(unittest.TestCase):
             {
                 "id": 1,
                 "is_valid_match": False,
+                "confidence": 0.90,
                 "reason": "Title is a TV series from 2024, but was matched to 1980 short movie",
                 "corrected_title": "Fallout",
                 "corrected_year": 2024,
@@ -188,7 +245,9 @@ class TestAiMatcher(unittest.TestCase):
         res = matcher.batch_recheck_matches(items)
         self.assertEqual(len(res), 2)
         self.assertTrue(res[0]["is_valid_match"])
+        self.assertEqual(res[0]["confidence"], 0.95)
         self.assertFalse(res[1]["is_valid_match"])
+        self.assertEqual(res[1]["confidence"], 0.90)
         self.assertEqual(res[1]["corrected_title"], "Fallout")
         self.assertEqual(res[1]["corrected_year"], 2024)
         self.assertEqual(res[1]["corrected_media_type"], "series")
@@ -202,18 +261,22 @@ class TestAiMatcher(unittest.TestCase):
         ]
 
         for response in (
-            [{"id": 0, "is_valid_match": True}],
+            [{"id": 0, "is_valid_match": True, "confidence": 0.95}],
             [
-                {"id": 0, "is_valid_match": True},
-                {"id": 0, "is_valid_match": True},
+                {"id": 0, "is_valid_match": True, "confidence": 0.95},
+                {"id": 0, "is_valid_match": True, "confidence": 0.95},
             ],
             [
-                {"id": 0, "is_valid_match": True},
-                {"id": 2, "is_valid_match": True},
+                {"id": 0, "is_valid_match": True, "confidence": 0.95},
+                {"id": 2, "is_valid_match": True, "confidence": 0.95},
             ],
             [
-                {"id": 0, "is_valid_match": None},
-                {"id": 1, "is_valid_match": True},
+                {"id": 0, "is_valid_match": None, "confidence": 0.95},
+                {"id": 1, "is_valid_match": True, "confidence": 0.95},
+            ],
+            [
+                {"id": 0, "is_valid_match": True, "confidence": 0.75},  # Low audit confidence (<0.80)
+                {"id": 1, "is_valid_match": True, "confidence": 0.95},
             ],
         ):
             with self.subTest(response=response):
