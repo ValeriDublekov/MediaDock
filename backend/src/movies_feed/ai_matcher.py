@@ -2,11 +2,10 @@ import json
 import logging
 import os
 import time
-from datetime import datetime
 from pathlib import Path
 import urllib.request
 import urllib.error
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from .ai_validator import (
     DEFAULT_MIN_AUDIT_CONFIDENCE,
@@ -48,6 +47,17 @@ class AiMatcher:
     AI-powered batch parsing and validation helper for media scanner.
     Uses Gemini REST API with structured outputs to parse complex torrent titles
     and validate candidate OMDb matches in batches.
+
+    Error classification policy:
+    - Retryable errors: HTTP 429 (rate limit), HTTP 500/502/503/504 (server error),
+      and connection/read timeouts (URLError/TimeoutError). Retried up to 3 total
+      attempts (1 initial + 2 retries) with linear backoff (2s * attempt).
+    - Terminal errors:
+      - HTTP 401: Authentication failure (invalid API key) -> disables matcher for run.
+      - HTTP 403: Forbidden (quota/project permission) -> sets forbidden cooldown.
+      - HTTP 400/404: Bad request or invalid model -> disables matcher for run.
+      - Other 4xx / unexpected non-retryable errors -> disables matcher for run.
+      - Response body size exceeding MAX_RESPONSE_BYTES -> rejected and counted as failure.
     """
 
     def __init__(
@@ -56,14 +66,19 @@ class AiMatcher:
         model: Optional[str] = None,
         inter_request_delay: Optional[float] = None,
         forbidden_cooldown_seconds: float = 300.0,
+        clock: Optional[Callable[[], float]] = None,
+        sleep: Optional[Callable[[float], None]] = None,
     ):
         self.api_key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY", "")
         chosen_model = model or os.environ.get("GEMINI_MODEL", GEMINI_MODEL)
         self.model = chosen_model
 
+        self.clock: Callable[[], float] = clock or time.monotonic
+        self.sleep: Callable[[float], None] = sleep or time.sleep
+
         # Determine inter-request delay to comply with model RPM limits
         if inter_request_delay is not None:
-            self.inter_request_delay = inter_request_delay
+            self.inter_request_delay = float(inter_request_delay)
         elif os.environ.get("GEMINI_INTER_REQUEST_DELAY"):
             self.inter_request_delay = float(os.environ["GEMINI_INTER_REQUEST_DELAY"])
         else:
@@ -80,11 +95,21 @@ class AiMatcher:
         self.failed_calls: int = 0
         self.total_items_processed: int = 0
         self._disabled: bool = False
+        self._forbidden_until: Optional[float] = None
+        self._last_request_time: Optional[float] = None
         self._capability_validated: bool = False
 
     @property
     def is_available(self) -> bool:
-        return bool(self.api_key and len(self.api_key.strip()) > 5) and not self._disabled
+        if not bool(self.api_key and len(self.api_key.strip()) > 5):
+            return False
+        if self._disabled:
+            return False
+        if self._forbidden_until is not None:
+            if self.clock() < self._forbidden_until:
+                return False
+            self._forbidden_until = None
+        return True
 
     def get_stats(self) -> Dict[str, int]:
         return {
@@ -134,17 +159,32 @@ class AiMatcher:
         )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                resp_bytes = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(resp_bytes) > MAX_RESPONSE_BYTES:
+                    raise GeminiModelCapabilityError(
+                        f"Gemini models.list response exceeded maximum allowed size {MAX_RESPONSE_BYTES} bytes"
+                    )
+                payload = json.loads(resp_bytes.decode("utf-8"))
         except urllib.error.HTTPError as exc:
             raise GeminiModelCapabilityError(
                 f"Gemini models.list capability check failed with HTTP {exc.code}"
             ) from exc
+        except GeminiModelCapabilityError:
+            raise
         except Exception as exc:
             raise GeminiModelCapabilityError(
                 f"Gemini models.list capability check failed ({type(exc).__name__})"
             ) from exc
         self.validate_model_capability_payload(payload, self.model)
         self._capability_validated = True
+
+    def _enforce_inter_request_delay(self) -> None:
+        if self.inter_request_delay > 0 and self._last_request_time is not None:
+            elapsed = self.clock() - self._last_request_time
+            if elapsed < self.inter_request_delay:
+                delay_needed = self.inter_request_delay - elapsed
+                self.sleep(delay_needed)
+        self._last_request_time = self.clock()
 
     def _call_gemini(
         self,
@@ -158,11 +198,9 @@ class AiMatcher:
 
         self.total_calls += 1
         call_id = self.total_calls
-        t0 = time.perf_counter()
-        sent_time_str = datetime.now().strftime("%H:%M:%S")
 
         logger.info(
-            f"[Gemini API #{call_id}] [Sent @ {sent_time_str}] Starting '{action_name}' request "
+            f"[Gemini API #{call_id}] Starting '{action_name}' request "
             f"(model: {self.model}, items: {item_count}, prompt_len: {len(prompt)} chars)..."
         )
 
@@ -197,83 +235,89 @@ class AiMatcher:
 
         max_retries = 3
         for attempt in range(max_retries):
-            attempt_start_time_str = datetime.now().strftime("%H:%M:%S")
+            self._enforce_inter_request_delay()
             try:
-                attempt_t0 = time.perf_counter()
+                attempt_t0 = self.clock()
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     resp_bytes = resp.read(MAX_RESPONSE_BYTES + 1)
                     if len(resp_bytes) > MAX_RESPONSE_BYTES:
-                        logger.error(f"[Gemini API #{call_id}] Response body exceeded maximum allowed size {MAX_RESPONSE_BYTES} bytes.")
+                        logger.error(
+                            f"[Gemini API #{call_id}] Response body exceeded maximum allowed size {MAX_RESPONSE_BYTES} bytes."
+                        )
                         self.failed_calls += 1
                         return None
                     resp_json = json.loads(resp_bytes.decode("utf-8"))
                     candidates = resp_json.get("candidates", [])
-                    finished_time_str = datetime.now().strftime("%H:%M:%S")
                     if candidates:
                         first_part = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
                         parsed_res = json.loads(first_part)
-                        elapsed = time.perf_counter() - attempt_t0
+                        elapsed = self.clock() - attempt_t0
                         self.successful_calls += 1
                         self.total_items_processed += item_count
                         logger.info(
-                            f"[Gemini API #{call_id}] [Received @ {finished_time_str}] Request '{action_name}' SUCCEEDED in {elapsed:.2f}s "
+                            f"[Gemini API #{call_id}] Request '{action_name}' SUCCEEDED in {elapsed:.2f}s "
                             f"(processed {item_count} items)."
                         )
                         return parsed_res
                     logger.warning(
-                        f"[Gemini API #{call_id}] [Received @ {finished_time_str}] No candidates returned in response."
+                        f"[Gemini API #{call_id}] No candidates returned in response."
                     )
                     self.failed_calls += 1
                     return None
             except urllib.error.HTTPError as e:
-                err_time_str = datetime.now().strftime("%H:%M:%S")
                 # Retry on rate limits or transient server errors
                 if e.code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
                     retry_delay = 2.0 * (attempt + 1)
                     logger.warning(
-                        f"[Gemini API #{call_id}] [Error @ {err_time_str}] HTTP error {e.code} ({e.reason}) on attempt {attempt + 1}/{max_retries}. "
+                        f"[Gemini API #{call_id}] HTTP error {e.code} ({e.reason}) on attempt {attempt + 1}/{max_retries}. "
                         f"Retrying in {retry_delay:.1f}s..."
                     )
-                    time.sleep(retry_delay)
+                    self.sleep(retry_delay)
                     continue
+                if e.code == 403:
+                    logger.error(
+                        f"[Gemini API #{call_id}] HTTP error 403 (Forbidden) for model '{self.model}'. "
+                        f"Setting cooldown for {self.forbidden_cooldown_seconds:.1f}s."
+                    )
+                    self._forbidden_until = self.clock() + self.forbidden_cooldown_seconds
+                    self.failed_calls += 1
+                    break
                 logger.error(
-                    f"[Gemini API #{call_id}] [Error @ {err_time_str}] HTTP error {e.code} ({e.reason}) for model '{self.model}'. "
+                    f"[Gemini API #{call_id}] HTTP error {e.code} ({e.reason}) for model '{self.model}'. "
                     f"Disabling further AI calls for this run."
                 )
                 self.failed_calls += 1
                 self._disabled = True
                 break
             except urllib.error.URLError as e:
-                err_time_str = datetime.now().strftime("%H:%M:%S")
                 is_timeout = "timed out" in str(e.reason).lower() or isinstance(getattr(e, "reason", None), TimeoutError)
                 if is_timeout and attempt < max_retries - 1:
                     retry_delay = 2.0 * (attempt + 1)
                     logger.warning(
-                        f"[Gemini API #{call_id}] [Error @ {err_time_str}] Connection/read timeout on attempt {attempt + 1}/{max_retries}: {e.reason}. "
+                        f"[Gemini API #{call_id}] Connection/read timeout on attempt {attempt + 1}/{max_retries}: {e.reason}. "
                         f"Retrying in {retry_delay:.1f}s..."
                     )
-                    time.sleep(retry_delay)
+                    self.sleep(retry_delay)
                     continue
                 logger.error(
-                    f"[Gemini API #{call_id}] [Error @ {err_time_str}] URL error: {e.reason}. "
+                    f"[Gemini API #{call_id}] URL error: {e.reason}. "
                     f"Disabling further AI calls for this run."
                 )
                 self.failed_calls += 1
                 self._disabled = True
                 break
             except Exception as e:
-                err_time_str = datetime.now().strftime("%H:%M:%S")
                 is_timeout = "timed out" in str(e).lower() or isinstance(e, TimeoutError)
                 if is_timeout and attempt < max_retries - 1:
                     retry_delay = 2.0 * (attempt + 1)
                     logger.warning(
-                        f"[Gemini API #{call_id}] [Error @ {err_time_str}] Timeout on attempt {attempt + 1}/{max_retries}: {e}. "
+                        f"[Gemini API #{call_id}] Timeout on attempt {attempt + 1}/{max_retries}: {type(e).__name__}. "
                         f"Retrying in {retry_delay:.1f}s..."
                     )
-                    time.sleep(retry_delay)
+                    self.sleep(retry_delay)
                     continue
                 logger.error(
-                    f"[Gemini API #{call_id}] [Error @ {err_time_str}] Call failed: {e}. "
+                    f"[Gemini API #{call_id}] Call failed: {type(e).__name__}. "
                     f"Disabling further AI calls for this run."
                 )
                 self.failed_calls += 1

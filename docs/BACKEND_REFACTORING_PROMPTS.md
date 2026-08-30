@@ -20,42 +20,6 @@ implementing an earlier one. If an existing implementation already satisfies a
 bullet, add or verify the regression test and leave the behavior unchanged.
 
 
-## Prompt 5B: Rebuild Reparse Around Retained Source Context
-
-```text
-Goal: resolve retained source items safely and preserve their identity.
-
-Scope: backend/src/movies_feed/scanner.py, directly affected models/repositories, and scanner tests. Before Gemini, resolve a matching manual mapping against retained SourceContext. On successful manual or AI/OMDb resolution, update the original source log to resolved/terminal state and recreate or upsert the occurrence with its original feed ID, entry ID, URL, feed type, publication/observation timestamps, and v2 deterministic ID. A failed attempt updates the same log's retry state and never creates a duplicate log. Deduplicate by source identity, not case-sensitive raw title.
-
-Contract: use the stored feed type, or `unknown` when absent; never hard-code `movie`. Parse-only is a run-level early exit and incompatible combinations such as `--parse-only --mode all` are rejected before any OMDb/Gemini call. Manual mappings are consumed only after filtering and durable catalog persistence succeeds.
-
-Non-goals: do not redesign AI response validation, proposal storage, or parser heuristics; Prompt 6 owns AI schema validation.
-
-Work: keep the reparse phase bounded by Prompt 5A pagination, route every lookup through the existing resolver, and make success/failure counters reflect resolved, retried, skipped, and failed work.
-
-Tests: manual mapping after RSS disappearance, series retry, success and failure state transitions, provenance preservation, source-identity deduplication, pagination, retention, manual-mapping budget, and parse-only/all API isolation.
-
-Done when: a successful retry resolves its original log exactly once, a failed retry remains retryable without a duplicate, and narrow plus full backend tests pass.
-```
-
-## Prompt 6A: Validate Gemini Responses Strictly
-
-```text
-Goal: make every AI operation complete, typed, confidence-aware, and fail-closed.
-
-Scope: one shared AI validation module, AiMatcher response handling, prompt/schema tests, and docs/ai/DATA_CONTRACTS.md. Apply one validator to batch_extract_titles, batch_validate_omdb_matches, and batch_recheck_matches. Require exactly one result for every requested ID, no missing/unknown/duplicate IDs, and no permissive `.get(..., True)` defaults. Require a finite numeric confidence in inclusive 0..1; use documented default minimums of 0.70 for extraction/candidate validation and 0.80 for audit unless the contract explicitly changes them.
-
-Contract: required fields have exact types and ranges; media type is `movie` or `series`; empty titles and semantically invalid corrections fail validation. Audit results require an explicit boolean is_valid_match and confidence. Candidate results require an explicit boolean is_match and confidence. Malformed, partial, low-confidence, blocked, or empty responses become typed failure/needs_review outcomes and callers must not mutate catalog data.
-
-Bound raw titles and OMDb text before prompt construction, bound response bodies before JSON parsing, and treat all external text as data. Make either backend/src/movies_feed/prompts/ or inline templates the single documented source of truth; remove divergence without changing unrelated prompts.
-
-Non-goals: do not change HTTP retry/delay mechanics, source context, proposal application, or deterministic match policy.
-
-Tests: missing/duplicate/extra/wrong-type IDs, invalid ranges, low confidence, series season years, semantically invalid but schema-valid output, empty/blocked responses, and caller fail-closed behavior.
-
-Done when: all three operations use the same validator, thresholds and fields are documented, and the full backend suite passes.
-```
-
 ## Prompt 6B: Isolate Gemini Transport and Rate Control
 
 ```text

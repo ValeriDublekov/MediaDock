@@ -283,59 +283,188 @@ class TestAiMatcher(unittest.TestCase):
                 mock_call.return_value = response
                 self.assertEqual(matcher.batch_recheck_matches(items), {})
 
-    @patch("time.sleep")
-    @patch("urllib.request.urlopen")
-    def test_call_gemini_error_disables_matcher(self, mock_urlopen, mock_sleep):
+    def test_transport_timeout_then_success_with_injected_clock_and_sleep(self):
         import urllib.error
-        from io import BytesIO
 
-        error_429 = urllib.error.HTTPError("http://example.com", 429, "Too Many Requests", {}, BytesIO())
-        mock_urlopen.side_effect = error_429
+        slept_durations = []
+        fake_time = [1000.0]
 
-        matcher = AiMatcher(api_key="valid_key")
-        res = matcher._call_gemini("test prompt")
-        self.assertIsNone(res)
-        self.assertFalse(matcher.is_available)
-        self.assertEqual(mock_urlopen.call_count, 3)
-        self.assertEqual(matcher.get_stats()["total_calls"], 1)
-        self.assertEqual(matcher.get_stats()["failed_calls"], 1)
+        def fake_clock():
+            return fake_time[0]
 
-    @patch("time.sleep")
-    @patch("urllib.request.urlopen")
-    def test_call_gemini_timeout_retry_success(self, mock_urlopen, mock_sleep):
-        import urllib.error
-        from io import BytesIO
+        def fake_sleep(duration):
+            slept_durations.append(duration)
+            fake_time[0] += duration
 
         timeout_err = urllib.error.URLError("The read operation timed out")
         mock_resp = MagicMock()
-        mock_resp.read.return_value = b'{"candidates": [{"content": {"parts": [{"text": "[{\\"id\\": 0}]"}]}}]}'
+        mock_resp.read.return_value = b'{"candidates": [{"content": {"parts": [{"text": "{\\"result\\": true}"}]}}]}'
         mock_resp.__enter__.return_value = mock_resp
 
-        mock_urlopen.side_effect = [timeout_err, mock_resp]
+        with patch("urllib.request.urlopen", side_effect=[timeout_err, mock_resp]) as mock_urlopen:
+            matcher = AiMatcher(
+                api_key="valid_key",
+                inter_request_delay=0.0,
+                clock=fake_clock,
+                sleep=fake_sleep,
+            )
+            res = matcher._call_gemini("test prompt", item_count=5)
 
-        matcher = AiMatcher(api_key="valid_key")
-        res = matcher._call_gemini("test prompt")
-        self.assertIsNotNone(res)
-        self.assertTrue(matcher.is_available)
-        self.assertEqual(mock_urlopen.call_count, 2)
-        self.assertEqual(matcher.get_stats()["successful_calls"], 1)
+            self.assertEqual(res, {"result": True})
+            self.assertTrue(matcher.is_available)
+            self.assertEqual(mock_urlopen.call_count, 2)
+            self.assertEqual(slept_durations, [2.0])  # Retry backoff for attempt 0 is 2.0s
+            stats = matcher.get_stats()
+            self.assertEqual(stats["total_calls"], 1)
+            self.assertEqual(stats["successful_calls"], 1)
+            self.assertEqual(stats["failed_calls"], 0)
+            self.assertEqual(stats["total_items_processed"], 5)
 
-    @patch("urllib.request.urlopen")
-    def test_call_gemini_403_forbidden_disables_matcher(self, mock_urlopen):
+    def test_transport_retry_exhaustion_on_5xx_server_error(self):
         import urllib.error
         from io import BytesIO
 
-        error_403 = urllib.error.HTTPError("http://example.com", 403, "Forbidden", {}, BytesIO())
-        mock_urlopen.side_effect = error_403
+        slept_durations = []
+        fake_time = [1000.0]
 
-        matcher = AiMatcher(api_key="valid_key")
-        res = matcher._call_gemini("test prompt")
-        self.assertIsNone(res)
-        self.assertFalse(matcher.is_available)
-        self.assertEqual(mock_urlopen.call_count, 1)
-        stats = matcher.get_stats()
-        self.assertEqual(stats["total_calls"], 1)
-        self.assertEqual(stats["failed_calls"], 1)
+        def fake_clock():
+            return fake_time[0]
+
+        def fake_sleep(duration):
+            slept_durations.append(duration)
+            fake_time[0] += duration
+
+        error_503 = urllib.error.HTTPError("http://example.com", 503, "Service Unavailable", {}, BytesIO())
+
+        with patch("urllib.request.urlopen", side_effect=error_503) as mock_urlopen:
+            matcher = AiMatcher(
+                api_key="valid_key",
+                inter_request_delay=0.0,
+                clock=fake_clock,
+                sleep=fake_sleep,
+            )
+            res = matcher._call_gemini("test prompt", item_count=3)
+
+            self.assertIsNone(res)
+            self.assertFalse(matcher.is_available)
+            self.assertEqual(mock_urlopen.call_count, 3)
+            self.assertEqual(slept_durations, [2.0, 4.0])  # Attempt 0: 2s, Attempt 1: 4s
+            stats = matcher.get_stats()
+            self.assertEqual(stats["total_calls"], 1)
+            self.assertEqual(stats["successful_calls"], 0)
+            self.assertEqual(stats["failed_calls"], 1)
+            self.assertEqual(stats["total_items_processed"], 0)
+
+    def test_transport_terminal_errors_disable_matcher_immediately(self):
+        import urllib.error
+        from io import BytesIO
+
+        for status_code in (400, 401, 404):
+            with self.subTest(status_code=status_code):
+                error = urllib.error.HTTPError("http://example.com", status_code, "Terminal Error", {}, BytesIO())
+                with patch("urllib.request.urlopen", side_effect=error) as mock_urlopen:
+                    matcher = AiMatcher(api_key="valid_key", inter_request_delay=0.0)
+                    res = matcher._call_gemini("test prompt")
+
+                    self.assertIsNone(res)
+                    self.assertFalse(matcher.is_available)
+                    self.assertEqual(mock_urlopen.call_count, 1)
+                    stats = matcher.get_stats()
+                    self.assertEqual(stats["total_calls"], 1)
+                    self.assertEqual(stats["failed_calls"], 1)
+
+    def test_forbidden_cooldown_behavior(self):
+        import urllib.error
+        from io import BytesIO
+
+        fake_time = [1000.0]
+
+        def fake_clock():
+            return fake_time[0]
+
+        error_403 = urllib.error.HTTPError("http://example.com", 403, "Forbidden", {}, BytesIO())
+
+        with patch("urllib.request.urlopen", side_effect=error_403) as mock_urlopen:
+            matcher = AiMatcher(
+                api_key="valid_key",
+                forbidden_cooldown_seconds=120.0,
+                clock=fake_clock,
+            )
+            self.assertTrue(matcher.is_available)
+            res = matcher._call_gemini("test prompt")
+            self.assertIsNone(res)
+            self.assertEqual(mock_urlopen.call_count, 1)
+
+            # Inside cooldown window
+            self.assertFalse(matcher.is_available)
+            fake_time[0] += 60.0
+            self.assertFalse(matcher.is_available)
+
+            # Advance past cooldown window
+            fake_time[0] += 61.0
+            self.assertTrue(matcher.is_available)
+
+    def test_enforced_inter_request_delay(self):
+        slept_durations = []
+        fake_time = [1000.0]
+
+        def fake_clock():
+            return fake_time[0]
+
+        def fake_sleep(duration):
+            slept_durations.append(duration)
+            fake_time[0] += duration
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"candidates": [{"content": {"parts": [{"text": "{\\"ok\\": true}"}]}}]}'
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+            matcher = AiMatcher(
+                api_key="valid_key",
+                inter_request_delay=5.0,
+                clock=fake_clock,
+                sleep=fake_sleep,
+            )
+            # Call 1: no previous request, no inter-request delay slept
+            matcher._call_gemini("prompt 1")
+            self.assertEqual(slept_durations, [])
+
+            # Simulate 2.0s passing before call 2
+            fake_time[0] += 2.0
+
+            # Call 2: should sleep remaining 3.0s
+            matcher._call_gemini("prompt 2")
+            self.assertEqual(slept_durations, [3.0])
+            self.assertEqual(mock_urlopen.call_count, 2)
+
+    def test_response_size_limit_rejection(self):
+        from movies_feed.ai_validator import MAX_RESPONSE_BYTES
+
+        mock_resp = MagicMock()
+        # Return bytes larger than MAX_RESPONSE_BYTES
+        mock_resp.read.return_value = b"x" * (MAX_RESPONSE_BYTES + 1)
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            matcher = AiMatcher(api_key="valid_key", inter_request_delay=0.0)
+            res = matcher._call_gemini("prompt")
+            self.assertIsNone(res)
+            self.assertEqual(matcher.get_stats()["failed_calls"], 1)
+
+    def test_validate_model_capability_response_size_limit(self):
+        from movies_feed.ai_validator import MAX_RESPONSE_BYTES
+        from movies_feed.ai_matcher import GeminiModelCapabilityError
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"x" * (MAX_RESPONSE_BYTES + 1)
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            matcher = AiMatcher(api_key="valid_key")
+            with self.assertRaises(GeminiModelCapabilityError) as cm:
+                matcher.validate_model_capability()
+            self.assertIn("exceeded maximum allowed size", str(cm.exception))
 
     def test_clean_title_for_comparison(self):
         from movies_feed.ids import clean_title_for_comparison

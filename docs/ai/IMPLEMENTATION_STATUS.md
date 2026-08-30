@@ -25,10 +25,11 @@ MVP wiring is present; production hardening is not complete.
 - Prompt 5A: Parse logs have explicit retry lifecycle metadata, conservative legacy-state derivation, deterministic paginated retry selection, and retention that preserves old retryable work.
 - Prompt 5B: Reparse traverses all retry pages, resolves retained manual mappings before Gemini, deduplicates by v2 source identity, preserves source provenance, updates the original log lifecycle, and consumes mappings only after durable writes.
 - Prompt 6A: Shared validation in `ai_validator.py` strictly validates Gemini responses with bounded payloads, exact types/ranges (`movie`/`series`), and fail-closed confidence thresholds (0.70 extraction/candidate, 0.80 audit).
+- Prompt 6B: Injected clock/sleep dependencies, deterministic retry policy (429/5xx/timeout), 403 cooldowns, header-only key transport (`x-goog-api-key`), bounded responses, and secret-safe structured logging in `AiMatcher`.
 
 ## Next Prompt
 
-Run Prompt 6B in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+Run Prompt 7A in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 
