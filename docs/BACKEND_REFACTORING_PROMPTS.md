@@ -20,23 +20,6 @@ implementing an earlier one. If an existing implementation already satisfies a
 bullet, add or verify the regression test and leave the behavior unchanged.
 
 
-## Prompt 7B: Audit Occurrence Clusters
-
-```text
-Goal: replace title-level audit decisions with idempotent occurrence-level review.
-
-Scope: recheck-existing orchestration, occurrence validation metadata, AuditProposal integration, focused scanner tests, and directly affected docs. Group occurrences by a documented meaningful source/raw-title identity and evaluate every cluster independently; never infer all occurrences from the first one. Valid clusters receive validation metadata and policy version. Ambiguous or mismatched clusters create/update pending proposals and never move or delete catalog data.
-
-Contract: a title is aggregate-validated only when every current cluster is valid under the current policy version. Adding or changing an occurrence invalidates that aggregate state. Titles without occurrences follow the explicit orphan `needs_review` policy. `audit_days` uses observation recency, not publication time. Counters distinguish clusters checked, valid clusters, proposals, retryable failures, and orphans.
-
-Non-goals: do not apply approved proposals, delete titles, move occurrences, or redesign proposal state transitions.
-
-Work: keep the phase idempotent, preserve source context in evidence, and ensure a repeated audit updates the same proposal rather than duplicating it.
-
-Tests: mixed-validity clusters, multiple seasons, new-occurrence invalidation, orphan titles, idempotent reruns, policy-version changes, observation-based audit-days, and catalog immutability.
-
-Done when: each occurrence cluster is independently classified, proposals are stable across reruns, and narrow plus full backend tests pass.
-```
 
 ## Prompt 8A: Implement the Proposal Application Service
 
