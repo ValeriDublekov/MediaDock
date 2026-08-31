@@ -81,6 +81,17 @@ def _get_entry_datetime(entry: Any) -> Optional[datetime.datetime]:
             return None
     return None
 
+@dataclass
+class ParsedEntryContext:
+    entry: Any
+    source_context: SourceContext
+    is_ignored_by_date: bool = False
+    raw_title: str = ""
+    parsed: Optional[ParsedTitle] = None
+    lookup_year: Optional[int] = None
+    expected_source_type: Optional[str] = None
+    parse_error: Optional[str] = None
+
 class ScannerService:
     def __init__(
         self,
@@ -794,44 +805,71 @@ class ScannerService:
                             f"Section [feed_fetch]: Feed '{feed_def['name']}' fetched in {t_feed:.4f}s ({entries_cnt} entries)"
                         )
 
-                        # Bulk pre-fetch cache entries for this feed
+                        # Parse entries once, filtering by date early
+                        parsed_contexts: List[ParsedEntryContext] = []
                         cache_requests_to_prefetch = []
+
+                        cutoff = None
+                        if self.config.force_days > 0:
+                            cutoff = self.now - datetime.timedelta(days=self.config.force_days)
+
                         for entry in entries:
-                            raw_title = getattr(entry, "title", "")
-                            if raw_title:
+                            source_context = self._source_context_for_entry(entry, feed_def)
+                            raw_title = getattr(entry, "title", "") or ""
+                            
+                            is_ignored = False
+                            if cutoff is not None and source_context.source_published_at is not None:
+                                if source_context.source_published_at < cutoff:
+                                    is_ignored = True
+                                    
+                            ctx = ParsedEntryContext(
+                                entry=entry,
+                                source_context=source_context,
+                                is_ignored_by_date=is_ignored,
+                                raw_title=raw_title,
+                            )
+                            
+                            if not is_ignored and raw_title:
+                                t0_parse = time.perf_counter()
                                 try:
-                                    parsed = parse_rutracker_title(
+                                    ctx.parsed = parse_rutracker_title(
                                         raw_title,
                                         content_type=feed_def.get("type"),
                                         video_settings=self.config.video_settings,
                                     )
-                                    if parsed.title:
-                                        y = None
-                                        if parsed.year:
+                                    section_timings["title_parse"] += (time.perf_counter() - t0_parse)
+                                    
+                                    if ctx.parsed and ctx.parsed.title:
+                                        if ctx.parsed.year:
                                             try:
-                                                y = int(parsed.year)
+                                                ctx.lookup_year = int(ctx.parsed.year)
                                             except ValueError:
                                                 pass
-                                        expected_source_type = self._expected_source_type(
+                                        ctx.expected_source_type = self._expected_source_type(
                                             feed_def.get("type"),
-                                            parsed.is_series,
+                                            ctx.parsed.is_series,
                                         )
                                         cache_requests_to_prefetch.append(
-                                            (parsed.title, y, expected_source_type, None)
+                                            (ctx.parsed.title, ctx.lookup_year, ctx.expected_source_type, None)
                                         )
                                 except Exception as e:
-                                    logger.warning(f"Error during cache key prefetch for '{raw_title}': {e}")
+                                    section_timings["title_parse"] += (time.perf_counter() - t0_parse)
+                                    logger.error(f"Error parsing rutracker title '{raw_title}': {e}", exc_info=True)
+                                    ctx.parsed = ParsedTitle(title="", year=None, is_series=False, quality="", rip_type="")
+                                    ctx.parse_error = f"Грешка при парсване: {e}"
+                            
+                            parsed_contexts.append(ctx)
+
                         if cache_requests_to_prefetch:
                             self.metadata_resolver.prefetch(
                                 cache_requests_to_prefetch,
                                 section_timings,
                             )
 
-                        for entry in entries:
+                        for ctx in parsed_contexts:
                             run.entries_seen += 1
-                            source_context = self._source_context_for_entry(entry, feed_def)
                             try:
-                                self._process_entry(entry, feed_def, source_context, run, section_timings)
+                                self._process_entry(ctx, feed_def, run, section_timings)
                             except OmdbLimitReachedError as e:
                                 logger.warning(f"OMDb limit reached: {e}")
                                 run.error_count += 1
@@ -840,12 +878,12 @@ class ScannerService:
                                 break
                             except Exception as e:
                                 err_text = f"Entry error ({type(e).__name__}): {e}"
-                                logger.error(f"Error processing entry {getattr(entry, 'title', '')}: {err_text}", exc_info=True)
+                                logger.error(f"Error processing entry {ctx.raw_title}: {err_text}", exc_info=True)
                                 run.error_count += 1
                                 run.error_summary.append(err_text)
                                 try:
                                     self._log_parse_entry(
-                                        raw_title=getattr(entry, "title", "") or "",
+                                        raw_title=ctx.raw_title,
                                         feed_name=feed_def.get("name", ""),
                                         parsed_successfully=False,
                                         parsed_title=None,
@@ -854,10 +892,10 @@ class ScannerService:
                                         ignored=True,
                                         ignore_reason="entry_error",
                                         error_message=err_text,
-                                        feed_entry_id=getattr(entry, "id", None),
-                                        torrent_url=getattr(entry, "link", None),
+                                        feed_entry_id=getattr(ctx.entry, "id", None),
+                                        torrent_url=getattr(ctx.entry, "link", None),
                                         source_feed_id=feed_def.get("id"),
-                                        source_context=source_context,
+                                        source_context=ctx.source_context,
                                         section_timings=section_timings,
                                     )
                                 except Exception as log_ex:
@@ -1359,9 +1397,8 @@ class ScannerService:
 
     def _process_entry(
         self,
-        entry: Any,
+        ctx: ParsedEntryContext,
         feed_def: Dict[str, Optional[str]],
-        source_context: SourceContext,
         run: ScanRun,
         section_timings: Optional[Dict[str, float]] = None,
     ) -> None:
@@ -1376,21 +1413,17 @@ class ScannerService:
                 "parse_log_write": 0.0,
             }
 
-        raw_title = getattr(entry, "title", "")
-        feed_entry_id = getattr(entry, "id", None)
-        torrent_url = getattr(entry, "link", "")
+        raw_title = ctx.raw_title
+        feed_entry_id = getattr(ctx.entry, "id", None)
+        torrent_url = getattr(ctx.entry, "link", "")
         feed_name = feed_def.get("name", "")
         source_feed_id = feed_def.get("id", "")
-
-        entry_dt = source_context.source_published_at
+        source_context = ctx.source_context
         item_time = source_context.observed_at or self.now
 
-        if self.config.force_days > 0:
-            if entry_dt is not None:
-                cutoff = self.now - datetime.timedelta(days=self.config.force_days)
-                if entry_dt < cutoff:
-                    run.ignored_entries += 1
-                    return
+        if ctx.is_ignored_by_date:
+            run.ignored_entries += 1
+            return
 
         if not raw_title:
             run.ignored_entries += 1
@@ -1412,21 +1445,10 @@ class ScannerService:
             )
             return
 
-        parse_error: Optional[str] = None
-        try:
-            t0_parse = time.perf_counter()
-            parsed = parse_rutracker_title(
-                raw_title,
-                content_type=feed_def.get("type"),
-                video_settings=self.config.video_settings,
-            )
-            section_timings["title_parse"] += (time.perf_counter() - t0_parse)
-        except Exception as e:
-            logger.error(f"Error parsing rutracker title '{raw_title}': {e}", exc_info=True)
-            parsed = ParsedTitle(title="", year=None, is_series=False, quality="", rip_type="")
-            parse_error = f"Грешка при парсване: {e}"
+        parsed = ctx.parsed
+        parse_error = ctx.parse_error
 
-        if not parsed.title:
+        if not parsed or not parsed.title:
             run.ignored_entries += 1
             if parse_error:
                 run.error_count += 1
@@ -1451,12 +1473,7 @@ class ScannerService:
             return
 
         norm_lookup_title = normalize_title(parsed.title)
-        lookup_year = None
-        if parsed.year:
-            try:
-                lookup_year = int(parsed.year)
-            except ValueError:
-                pass
+        lookup_year = ctx.lookup_year
 
         base_trace = {
             "parsedTitle": parsed.title,
@@ -1467,7 +1484,7 @@ class ScannerService:
             "feedName": feed_name,
             "feedType": feed_def.get("type"),
         }
-        expected_source_type = self._expected_source_type(feed_def.get("type"), parsed.is_series)
+        expected_source_type = ctx.expected_source_type
         base_trace["expectedSourceType"] = expected_source_type
 
         logger.info(f"[Scanner:Parse] Feed '{feed_name}' | '{raw_title}' -> Title: '{parsed.title}', Year: {lookup_year}, Quality: '{parsed.quality}', Rip: '{parsed.rip_type}', IsSeries: {parsed.is_series}")

@@ -1742,5 +1742,121 @@ class TestScanner(unittest.TestCase):
             self.assertEqual(f_log.trace_details.get("decision"), "ignored_excluded_country_or_genre")
             self.assertEqual(f_log.trace_details.get("parsedTitle"), "Four Rooms")
 
+    def test_single_pass_parsing_and_force_days_skips_parse(self):
+        from unittest.mock import patch
+        from movies_feed.rutracker_parser import parse_rutracker_title as real_parse
+
+        old_date_str = (self.now - datetime.timedelta(days=10)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        new_date_str = (self.now - datetime.timedelta(days=1)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+        feed_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0">
+            <channel>
+                <item>
+                    <title>Стар Филм / Old Movie [1990, САЩ, BDRip 1080p]</title>
+                    <link>https://example.com/torrent/old</link>
+                    <guid>guid_old</guid>
+                    <pubDate>{old_date_str}</pubDate>
+                </item>
+                <item>
+                    <title>Матрица / The Matrix (Вачовски) [1999, САЩ, фантастика, BDRip 1080p]</title>
+                    <link>https://example.com/torrent/new</link>
+                    <guid>guid_new</guid>
+                    <pubDate>{new_date_str}</pubDate>
+                </item>
+            </channel>
+        </rss>"""
+
+        config = ScannerConfig(
+            rss_feeds={
+                "test_feed": {
+                    "name": "test_feed",
+                    "url": feed_xml,
+                    "type": "movie",
+                }
+            },
+            force_days=3,
+            omdb_limit=10,
+        )
+        omdb = MockOmdbClient({"the matrix": self.valid_movie})
+        scanner = self.create_scanner(config, omdb)
+
+        parse_calls = []
+        def parse_spy(raw, **kwargs):
+            parse_calls.append(raw)
+            return real_parse(raw, **kwargs)
+
+        with patch("movies_feed.scanner.parse_rutracker_title", side_effect=parse_spy):
+            run = scanner.run("run_single_pass")
+
+        self.assertEqual(run.status, "succeeded")
+        self.assertEqual(run.entries_seen, 2)
+        self.assertEqual(run.ignored_entries, 1) # old movie ignored
+        self.assertEqual(run.titles_created, 1)
+
+        # parse_rutracker_title must be called exactly ONCE for the whole feed, and NOT called for old movie!
+        self.assertEqual(len(parse_calls), 1)
+        self.assertEqual(parse_calls[0], "Матрица / The Matrix (Вачовски) [1999, САЩ, фантастика, BDRip 1080p]")
+
+    def test_same_parsed_context_used_for_prefetch_and_processing(self):
+        raw_title = "Матрица / The Matrix (Вачовски) [1999, САЩ, фантастика, BDRip 1080p]"
+        feed_xml = self.make_inline_feed(raw_title)
+        config = ScannerConfig(
+            rss_feeds={
+                "test_feed": {
+                    "name": "test_feed",
+                    "url": feed_xml,
+                    "type": "movie",
+                }
+            },
+            omdb_limit=10,
+        )
+        omdb = MockOmdbClient({"the matrix": self.valid_movie})
+        scanner = self.create_scanner(config, omdb)
+
+        prefetch_calls = []
+        original_prefetch = scanner.metadata_resolver.prefetch
+        def prefetch_spy(requests, section_timings=None):
+            prefetch_calls.extend(requests)
+            return original_prefetch(requests, section_timings=section_timings)
+
+        scanner.metadata_resolver.prefetch = prefetch_spy
+
+        run = scanner.run("run_prefetch_reuse")
+        self.assertEqual(run.status, "succeeded")
+        self.assertEqual(run.titles_created, 1)
+        # Prefetch received exactly the parsed entry title and year
+        self.assertEqual(len(prefetch_calls), 1)
+        self.assertEqual(prefetch_calls[0][0], "The Matrix")
+        self.assertEqual(prefetch_calls[0][1], 1999)
+
+    def test_parse_only_isolation_makes_no_api_or_db_writes(self):
+        feed_xml = self.make_inline_feed("The Matrix (1999) [1080p]")
+        config = ScannerConfig(
+            rss_feeds={
+                "test_feed": {
+                    "name": "test_feed",
+                    "url": feed_xml,
+                    "type": "movie",
+                }
+            },
+            is_parse_only=True,
+            mode="rss",
+            omdb_limit=10,
+        )
+        omdb = MockOmdbClient({"the matrix": self.valid_movie})
+        scanner = self.create_scanner(config, omdb)
+
+        run = scanner.run("run_parse_only")
+        self.assertEqual(run.status, "succeeded")
+        self.assertEqual(run.entries_seen, 1)
+        # 0 OMDb requests
+        self.assertEqual(omdb.request_count, 0)
+        self.assertEqual(run.omdb_requests, 0)
+        # 0 DB writes
+        self.assertEqual(self.title_repo.list_all(), [])
+        self.assertEqual(self.parse_log_repo.get_all(), [])
+
+
 
 

@@ -84,10 +84,9 @@ errors.
 
 1. Load feeds and filters from JSON, optionally overridden by `titles/settings_config` in Firestore.
 2. Fetch each configured feed through `FeedFetcher`, validate HTTPS host/IP/redirect policy, limits, status, and content type, then pass the returned bytes to `feedparser.parse()`. A bozo/partial parse or an entry count over the configured bound rejects the whole feed before cache, catalog, or parse-log work begins.
-3. Regex-parse every entry once to prefetch OMDb cache keys.
-4. Process each entry and regex-parse it a second time.
-5. If `force_days > 0`, silently skip entries older than the cutoff.
-6. Reject empty or unparseable titles and create a parse log.
+3. If `force_days > 0` and a source publication date exists, filter out entries outside the window before title parsing.
+4. Regex-parse each accepted entry exactly once into a typed `ParsedEntryContext`, and reuse this context for both OMDb cache prefetch and subsequent entry processing without duplicate parsing.
+5. Reject empty or unparseable titles and create a parse log.
 7. In `--parse-only`, each RSS entry stops after parsing. Parse-only is valid only with `--mode rss`; the CLI rejects combinations such as `--parse-only --mode all` and the scanner also exits before any AI phase. No Firestore, OMDb, Gemini, or parse-log write is performed. An explicitly supplied `--feed-file` is read as bytes through the fixture path and is never passed as a URL to `feedparser`.
 8. Resolve a manual mapping by log/occurrence ID, raw title, or normalized parsed title. A successful IMDb lookup bypasses automatic type/year validation. Mapping consumption waits for the durable catalog flush.
 9. Otherwise resolve through the versioned `(normalized title, year semantics, source type)` cache. Positive entries live for 30 days by default; confirmed-negative entries live for up to two days. Old type-less entries are ignored until natural expiry.
