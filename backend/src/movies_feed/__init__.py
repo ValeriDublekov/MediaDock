@@ -75,20 +75,17 @@ from .repository import (
     merge_parse_logs,
     merge_titles,
 )
-try:
-    from .firestore_repository import (
-        FirestoreAuditProposalRepository,
-        FirestoreTitleRepository,
-        FirestoreOccurrenceRepository,
-        FirestoreOmdbCacheRepository,
-        FirestoreParseLogRepository,
-        FirestoreScanRunRepository,
-        FirestoreManualMappingRepository,
-        audit_proposal_from_dict,
-        get_firestore_client,
-    )
-except ImportError:
-    pass
+from .firestore_repository import (
+    FirestoreAuditProposalRepository,
+    FirestoreTitleRepository,
+    FirestoreOccurrenceRepository,
+    FirestoreOmdbCacheRepository,
+    FirestoreParseLogRepository,
+    FirestoreScanRunRepository,
+    FirestoreManualMappingRepository,
+    audit_proposal_from_dict,
+    get_firestore_client,
+)
 
 __version__ = "0.1.0"
 

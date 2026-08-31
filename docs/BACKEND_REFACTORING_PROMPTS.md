@@ -19,39 +19,6 @@ Each new stage below is intentionally written as `Scope`, `Non-goals`, `Contract
 implementing an earlier one. If an existing implementation already satisfies a
 bullet, add or verify the regression test and leave the behavior unchanged.
 
-## Prompt 9B: Refine Parser Heuristics and Confidence
-
-```text
-Goal: fix known title-parser failures without mixing parser work with networking.
-
-Scope: backend/src/movies_feed/rutracker_parser.py, parser result types, the smallest affected scanner/retry adapter, corpus tests, and parser documentation. Parse around recognized trailing metadata instead of arbitrary slash splitting/removal. Preserve embedded title slashes such as Face/Off, meaningful parentheses, and valid multi-language titles; require letters for a Latin candidate, validate a realistic year range, and avoid substring-only series detection.
-
-Contract: return parse confidence and stable reason diagnostics. Low-confidence or ambiguous parses go to retry/review rather than silently guessing. Keep configured known feed type authoritative and preserve existing valid fixtures.
-
-Non-goals: do not reimplement FeedFetcher, change OMDb resolver/cache behavior, redesign AI schemas, or change audit/proposal application.
-
-Tests: table-driven corpus for embedded slashes, parentheses, numeric-only candidates, invalid years, series markers in the wrong place, multilingual titles, quality/rip tags, confidence/reasons, and low-confidence routing.
-
-Done when: the parser corpus is green, existing valid fixtures remain green, and no network or catalog-repair code was refactored unnecessarily.
-```
-
-## Prompt 10A: Converge Phase Boundaries and Metrics
-
-```text
-Goal: finish ScannerService as orchestration over shared components and make run status truthful.
-
-Scope: scanner/CLI run models and orchestration, phase-focused tests, and docs/ai contracts. Remove remaining duplicate matching, validation, lookup, and persistence branches only where the shared policy/resolver/source-context/retry/AI/proposal services already own the behavior. Keep mode handlers small and explicit.
-
-Contract: mode=all snapshots each phase's eligible input at that phase's start, tags writes with the current run ID, and excludes same-run writes from later phases unless an explicit option enables chaining. Phase status and counters expose attempted/completed/skipped/failed work, cache hits, actual HTTP calls, AI calls/items, retries, proposals, and applied repairs. Any stopped/incomplete AI or OMDb phase prevents succeeded. Dry-run counters describe planned creates/updates/moves rather than claiming every item is new.
-
-Non-goals: do not modify shell scripts, deployment documentation, workflow YAML, or frontend approval UI.
-
-Work: add phase boundaries and counters without changing catalog decisions, and preserve the process exit-code contract.
-
-Tests: one end-to-end fake-repository test for rss, recheck-existing, reparse-unfound, apply-proposals, and all; same-run exclusion; stopped-phase status; actual HTTP/cache/AI counters; and truthful dry-run plans. Assert no production test uses live services.
-
-Done when: all modes expose truthful phase results, mode=all is deterministic, and the full backend suite is green.
-```
 
 ## Prompt 10B: Align Operations, Scripts, and Documentation
 

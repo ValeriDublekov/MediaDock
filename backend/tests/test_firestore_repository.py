@@ -3,6 +3,11 @@ import datetime
 import unittest
 from typing import Optional
 
+try:
+    from . import _test_stubs
+except ImportError:
+    import _test_stubs
+
 # We must import firestore to handle emulator connection or check if emulator is set
 from google.cloud import firestore as cloud_firestore
 

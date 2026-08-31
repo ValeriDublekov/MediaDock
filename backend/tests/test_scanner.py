@@ -4,10 +4,16 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+try:
+    from . import _test_stubs
+except ImportError:
+    import _test_stubs
+
 from movies_feed.models import ManualMapping, OmdbCacheEntry, ParseLog, SourceContext, Title, Occurrence, ScanRun
 from movies_feed.omdb_client import OmdbMovieResult, OmdbLimitReachedError, OmdbTransportError, OmdbNoMatchError, OmdbClient, HttpTransport
 from movies_feed.match_policy import parse_broadcast_range
 from movies_feed.repository import (
+    FakeAuditProposalRepository,
     FakeTitleRepository,
     FakeOccurrenceRepository,
     FakeOmdbCacheRepository,
@@ -89,6 +95,7 @@ class TestScanner(unittest.TestCase):
         self.run_repo = FakeScanRunRepository()
         self.parse_log_repo = FakeParseLogRepository()
         self.manual_mapping_repo = FakeManualMappingRepository()
+        self.audit_proposal_repo = FakeAuditProposalRepository()
 
         self.valid_movie = OmdbMovieResult(
             title="The Matrix", year=1999, imdb_id="tt0133093",
@@ -122,6 +129,7 @@ class TestScanner(unittest.TestCase):
             run_repo=self.run_repo,
             parse_log_repo=self.parse_log_repo,
             manual_mapping_repo=self.manual_mapping_repo,
+            audit_proposal_repo=self.audit_proposal_repo,
             now=self.now,
             feed_fetcher=StaticTestFeedFetcher(),
         )
@@ -1856,6 +1864,135 @@ class TestScanner(unittest.TestCase):
         # 0 DB writes
         self.assertEqual(self.title_repo.list_all(), [])
         self.assertEqual(self.parse_log_repo.get_all(), [])
+
+    def test_phase_boundaries_metrics_and_counters(self):
+        feed_xml = self.make_inline_feed("The Matrix (1999) [1080p]")
+        config = ScannerConfig(
+            rss_feeds={
+                "test_feed": {
+                    "name": "test_feed",
+                    "url": feed_xml,
+                    "type": "movie",
+                }
+            },
+            mode="all",
+            omdb_limit=10,
+        )
+        omdb = MockOmdbClient({"the matrix": self.valid_movie})
+        scanner = self.create_scanner(config, omdb)
+
+        run = scanner.run("run_phase_metrics")
+        self.assertEqual(run.status, "succeeded")
+        self.assertEqual(run.titles_created, 1)
+        self.assertEqual(run.occurrences_created, 1)
+        self.assertEqual(run.entries_seen, 1)
+        self.assertIn("rss", run.phase_metrics)
+        self.assertIn("recheck_existing", run.phase_metrics)
+        self.assertIn("reparse_unfound", run.phase_metrics)
+        self.assertIn("apply_proposals", run.phase_metrics)
+
+        rss_metrics = run.phase_metrics["rss"]
+        self.assertEqual(rss_metrics["status"], "succeeded")
+        self.assertEqual(rss_metrics["feeds_processed"], 1)
+        self.assertEqual(rss_metrics["entries_seen"], 1)
+        self.assertEqual(rss_metrics["titles_created"], 1)
+        self.assertIsNotNone(rss_metrics["started_at"])
+        self.assertIsNotNone(rss_metrics["finished_at"])
+
+        recheck_metrics = run.phase_metrics["recheck_existing"]
+        self.assertEqual(recheck_metrics["status"], "succeeded")
+
+    def test_mode_all_phase_isolation_prevents_same_run_auditing_unless_allowed(self):
+        feed_xml = self.make_inline_feed("The Matrix (1999) [1080p]")
+        config = ScannerConfig(
+            rss_feeds={
+                "test_feed": {
+                    "name": "test_feed",
+                    "url": feed_xml,
+                    "type": "movie",
+                }
+            },
+            mode="all",
+            omdb_limit=10,
+            allow_same_run_chaining=False,
+        )
+        omdb = MockOmdbClient({"the matrix": self.valid_movie})
+        scanner = self.create_scanner(config, omdb)
+
+        recheck_called_with_ids = []
+
+        def spy_recheck(*args, **kwargs):
+            excluded = kwargs.get("excluded_title_ids")
+            if excluded:
+                recheck_called_with_ids.extend(excluded)
+            return {
+                "titles_checked": 0,
+                "mismatches_found": 0,
+                "repaired": 0,
+                "removed": 0,
+                "validated": 0,
+                "needs_review": 0,
+                "ai_failures": 0,
+                "omdb_failures": 0,
+                "clusters_checked": 0,
+                "valid_clusters": 0,
+                "proposals": 0,
+                "retryable_failures": 0,
+                "orphans": 0,
+            }
+
+        scanner.recheck_existing_titles = spy_recheck
+
+        run = scanner.run("run_isolation")
+        self.assertEqual(run.status, "succeeded")
+        self.assertEqual(run.titles_created, 1)
+        # Verify that newly created title ID was in excluded_title_ids
+        self.assertTrue(len(recheck_called_with_ids) > 0)
+        created_title_id = list(self.title_repo._store.keys())[0]
+        self.assertIn(created_title_id, recheck_called_with_ids)
+
+        # Now test with allow_same_run_chaining=True
+        self.title_repo._store.clear()
+        self.occ_repo._store.clear()
+        recheck_called_with_ids.clear()
+
+        config_chained = ScannerConfig(
+            rss_feeds={
+                "test_feed": {
+                    "name": "test_feed",
+                    "url": feed_xml,
+                    "type": "movie",
+                }
+            },
+            mode="all",
+            omdb_limit=10,
+            allow_same_run_chaining=True,
+        )
+        scanner_chained = self.create_scanner(config_chained, omdb)
+        scanner_chained.recheck_existing_titles = spy_recheck
+
+        run_chained = scanner_chained.run("run_chained")
+        self.assertEqual(run_chained.status, "succeeded")
+        self.assertEqual(len(recheck_called_with_ids), 0)
+
+    def test_scan_run_status_partial_on_error(self):
+        config = ScannerConfig(
+            rss_feeds={
+                "test_feed": {
+                    "name": "test_feed",
+                    "url": "invalid://not-found",
+                    "type": "movie",
+                }
+            },
+            mode="rss",
+            omdb_limit=10,
+        )
+        omdb = MockOmdbClient({})
+        scanner = self.create_scanner(config, omdb)
+
+        run = scanner.run("run_error_status")
+        self.assertEqual(run.status, "partial")
+        self.assertGreater(run.error_count, 0)
 
 
 

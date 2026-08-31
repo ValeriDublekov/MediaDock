@@ -4,6 +4,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+try:
+    from . import _test_stubs
+except ImportError:
+    import _test_stubs
+
 import requests
 
 from movies_feed.feed_fetcher import (

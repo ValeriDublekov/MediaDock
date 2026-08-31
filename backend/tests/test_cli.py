@@ -3,6 +3,11 @@ import os
 import unittest
 from unittest.mock import patch
 
+try:
+    from . import _test_stubs
+except ImportError:
+    import _test_stubs
+
 from movies_feed.cli import (
     ConfigurationError,
     EXIT_FAILURE,

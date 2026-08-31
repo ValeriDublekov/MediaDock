@@ -24,11 +24,17 @@ class ProposalApplicationService:
         title_repo: TitleRepository,
         occurrence_repo: OccurrenceRepository,
         clock: Optional[Callable[[], datetime.datetime]] = None,
+        now: Optional[datetime.datetime] = None,
     ) -> None:
         self.proposal_repo = proposal_repo
         self.title_repo = title_repo
         self.occurrence_repo = occurrence_repo
-        self.clock = clock or (lambda: datetime.datetime.now(datetime.timezone.utc))
+        if clock is not None:
+            self.clock = clock
+        elif now is not None:
+            self.clock = lambda: now
+        else:
+            self.clock = lambda: datetime.datetime.now(datetime.timezone.utc)
 
     def _mark_state(self, proposal: AuditProposal, status: str) -> None:
         proposal.status = status # type: ignore

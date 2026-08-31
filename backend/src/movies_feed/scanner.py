@@ -5,7 +5,7 @@ import math
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
     import feedparser
@@ -73,6 +73,7 @@ class ScannerConfig:
     feed_file_type: Optional[str] = "movie"
     proposal_id: Optional[str] = None
     reject_proposal: bool = False
+    allow_same_run_chaining: bool = False
 
 
 def _get_entry_datetime(entry: Any) -> Optional[datetime.datetime]:
@@ -160,6 +161,10 @@ class ScannerService:
         self._manual_mappings_by_id: Dict[str, ManualMapping] = {}
         self._manual_mappings_by_raw_title: Dict[str, ManualMapping] = {}
         self._manual_mappings_by_parsed_title: Dict[str, ManualMapping] = {}
+        self._run_written_title_ids: Set[str] = set()
+        self._run_written_occurrence_keys: Set[Tuple[str, str]] = set()
+        self._run_written_parse_log_ids: Set[str] = set()
+        self._run_created_proposal_ids: Set[str] = set()
 
     @staticmethod
     def _record_phase_error(run: Optional[ScanRun], message: str) -> None:
@@ -616,9 +621,11 @@ class ScannerService:
             run.titles_created += 1
             merged_title = title_record
         else:
+            run.titles_updated += 1
             merged_title = merge_titles(existing_title, title_record)
         self._session_titles[title_id] = merged_title
         self._pending_titles[title_id] = merged_title
+        self._run_written_title_ids.add(title_id)
 
         existing_occ = self._get_occurrence(title_id, occurrence_id)
         if existing_occ is None:
@@ -627,10 +634,12 @@ class ScannerService:
             merged_title.ai_validated = False
             merged_title.ai_checked_at = None
         else:
+            run.occurrences_updated += 1
             merged_occ = merge_occurrences(existing_occ, occurrence_record)
         occ_key = (title_id, occurrence_id)
         self._session_occurrences[occ_key] = merged_occ
         self._pending_occurrences[occ_key] = merged_occ
+        self._run_written_occurrence_keys.add(occ_key)
 
     def _flush_parse_logs(self, section_timings: Optional[Dict[str, float]] = None) -> None:
         if (
@@ -703,8 +712,6 @@ class ScannerService:
         audit_event_identity: Optional[str] = None,
         source_context: Optional[SourceContext] = None,
     ) -> None:
-        if not self.parse_log_repo or self.config.is_dry_run:
-            return
         if source_log_id is not None:
             log_id = source_log_id
             event_kind = "source"
@@ -716,6 +723,11 @@ class ScannerService:
             event_kind = "source"
         else:
             raise ValueError("source or audit identity is required for a parse log")
+
+        self._run_written_parse_log_ids.add(log_id)
+
+        if not self.parse_log_repo or self.config.is_dry_run:
+            return
 
         log = ParseLog(
             id=log_id,
@@ -786,8 +798,28 @@ class ScannerService:
 
         try:
             # 1. RSS Feed Processing (if mode is "rss" or "all")
+            phase_1_metrics: Dict[str, Any] = {
+                "status": "skipped",
+                "started_at": None,
+                "finished_at": None,
+                "duration_seconds": 0.0,
+                "feeds_processed": 0,
+                "entries_seen": 0,
+                "titles_created": 0,
+                "titles_updated": 0,
+                "occurrences_created": 0,
+                "occurrences_updated": 0,
+                "cache_hits": 0,
+                "omdb_requests": 0,
+                "ignored_entries": 0,
+                "errors": 0,
+            }
             if self.config.mode in ("rss", "all"):
-                logger.info("--> [Phase 1/3] Processing RSS feeds...")
+                logger.info("--> [Phase 1/4] Processing RSS feeds...")
+                p1_start = datetime.datetime.now(datetime.timezone.utc)
+                phase_1_metrics["started_at"] = p1_start.isoformat()
+                p1_initial_errors = run.error_count
+                p1_t0 = time.perf_counter()
                 for feed_def in self._iter_scan_feed_definitions():
                     run.feeds_processed += 1
                     try:
@@ -849,8 +881,8 @@ class ScannerService:
                                             except ValueError:
                                                 pass
                                         ctx.expected_source_type = self._expected_source_type(
-                                            feed_def.get("type"),
-                                            ctx.parsed.is_series,
+                                             feed_def.get("type"),
+                                             ctx.parsed.is_series,
                                         )
                                         cache_requests_to_prefetch.append(
                                             (ctx.parsed.title, ctx.lookup_year, ctx.expected_source_type, None)
@@ -913,39 +945,168 @@ class ScannerService:
                         logger.error(err_text, exc_info=True)
                         run.error_count += 1
                         run.error_summary.append(err_text)
+
+                p1_finish = datetime.datetime.now(datetime.timezone.utc)
+                p1_duration = time.perf_counter() - p1_t0
+                phase_1_metrics["finished_at"] = p1_finish.isoformat()
+                phase_1_metrics["duration_seconds"] = round(p1_duration, 4)
+                phase_1_metrics["feeds_processed"] = run.feeds_processed
+                phase_1_metrics["entries_seen"] = run.entries_seen
+                phase_1_metrics["titles_created"] = run.titles_created
+                phase_1_metrics["titles_updated"] = run.titles_updated
+                phase_1_metrics["occurrences_created"] = run.occurrences_created
+                phase_1_metrics["occurrences_updated"] = run.occurrences_updated
+                phase_1_metrics["cache_hits"] = run.cache_hits
+                phase_1_metrics["omdb_requests"] = run.omdb_requests
+                phase_1_metrics["ignored_entries"] = run.ignored_entries
+                p1_errors = run.error_count - p1_initial_errors
+                phase_1_metrics["errors"] = p1_errors
+                phase_1_metrics["status"] = "succeeded" if p1_errors == 0 else ("failed" if run.feeds_processed == 0 and p1_errors > 0 else "partial")
             else:
                 logger.info(f"--> [Phase 1/4] RSS feed processing SKIPPED (mode is '{self.config.mode}')")
+            run.phase_metrics["rss"] = phase_1_metrics
 
             if self.config.is_parse_only:
                 logger.info("--> [Phase 2/4] AI Database Audit SKIPPED (parse-only mode)")
                 logger.info("--> [Phase 3/4] AI Unmapped Reparsing SKIPPED (parse-only mode)")
                 logger.info("--> [Phase 4/4] Proposal Application SKIPPED (parse-only mode)")
+                run.phase_metrics["recheck_existing"] = {"status": "skipped", "started_at": None, "finished_at": None, "duration_seconds": 0.0}
+                run.phase_metrics["reparse_unfound"] = {"status": "skipped", "started_at": None, "finished_at": None, "duration_seconds": 0.0}
+                run.phase_metrics["apply_proposals"] = {"status": "skipped", "started_at": None, "finished_at": None, "duration_seconds": 0.0}
             else:
                 # 2. AI Database Recheck & Fix (if mode is "recheck-existing" or "all")
+                phase_2_metrics: Dict[str, Any] = {
+                    "status": "skipped",
+                    "started_at": None,
+                    "finished_at": None,
+                    "duration_seconds": 0.0,
+                }
                 if self.config.mode in ("recheck-existing", "all"):
                     logger.info("--> [Phase 2/4] AI Audit & Repair of existing database titles...")
-                    t0_recheck = time.perf_counter()
-                    self.recheck_existing_titles(run=run, section_timings=section_timings)
-                    section_timings["ai_recheck"] += (time.perf_counter() - t0_recheck)
+                    p2_start = datetime.datetime.now(datetime.timezone.utc)
+                    phase_2_metrics["started_at"] = p2_start.isoformat()
+                    p2_initial_errors = run.error_count
+                    p2_t0 = time.perf_counter()
+                    excluded_titles = None
+                    if not self.config.allow_same_run_chaining and self.config.mode == "all":
+                        excluded_titles = set(self._run_written_title_ids)
+
+                    recheck_stats = self.recheck_existing_titles(
+                        run=run,
+                        section_timings=section_timings,
+                        excluded_title_ids=excluded_titles,
+                    )
+                    p2_duration = time.perf_counter() - p2_t0
+                    section_timings["ai_recheck"] += p2_duration
+                    p2_finish = datetime.datetime.now(datetime.timezone.utc)
+                    phase_2_metrics["finished_at"] = p2_finish.isoformat()
+                    phase_2_metrics["duration_seconds"] = round(p2_duration, 4)
+                    phase_2_metrics.update(recheck_stats)
+                    p2_errors = run.error_count - p2_initial_errors
+                    phase_2_metrics["errors"] = p2_errors
+                    if p2_errors == 0 and recheck_stats.get("ai_failures", 0) == 0 and recheck_stats.get("omdb_failures", 0) == 0:
+                        phase_2_metrics["status"] = "succeeded"
+                    elif recheck_stats.get("titles_checked", 0) == 0 and p2_errors > 0:
+                        phase_2_metrics["status"] = "failed"
+                    else:
+                        phase_2_metrics["status"] = "partial"
                 else:
                     logger.info(f"--> [Phase 2/4] AI Database Audit SKIPPED (mode is '{self.config.mode}')")
+                run.phase_metrics["recheck_existing"] = phase_2_metrics
 
                 # 3. AI Reparse Unfound Titles (if mode is "reparse-unfound" or "all")
+                phase_3_metrics: Dict[str, Any] = {
+                    "status": "skipped",
+                    "started_at": None,
+                    "finished_at": None,
+                    "duration_seconds": 0.0,
+                }
                 if self.config.mode in ("reparse-unfound", "all"):
                     logger.info("--> [Phase 3/4] AI Reparsing of unmapped/unfound titles...")
-                    t0_reparse = time.perf_counter()
-                    self.reparse_unfound_entries(run=run, section_timings=section_timings)
-                    section_timings["ai_reparse"] += (time.perf_counter() - t0_reparse)
+                    p3_start = datetime.datetime.now(datetime.timezone.utc)
+                    phase_3_metrics["started_at"] = p3_start.isoformat()
+                    p3_initial_errors = run.error_count
+                    p3_t0 = time.perf_counter()
+                    excluded_logs = None
+                    if not self.config.allow_same_run_chaining and self.config.mode == "all":
+                        excluded_logs = set(self._run_written_parse_log_ids)
+
+                    reparse_stats = self.reparse_unfound_entries(
+                        run=run,
+                        section_timings=section_timings,
+                        excluded_log_ids=excluded_logs,
+                    )
+                    p3_duration = time.perf_counter() - p3_t0
+                    section_timings["ai_reparse"] += p3_duration
+                    p3_finish = datetime.datetime.now(datetime.timezone.utc)
+                    phase_3_metrics["finished_at"] = p3_finish.isoformat()
+                    phase_3_metrics["duration_seconds"] = round(p3_duration, 4)
+                    phase_3_metrics.update(reparse_stats)
+                    run.retries_attempted += reparse_stats.get("retryable_seen", 0)
+                    run.retries_resolved += reparse_stats.get("resolved", 0)
+                    run.retries_failed += reparse_stats.get("failed", 0)
+                    p3_errors = run.error_count - p3_initial_errors
+                    phase_3_metrics["errors"] = p3_errors
+                    if p3_errors == 0 and reparse_stats.get("failed", 0) == 0:
+                        phase_3_metrics["status"] = "succeeded"
+                    elif reparse_stats.get("unmapped_seen", 0) == 0 and p3_errors > 0:
+                        phase_3_metrics["status"] = "failed"
+                    else:
+                        phase_3_metrics["status"] = "partial"
+                else:
+                    logger.info(f"--> [Phase 3/4] AI Reparsing SKIPPED (mode is '{self.config.mode}')")
+                run.phase_metrics["reparse_unfound"] = phase_3_metrics
+
                 # 4. Apply proposals (if mode is "apply-proposals" or "all")
+                phase_4_metrics: Dict[str, Any] = {
+                    "status": "skipped",
+                    "started_at": None,
+                    "finished_at": None,
+                    "duration_seconds": 0.0,
+                }
                 if self.config.mode in ("apply-proposals", "all"):
                     logger.info("--> [Phase 4/4] Applying approved audit proposals...")
-                    t0_apply = time.perf_counter()
-                    self._apply_proposals(run=run, section_timings=section_timings)
-                    section_timings["apply_proposals"] = section_timings.get("apply_proposals", 0.0) + (time.perf_counter() - t0_apply)
+                    p4_start = datetime.datetime.now(datetime.timezone.utc)
+                    phase_4_metrics["started_at"] = p4_start.isoformat()
+                    p4_initial_errors = run.error_count
+                    p4_t0 = time.perf_counter()
+                    excluded_props = None
+                    if not self.config.allow_same_run_chaining and self.config.mode == "all":
+                        excluded_props = set(self._run_created_proposal_ids)
+
+                    proposal_stats = self._apply_proposals(
+                        run=run,
+                        section_timings=section_timings,
+                        excluded_proposal_ids=excluded_props,
+                    )
+                    p4_duration = time.perf_counter() - p4_t0
+                    section_timings["apply_proposals"] = section_timings.get("apply_proposals", 0.0) + p4_duration
+                    p4_finish = datetime.datetime.now(datetime.timezone.utc)
+                    phase_4_metrics["finished_at"] = p4_finish.isoformat()
+                    phase_4_metrics["duration_seconds"] = round(p4_duration, 4)
+                    phase_4_metrics.update(proposal_stats)
+                    p4_errors = run.error_count - p4_initial_errors
+                    phase_4_metrics["errors"] = p4_errors
+                    if p4_errors == 0 and proposal_stats.get("proposals_failed", 0) == 0:
+                        phase_4_metrics["status"] = "succeeded"
+                    elif proposal_stats.get("proposals_seen", 0) == 0 and p4_errors > 0:
+                        phase_4_metrics["status"] = "failed"
+                    else:
+                        phase_4_metrics["status"] = "partial"
                 else:
                     logger.info(f"--> [Phase 4/4] Proposal Application SKIPPED (mode is '{self.config.mode}')")
+                run.phase_metrics["apply_proposals"] = phase_4_metrics
 
-            run.status = "succeeded" if run.error_count == 0 else "partial"
+            phase_statuses = [
+                m.get("status") for m in run.phase_metrics.values()
+                if m.get("status") != "skipped"
+            ]
+            if any(s == "failed" for s in phase_statuses):
+                run.status = "failed"
+            elif any(s == "partial" for s in phase_statuses) or run.error_count > 0:
+                run.status = "partial"
+            else:
+                run.status = "succeeded"
         except Exception as e:
             fatal_msg = f"Fatal error during scan ({type(e).__name__}): {e}"
             logger.error(fatal_msg, exc_info=True)
@@ -957,17 +1118,20 @@ class ScannerService:
             self._flush_pending_db_upserts(section_timings)
             run.finished_at = datetime.datetime.now(datetime.timezone.utc)
             self._sync_omdb_attempts(run)
-            run.section_timings = {k: round(v, 4) for k, v in section_timings.items()}
-            logger.info("Scan Section Timings Summary:")
-            for sec_name, sec_time in run.section_timings.items():
-                logger.info(f"  - Section '{sec_name}': {sec_time:.4f}s")
             if self.ai_matcher and self.ai_matcher.is_available:
                 ai_stats = self.ai_matcher.get_stats()
+                run.ai_calls = ai_stats.get("total_calls", 0)
+                run.ai_items_processed = ai_stats.get("total_items_processed", 0)
+                run.ai_failures = ai_stats.get("failed_calls", 0)
                 logger.info(
                     f"AI Matcher Execution Summary: Calls Total={ai_stats['total_calls']} "
                     f"(Success={ai_stats['successful_calls']}, Failed={ai_stats['failed_calls']}), "
                     f"Items Processed={ai_stats['total_items_processed']}"
                 )
+            run.section_timings = {k: round(v, 4) for k, v in section_timings.items()}
+            logger.info("Scan Section Timings Summary:")
+            for sec_name, sec_time in run.section_timings.items():
+                logger.info(f"  - Section '{sec_name}': {sec_time:.4f}s")
             if not self.config.is_dry_run and not self.config.is_parse_only:
                 self.run_repo.upsert(run_id, run)
 
@@ -978,6 +1142,7 @@ class ScannerService:
         run: Optional[ScanRun] = None,
         section_timings: Optional[Dict[str, float]] = None,
         audit_days: Optional[int] = None,
+        excluded_title_ids: Optional[Set[str]] = None,
     ) -> Dict[str, int]:
         """Audit existing titles without applying replacement or deletion decisions."""
         if audit_days is None:
@@ -1005,6 +1170,9 @@ class ScannerService:
         if not all_titles:
             logger.info("No titles found in database to recheck.")
             return stats
+
+        if excluded_title_ids:
+            all_titles = [(tid, trec) for (tid, trec) in all_titles if tid not in excluded_title_ids]
 
         # Filter out already AI-validated titles
         unvalidated_titles = [
@@ -1269,6 +1437,9 @@ class ScannerService:
                         updated_at=self.now,
                         status="pending"
                     )
+                    self._run_created_proposal_ids.add(proposal_id)
+                    if run:
+                        run.proposals_created += 1
                     if not self.config.is_dry_run and self.audit_proposal_repo:
                         existing_prop = self.audit_proposal_repo.get(proposal_id)
                         if existing_prop:
@@ -1306,13 +1477,19 @@ class ScannerService:
         self,
         run: Optional[ScanRun] = None,
         section_timings: Optional[Dict[str, float]] = None,
+        excluded_title_ids: Optional[Set[str]] = None,
     ) -> Dict[str, int]:
-        return self.recheck_existing_titles(run=run, section_timings=section_timings)
+        return self.recheck_existing_titles(
+            run=run,
+            section_timings=section_timings,
+            excluded_title_ids=excluded_title_ids,
+        )
 
     def reparse_unfound_entries(
         self,
         run: Optional[ScanRun] = None,
         section_timings: Optional[Dict[str, float]] = None,
+        excluded_log_ids: Optional[Set[str]] = None,
     ) -> Dict[str, int]:
         if not self.parse_log_repo:
             return {
@@ -1344,15 +1521,27 @@ class ScannerService:
             record_metadata_outcome_failure=self._record_metadata_outcome_failure,
             sync_omdb_attempts=self._sync_omdb_attempts,
         )
-        return reparse_service.run(run=run, section_timings=section_timings)
+        return reparse_service.run(
+            run=run,
+            section_timings=section_timings,
+            excluded_log_ids=excluded_log_ids,
+        )
 
     def _apply_proposals(
         self,
         run: Optional[ScanRun] = None,
         section_timings: Optional[Dict[str, float]] = None,
-    ) -> None:
+        excluded_proposal_ids: Optional[Set[str]] = None,
+    ) -> Dict[str, int]:
+        stats = {
+            "proposals_seen": 0,
+            "proposals_applied": 0,
+            "proposals_failed": 0,
+            "proposals_rejected": 0,
+            "proposals_skipped": 0,
+        }
         if not self.audit_proposal_repo:
-            return
+            return stats
 
         app_service = ProposalApplicationService(
             proposal_repo=self.audit_proposal_repo,
@@ -1363,24 +1552,55 @@ class ScannerService:
 
         if self.config.proposal_id:
             logger.info(f"Applying explicit proposal {self.config.proposal_id}")
+            stats["proposals_seen"] += 1
+            if excluded_proposal_ids and self.config.proposal_id in excluded_proposal_ids:
+                stats["proposals_skipped"] += 1
+                return stats
             res = app_service.apply_proposal(
                 self.config.proposal_id, 
                 dry_run=self.config.is_dry_run, 
                 reject=self.config.reject_proposal
             )
             logger.info(f"Proposal {self.config.proposal_id} outcome: {res.outcome} ({res.reason})")
-            if res.outcome == "failed" and run:
-                run.error_count += 1
-                run.error_summary.append(f"Proposal {self.config.proposal_id} failed: {res.reason}")
+            if res.outcome == "applied":
+                stats["proposals_applied"] += 1
+                if run:
+                    run.proposals_applied += 1
+            elif res.outcome == "rejected":
+                stats["proposals_rejected"] += 1
+            elif res.outcome == "failed":
+                stats["proposals_failed"] += 1
+                if run:
+                    run.proposals_failed += 1
+                    run.error_count += 1
+                    run.error_summary.append(f"Proposal {self.config.proposal_id} failed: {res.reason}")
+            else:
+                stats["proposals_skipped"] += 1
         else:
             logger.info("Applying all approved proposals")
             approved_proposals = self.audit_proposal_repo.list_by_status("approved", limit=1000)
             for prop in approved_proposals:
+                stats["proposals_seen"] += 1
+                if excluded_proposal_ids and prop.id in excluded_proposal_ids:
+                    stats["proposals_skipped"] += 1
+                    continue
                 res = app_service.apply_proposal(prop.id, dry_run=self.config.is_dry_run)
                 logger.info(f"Proposal {prop.id} outcome: {res.outcome} ({res.reason})")
-                if res.outcome == "failed" and run:
-                    run.error_count += 1
-                    run.error_summary.append(f"Proposal {prop.id} failed: {res.reason}")
+                if res.outcome == "applied":
+                    stats["proposals_applied"] += 1
+                    if run:
+                        run.proposals_applied += 1
+                elif res.outcome == "rejected":
+                    stats["proposals_rejected"] += 1
+                elif res.outcome == "failed":
+                    stats["proposals_failed"] += 1
+                    if run:
+                        run.proposals_failed += 1
+                        run.error_count += 1
+                        run.error_summary.append(f"Proposal {prop.id} failed: {res.reason}")
+                else:
+                    stats["proposals_skipped"] += 1
+        return stats
 
     def _source_context_for_entry(
         self,

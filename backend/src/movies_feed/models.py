@@ -437,13 +437,25 @@ class ScanRun:
     feeds_processed: int = 0
     entries_seen: int = 0
     titles_created: int = 0
+    titles_updated: int = 0
     occurrences_created: int = 0
+    occurrences_updated: int = 0
     cache_hits: int = 0
     omdb_requests: int = 0
     ignored_entries: int = 0
+    ai_calls: int = 0
+    ai_items_processed: int = 0
+    ai_failures: int = 0
+    retries_attempted: int = 0
+    retries_resolved: int = 0
+    retries_failed: int = 0
+    proposals_created: int = 0
+    proposals_applied: int = 0
+    proposals_failed: int = 0
     error_count: int = 0
     error_summary: List[str] = field(default_factory=list)
     section_timings: Dict[str, float] = field(default_factory=dict)
+    phase_metrics: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the ScanRun model to a camelCase Firestore dictionary."""
@@ -455,15 +467,28 @@ class ScanRun:
             "feedsProcessed": self.feeds_processed,
             "entriesSeen": self.entries_seen,
             "titlesCreated": self.titles_created,
+            "titlesUpdated": self.titles_updated,
             "occurrencesCreated": self.occurrences_created,
+            "occurrencesUpdated": self.occurrences_updated,
             "cacheHits": self.cache_hits,
             "omdbRequests": self.omdb_requests,
             "ignoredEntries": self.ignored_entries,
+            "aiCalls": self.ai_calls,
+            "aiItemsProcessed": self.ai_items_processed,
+            "aiFailures": self.ai_failures,
+            "retriesAttempted": self.retries_attempted,
+            "retriesResolved": self.retries_resolved,
+            "retriesFailed": self.retries_failed,
+            "proposalsCreated": self.proposals_created,
+            "proposalsApplied": self.proposals_applied,
+            "proposalsFailed": self.proposals_failed,
             "errorCount": self.error_count,
             "errorSummary": self.error_summary,
         }
         if self.section_timings:
             res["sectionTimings"] = self.section_timings
+        if self.phase_metrics:
+            res["phaseMetrics"] = self.phase_metrics
         return res
 
 

@@ -1,6 +1,11 @@
 import datetime
 import unittest
 
+try:
+    from . import _test_stubs
+except ImportError:
+    import _test_stubs
+
 from movies_feed import (
     AuditProposal,
     FakeAuditProposalRepository,
@@ -12,9 +17,12 @@ from movies_feed import (
     redact_secrets,
 )
 
+from unittest.mock import MagicMock
+import sys
+
 try:
     from movies_feed.firestore_repository import FirestoreAuditProposalRepository
-    HAVE_FIRESTORE = True
+    HAVE_FIRESTORE = not isinstance(sys.modules.get("firebase_admin"), MagicMock) and not isinstance(sys.modules.get("google.cloud.firestore"), MagicMock)
 except ImportError:
     HAVE_FIRESTORE = False
     FirestoreAuditProposalRepository = None

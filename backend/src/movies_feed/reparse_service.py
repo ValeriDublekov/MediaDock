@@ -1,7 +1,7 @@
 import datetime
 import logging
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .ids import (
     clean_title_for_comparison,
@@ -86,6 +86,7 @@ class ReparseService:
         *,
         run: Optional[ScanRun] = None,
         section_timings: Optional[Dict[str, float]] = None,
+        excluded_log_ids: Optional[Set[str]] = None,
     ) -> Dict[str, int]:
         stats = self._new_stats()
         cursor = None
@@ -112,6 +113,9 @@ class ReparseService:
             ai_items: List[Tuple[int, ParseLog, SourceContext, str]] = []
 
             for log in page.items:
+                if excluded_log_ids and log.id in excluded_log_ids:
+                    stats["skipped"] += 1
+                    continue
                 if log.id in seen_log_ids:
                     stats["skipped"] += 1
                     continue
