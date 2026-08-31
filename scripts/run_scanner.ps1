@@ -1,8 +1,15 @@
 # Параметри
 param(
-    [switch]$HtmlOnly,
-    [switch]$TestParser,
+    [string]$Config = "legacy/config.json",
+    [string]$Mode = "rss",
+    [switch]$DryRun,
     [switch]$ParseOnly,
+    [string]$FeedFile,
+    [int]$ForceDays = 0,
+    [int]$AuditDays = 0,
+    [string]$ProposalId,
+    [switch]$RejectProposal,
+    [switch]$FakeRepos,
     [switch]$Help
 )
 
@@ -16,22 +23,30 @@ if ($Help) {
 Usage: .\scripts\run_scanner.ps1 [OPTIONS]
 
 Options:
-  -HtmlOnly       Regenerate HTML report without scanning RSS feeds
-  -TestParser     Test the title parser without API calls
-  -ParseOnly      Download/parse RSS only and print parsed titles/years
-  -Help           Show this help message
+  -Config PATH       Path to configuration JSON file (default: legacy/config.json)
+  -Mode MODE         Scanner mode (rss, recheck-existing, reparse-unfound, apply-proposals, all)
+  -DryRun            Run without writing to Firestore
+  -ParseOnly         Download/parse RSS only, no external APIs (requires -Mode rss)
+  -FeedFile PATH     Path to local feed file (requires -Mode rss -ParseOnly)
+  -ForceDays N       Force scan N days back (0-30)
+  -AuditDays N       Audit N days back (0-30)
+  -ProposalId ID     ID of proposal to apply
+  -RejectProposal    Reject proposal instead of applying
+  -FakeRepos         Use fake repositories (no Firebase)
+  -Help              Show this help message
 
 Examples:
-  .\scripts\run_scanner.ps1                # Full scan
-  .\scripts\run_scanner.ps1 -HtmlOnly      # Only regenerate report
-  .\scripts\run_scanner.ps1 -TestParser    # Test parser
-  .\scripts\run_scanner.ps1 -ParseOnly     # Parse RSS without OMDb
+  .\scripts\run_scanner.ps1 -Mode rss
+  .\scripts\run_scanner.ps1 -Mode rss -ParseOnly -FeedFile backend\tests\fixtures\movies_feed.atom
+  .\scripts\run_scanner.ps1 -Mode recheck-existing -DryRun
+  .\scripts\run_scanner.ps1 -Mode apply-proposals -ProposalId prop-123
 
 "@ -ForegroundColor Cyan
     exit 0
 }
 
 Write-Host "=== Movie Scanner ===" -ForegroundColor Cyan
+Write-Host "Note: Legacy movie_scanner.py execution is unsupported." -ForegroundColor Yellow
 
 # Проверка за Python
 if (!(Get-Command python -ErrorAction SilentlyContinue)) {
@@ -40,39 +55,29 @@ if (!(Get-Command python -ErrorAction SilentlyContinue)) {
 }
 
 # Изграждане на аргументи
-$args = @()
-if ($HtmlOnly) { 
-    $args += "--html"
-    Write-Host "Mode: HTML regeneration only" -ForegroundColor Yellow
-}
-if ($TestParser) { 
-    $args += "--test-parser"
-    Write-Host "Mode: Parser test" -ForegroundColor Yellow
-}
-if ($ParseOnly) {
-    $args += "--parse-only"
-    Write-Host "Mode: Parse only" -ForegroundColor Yellow
-}
+$argsList = @()
+if ($Config) { $argsList += "--config"; $argsList += $Config }
+if ($Mode) { $argsList += "--mode"; $argsList += $Mode }
+if ($DryRun) { $argsList += "--dry-run" }
+if ($ParseOnly) { $argsList += "--parse-only" }
+if ($FeedFile) { $argsList += "--feed-file"; $argsList += $FeedFile }
+if ($ForceDays) { $argsList += "--force-days"; $argsList += $ForceDays }
+if ($AuditDays) { $argsList += "--audit-days"; $argsList += $AuditDays }
+if ($ProposalId) { $argsList += "--proposal-id"; $argsList += $ProposalId }
+if ($RejectProposal) { $argsList += "--reject-proposal" }
+if ($FakeRepos) { $argsList += "--fake-repos" }
 
 # Изпълнение на скрипта
 try {
     Write-Host "Running scanner..." -ForegroundColor Green
-    python movie_scanner.py @args
+    python -m movies_feed.cli @argsList
     
-    if ($LASTEXITCODE -ne 0) {
+    if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 2) {
         Write-Host "❌ Scanner failed with exit code $LASTEXITCODE" -ForegroundColor Red
         exit $LASTEXITCODE
-    }
-    
-    # Отваряне на отчета (само ако не е test mode)
-    if (!$TestParser -and !$ParseOnly) {
-        $reportPath = "output\daily_report.html"
-        if (Test-Path $reportPath) {
-            Write-Host "✅ Opening report..." -ForegroundColor Green
-            Start-Process $reportPath
-        } else {
-            Write-Host "⚠️  Warning: Report file not generated at $reportPath" -ForegroundColor Yellow
-        }
+    } elseif ($LASTEXITCODE -eq 2) {
+        Write-Host "⚠️  Scanner completed partially (exit code 2)" -ForegroundColor Yellow
+        exit $LASTEXITCODE
     }
     
     Write-Host "`n✅ Done!" -ForegroundColor Green

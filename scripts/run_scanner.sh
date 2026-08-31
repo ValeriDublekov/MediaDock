@@ -14,16 +14,23 @@ show_help() {
 Usage: ./scripts/run_scanner.sh [OPTIONS]
 
 Options:
-  --html         Regenerate HTML report without scanning RSS feeds
-  --test-parser  Test the title parser without API calls
-  --parse-only   Download/parse RSS only and print parsed titles/years
-  --help         Show this help message
+  --config PATH      Path to configuration JSON file (default: legacy/config.json)
+  --mode MODE        Scanner mode (rss, recheck-existing, reparse-unfound, all, apply-proposals)
+  --dry-run          Run without writing to Firestore
+  --parse-only       Download/parse RSS only, no external APIs (requires --mode rss)
+  --feed-file PATH   Path to local feed file (requires --mode rss --parse-only)
+  --force-days N     Force scan N days back (0-30)
+  --audit-days N     Audit N days back (0-30)
+  --proposal-id ID   ID of proposal to apply
+  --reject-proposal  Reject proposal instead of applying
+  --fake-repos       Use fake repositories (no Firebase)
+  --help             Show this help message
 
 Examples:
-  ./scripts/run_scanner.sh
-  ./scripts/run_scanner.sh --html
-  ./scripts/run_scanner.sh --test-parser
-  ./scripts/run_scanner.sh --parse-only
+  ./scripts/run_scanner.sh --mode rss
+  ./scripts/run_scanner.sh --mode rss --parse-only --feed-file backend/tests/fixtures/movies_feed.atom
+  ./scripts/run_scanner.sh --mode recheck-existing --dry-run
+  ./scripts/run_scanner.sh --mode apply-proposals --proposal-id prop-123
 EOF
 }
 
@@ -32,8 +39,8 @@ if [[ "${1:-}" == "--help" ]]; then
     exit 0
 fi
 
-if [[ -x "./venv/bin/python" ]]; then
-    PYTHON_BIN="./venv/bin/python"
+if [[ -x "./.venv/bin/python" ]]; then
+    PYTHON_BIN="./.venv/bin/python"
 elif command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
 elif command -v python >/dev/null 2>&1; then
@@ -45,5 +52,6 @@ fi
 
 echo "=== Movie Scanner ==="
 echo "Using Python: ${PYTHON_BIN}"
+echo "Note: Legacy movie_scanner.py execution is unsupported."
 
-"${PYTHON_BIN}" movie_scanner.py "$@"
+"${PYTHON_BIN}" -m movies_feed.cli "$@"

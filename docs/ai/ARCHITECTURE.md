@@ -148,3 +148,6 @@ still depends on Authentication and Firestore rules.
         use an explicit admin role and server-side credential boundary.
 - Cloud-hosted scanner outside GitHub Actions.
 - Notifications and user preference features.
+- Automated legacy JSON data migrations.
+- Frontend review UI for audit proposals.
+- Firestore indexes for future multi-field combinations beyond current query demands.

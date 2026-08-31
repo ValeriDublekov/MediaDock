@@ -29,10 +29,11 @@ MVP wiring is present; production hardening is not complete.
 - Prompt 7A: Defined idempotent `AuditProposal` storage contract, deterministic proposal IDs, status transition validation, evidence size limit (32 KiB), secret redaction, and Fake/Firestore repository parity.
 - Prompt 8A: Implemented Proposal Application Service, proposal state machine abstractions, and fake-repository tests with `apply_proposal`, dry-run, and target merging support.
 - Prompt 9B: Refined parser heuristics, embedded slash preservation (`Face/Off`), realistic release years (1888–2035), Latin letter requirement, series markers, and confidence/reasons diagnostics.
+- Prompt 10B: Aligned local/CI operations with active package backend and verified contracts. Updated execution scripts, documented deferred items (migrations, frontend review UI, indexes), and marked legacy execution unsupported.
 
 ## Next Prompt
 
-Run Prompt 8B in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+Run Prompt 11 in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ## Blockers
 
