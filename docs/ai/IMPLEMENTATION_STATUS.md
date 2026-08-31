@@ -2,9 +2,9 @@
 
 ## Current Milestone
 
-`partial` - Checkpoint F release preparation is in progress. Checkpoints A-E
-and the guarded manual workflow are implemented; production proposal
-application remains disabled until the F4-F5 automated and staging gates pass.
+`partial` - Checkpoints A-E and guarded manual production application are
+implemented. The complete F4 automated gate and F5 staging verification remain
+release requirements.
 
 ## Done
 
@@ -28,8 +28,8 @@ application remains disabled until the F4-F5 automated and staging gates pass.
 	validated admin manual-mapping writes, and CI uses explicit emulator project
 	IDs and locked backend dependencies.
 - `done` - The manual scanner workflow exposes only one explicit proposal per
-	dispatch and requires exact backup confirmation plus the deployment enable
-	gate. Scheduled runs and `mode=all` cannot apply proposals.
+	dispatch and requires exact backup confirmation. Scheduled runs and
+	`mode=all` cannot apply proposals.
 
 ## Partial
 

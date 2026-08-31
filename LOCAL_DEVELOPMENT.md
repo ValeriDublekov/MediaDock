@@ -102,8 +102,7 @@ python -m movies_feed.cli --config legacy/config.json --fake-repos --mode apply-
 
 Against production, first complete and verify a provider-supported Firestore
 backup/export and record its identifier and completion time. Then follow the
-explicit-ID dry-run, review, backup reconfirmation, temporary
-`MEDIADOCK_ENABLE_PROPOSAL_APPLICATION=true` gate, and apply sequence in
+explicit-ID dry-run, review, backup reconfirmation, and apply sequence in
 [`DEPLOYMENT.md`](DEPLOYMENT.md). Never set the gate before the dry run.
 
 An application is limited to 200 occurrences. Proposal generation chunks

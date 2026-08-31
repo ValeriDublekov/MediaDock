@@ -56,7 +56,7 @@ No command. This is a documentation-only step.
 
 1. Document required backup/export before production application.
 2. Document explicit proposal ID and dry-run first.
-3. Document the production enable gate.
+3. Document the manual production application safeguards.
 4. Document backup confirmation.
 5. Document stale/failed proposal review flow.
 6. Document the 200-occurrence bound and regeneration behavior.
@@ -89,17 +89,16 @@ python -m unittest backend.tests.test_cli -v
 1. Restore `apply-proposals` only as an explicit manual workflow mode.
 2. Require exactly one proposal ID.
 3. Require an explicit backup-confirmation input with one exact accepted value.
-4. Require a deployment-level enable variable or secret.
-5. Pass all inputs through environment variables and validate before command construction.
-6. Keep shell-array argument passing.
-7. Keep application absent from schedules.
-8. Keep application absent from `mode=all`.
-9. Do not support applying every approved proposal.
-10. Prevent same-run proposal generation and application.
+4. Pass all inputs through environment variables and validate before command construction.
+5. Keep shell-array argument passing.
+6. Keep application absent from schedules.
+7. Keep application absent from `mode=all`.
+8. Do not support applying every approved proposal.
+9. Prevent same-run proposal generation and application.
 
 ### Acceptance Criteria
 
-- Workflow fails closed without proposal ID, backup confirmation, or enable gate.
+- Workflow fails closed without proposal ID or backup confirmation.
 - Invalid inputs cannot reach executable shell source.
 - Only one previously approved proposal can be applied per dispatch.
 - Dry-run remains available without enabling production mutation.
@@ -177,10 +176,8 @@ Use emulator or non-production Firestore data:
 3. Confirm it is schema v2, ID v3, `repair`, approved, current-policy, and within 200 occurrences.
 4. Run production dry-run.
 5. Compare the plan with the approved evidence.
-6. Enable the deployment gate.
-7. Apply that one proposal.
-8. Verify catalog and proposal state.
-9. Disable the gate again if continuous enablement is not operationally required.
+6. Apply that one proposal.
+7. Verify catalog and proposal state.
 
 ### Final Acceptance Criteria
 

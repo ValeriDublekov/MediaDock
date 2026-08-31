@@ -43,7 +43,6 @@ Examples:
 
 Notes:
     -Mode all never applies proposals; there is no bulk proposal application mode.
-    Non-dry-run application also requires MEDIADOCK_ENABLE_PROPOSAL_APPLICATION=true.
 
 "@ -ForegroundColor Cyan
     exit 0

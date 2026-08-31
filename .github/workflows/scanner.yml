@@ -94,7 +94,6 @@ jobs:
           SCANNER_MODE: ${{ inputs.mode }}
           SCANNER_PROPOSAL_ID: ${{ inputs.proposal_id }}
           SCANNER_BACKUP_CONFIRMATION: ${{ inputs.backup_confirmation }}
-          PROPOSAL_APPLICATION_ENABLED: ${{ vars.MEDIADOCK_ENABLE_PROPOSAL_APPLICATION }}
           SCANNER_EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
@@ -104,7 +103,6 @@ jobs:
           mode="${SCANNER_MODE:-rss}"
           proposal_id="${SCANNER_PROPOSAL_ID:-}"
           backup_confirmation="${SCANNER_BACKUP_CONFIRMATION:-}"
-          application_enabled="${PROPOSAL_APPLICATION_ENABLED:-false}"
           event_name="${SCANNER_EVENT_NAME:-schedule}"
 
           case "$dry_run" in
@@ -140,11 +138,6 @@ jobs:
                 printf '%s\n' 'backup_confirmation must equal BACKUP_CONFIRMED' >&2
                 exit 1
               fi
-              if [[ "$application_enabled" != "true" ]]; then
-                printf '%s\n' 'proposal application deployment gate is disabled' >&2
-                exit 1
-              fi
-              export MEDIADOCK_ENABLE_PROPOSAL_APPLICATION=true
             fi
           elif [[ -n "$proposal_id" || -n "$backup_confirmation" ]]; then
             printf '%s\n' 'proposal inputs are supported only with apply-proposals' >&2

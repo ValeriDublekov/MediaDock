@@ -14,7 +14,6 @@ from movies_feed.cli import (
     EXIT_PARTIAL,
     EXIT_SUCCESS,
     EXIT_CONFIGURATION_ERROR,
-    PROPOSAL_APPLICATION_ENABLE_ENV,
     _sanitize_diagnostic,
     exit_code_for_status,
     main,
@@ -248,8 +247,8 @@ class TestCliConfiguration(unittest.TestCase):
                     environment={"OMDB_API_KEY": "configured", "GEMINI_API_KEY": "configured"},
                 )
 
-    def test_non_dry_run_apply_requires_the_production_gate(self) -> None:
-        with self.assertRaisesRegex(ConfigurationError, "non-dry-run proposal application is disabled"):
+    def test_non_dry_run_apply_accepts_one_explicit_proposal(self) -> None:
+        self.assertEqual(
             validate_runtime_configuration(
                 mode="apply-proposals",
                 force_days="0",
@@ -257,7 +256,9 @@ class TestCliConfiguration(unittest.TestCase):
                 proposal_id="prop-123",
                 fake_repos=True,
                 environment={},
-            )
+            ),
+            (0, 0),
+        )
 
     def test_explicit_proposal_dry_run_does_not_require_the_production_gate(self) -> None:
         self.assertEqual(
@@ -273,21 +274,6 @@ class TestCliConfiguration(unittest.TestCase):
             (0, 0),
         )
 
-    def test_main_blocks_disabled_apply_before_scanner_construction(self) -> None:
-        with patch.dict(os.environ, {}, clear=True), patch(
-            "movies_feed.cli.load_config", return_value={}
-        ), patch("movies_feed.cli.ScannerService") as scanner_type:
-            self.assertEqual(
-                main([
-                    "--fake-repos",
-                    "--mode", "apply-proposals",
-                    "--proposal-id", "prop-123",
-                ]),
-                EXIT_CONFIGURATION_ERROR,
-            )
-
-        scanner_type.assert_not_called()
-
     def test_main_accepts_apply_proposals(self) -> None:
         run = ScanRun(
             started_at=datetime.datetime.now(datetime.timezone.utc),
@@ -295,11 +281,7 @@ class TestCliConfiguration(unittest.TestCase):
             status="succeeded",
             trigger="local",
         )
-        with patch.dict(
-            os.environ,
-            {PROPOSAL_APPLICATION_ENABLE_ENV: "true"},
-            clear=True,
-        ), patch(
+        with patch.dict(os.environ, {}, clear=True), patch(
             "movies_feed.cli.load_config", return_value={}
         ), patch("movies_feed.cli.ScannerService") as scanner_type:
             scanner_type.return_value.run.return_value = run

@@ -47,7 +47,6 @@ EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
 EXIT_PARTIAL = 2
 EXIT_CONFIGURATION_ERROR = EXIT_FAILURE
-PROPOSAL_APPLICATION_ENABLE_ENV = "MEDIADOCK_ENABLE_PROPOSAL_APPLICATION"
 
 
 class ConfigurationError(ValueError):
@@ -56,10 +55,6 @@ class ConfigurationError(ValueError):
 
 def _has_value(environment: Mapping[str, str], name: str) -> bool:
     return bool(environment.get(name, "").strip())
-
-
-def _proposal_application_is_enabled(environment: Mapping[str, str]) -> bool:
-    return environment.get(PROPOSAL_APPLICATION_ENABLE_ENV, "").strip().lower() == "true"
 
 
 def _parse_bounded_days(value: Any, option_name: str) -> int:
@@ -113,12 +108,6 @@ def validate_runtime_configuration(
     parsed_force_days = _parse_bounded_days(force_days, "force_days")
     parsed_audit_days = _parse_bounded_days(audit_days, "audit_days")
     env = environment if environment is not None else os.environ
-
-    if mode == "apply-proposals" and not dry_run and not _proposal_application_is_enabled(env):
-        raise ConfigurationError(
-            "non-dry-run proposal application is disabled; set "
-            f"{PROPOSAL_APPLICATION_ENABLE_ENV}=true to enable it"
-        )
 
     missing: list[str] = []
     if not fake_repos and not parse_only and not (

@@ -73,15 +73,14 @@ class TestWorkflowSecurity(unittest.TestCase):
         self.assertIn('[[ "$event_name" != "workflow_dispatch" ]]', self.scanner_workflow)
         self.assertIn('[[ -z "$proposal_id" ]]', self.scanner_workflow)
         self.assertIn('[[ "$backup_confirmation" != "BACKUP_CONFIRMED" ]]', self.scanner_workflow)
-        self.assertIn('[[ "$application_enabled" != "true" ]]', self.scanner_workflow)
         self.assertIn('scanner_args+=(--proposal-id "$proposal_id")', self.scanner_workflow)
-        self.assertIn("PROPOSAL_APPLICATION_ENABLED: ${{ vars.MEDIADOCK_ENABLE_PROPOSAL_APPLICATION }}", self.scanner_workflow)
+        self.assertNotIn("MEDIADOCK_ENABLE_PROPOSAL_APPLICATION", self.scanner_workflow)
         self.assertNotIn("list_approved", self.scanner_workflow)
         self.assertNotIn("reject_proposal", self.scanner_workflow)
         self.assertNotIn("--reject-proposal", self.scanner_workflow)
 
-    def test_scanner_dry_run_does_not_require_the_mutation_gate(self) -> None:
-        gate_position = self.scanner_workflow.index('[[ "$application_enabled" != "true" ]]')
+    def test_scanner_dry_run_does_not_require_backup_confirmation(self) -> None:
+        gate_position = self.scanner_workflow.index('[[ "$backup_confirmation" != "BACKUP_CONFIRMED" ]]')
         mutation_position = self.scanner_workflow.rindex('if [[ "$dry_run" != "true" ]]')
         self.assertGreater(gate_position, mutation_position)
 

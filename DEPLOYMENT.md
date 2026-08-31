@@ -145,8 +145,7 @@ command.
 2. Review the proposal status, target, source fingerprint, occurrence
   fingerprints, and evidence. The proposal must be approved and contain no
   more than 200 occurrences.
-3. Run the exact proposal as a dry run. The production enable gate is not
-  required for this command:
+3. Run the exact proposal as a dry run:
 
   ```bash
   python -m movies_feed.cli --config legacy/config.json --mode apply-proposals --proposal-id <proposal-id> --dry-run
@@ -155,24 +154,18 @@ command.
 4. Confirm that the dry-run plan names the expected target, occurrence count,
   and source-deletion decision. Reconfirm the recorded export from step 1
   immediately before enabling writes.
-5. Enable production application only for the operator session, then apply the
-  same explicit proposal ID:
+5. Apply the same explicit proposal ID:
 
   ```powershell
-  $env:MEDIADOCK_ENABLE_PROPOSAL_APPLICATION = "true"
   python -m movies_feed.cli --config legacy/config.json --mode apply-proposals --proposal-id <proposal-id>
-  Remove-Item Env:MEDIADOCK_ENABLE_PROPOSAL_APPLICATION
   ```
 
   ```bash
-  export MEDIADOCK_ENABLE_PROPOSAL_APPLICATION=true
   python -m movies_feed.cli --config legacy/config.json --mode apply-proposals --proposal-id <proposal-id>
-  unset MEDIADOCK_ENABLE_PROPOSAL_APPLICATION
   ```
 
 6. Verify the proposal is `applied`, inspect the target title and moved
-  occurrences, and retain the run ID with the backup confirmation. Remove the
-  enable environment variable even when the command fails.
+  occurrences, and retain the run ID with the backup confirmation.
 
 If a dry run or application reports stale evidence, stop and review the changed
 source title and occurrences; do not apply the old proposal. If a proposal is
