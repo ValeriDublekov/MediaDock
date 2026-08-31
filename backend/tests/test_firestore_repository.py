@@ -800,7 +800,9 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
         prop2.status = "approved"
         repo.upsert(prop2)
         
-        # Set prop1 back to approved
+        # Reset and reapprove prop1 through the allowed state transitions.
+        proposal.status = "pending"
+        repo.upsert(proposal)
         proposal.status = "approved"
         repo.upsert(proposal)
         
