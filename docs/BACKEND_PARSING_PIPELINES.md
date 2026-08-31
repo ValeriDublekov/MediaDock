@@ -1,6 +1,6 @@
 # Backend Parsing and Matching Pipelines
 
-Reviewed: 2026-08-25
+Reviewed: 2026-08-31
 
 ## Scope
 
@@ -10,12 +10,11 @@ This document describes the active Python backend in `backend/src/movies_feed`. 
 python -m movies_feed.cli --mode <rss|recheck-existing|reparse-unfound|all>
 ```
 
-The files under `legacy/` are a separate, file-based implementation and are not used by the GitHub Actions scanner. The local `scripts/run_scanner.*` wrappers still target that old entry point; see the findings below.
+The files under `legacy/` are a separate, file-based implementation and are not used by the GitHub Actions scanner.
 
 This is a current-state and risk document, not a production-readiness claim.
-Workflow hardening, browser trust-boundary work, and the bounded RSS network
-boundary from Prompts 0A-0C are implemented. The remaining refactoring stages
-are tracked in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+The controlled release gate is tracked in
+`docs/backend-refactoring-plan/06_CHECKPOINT_F_RELEASE.md`.
 
 ## Building Blocks
 
@@ -28,8 +27,10 @@ are tracked in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 | `metadata_resolver.py` | Shared typed OMDb outcomes, versioned cache, timing, direct IMDb resolution, and one run-wide HTTP budget. |
 | `match_policy.py` | Shared typed media classification, source-type compatibility, year semantics, broadcast ranges, and exclusions. |
 | `ai_matcher.py` | Gemini batch title extraction, OMDb candidate validation, and stored-match audit. The active prompt strings are currently inline; the files under `prompts/` are not loaded by the current implementation. |
-| `scanner.py` | Orchestrates feeds, matching, filtering, repair, logging, and persistence. |
-| `repository.py` / `firestore_repository.py` | In-memory and Firestore persistence, title/occurrence merge rules, and deterministic retry-page selection. |
+| `scanner.py` | Orchestrates feeds, matching, filtering, logging, and persistence; delegates existing-title audit and explicit proposal application to their services. |
+| `existing_title_audit.py` | Owns cluster-level existing-title audit, occurrence validation, review logs, and bounded schema-v2/v3 proposal production. It never applies a proposal. |
+| `proposal_application.py` / `firestore_proposal_application_store.py` | Plans one explicit repair proposal and applies it under a per-source lease in one Firestore transaction. |
+| `repository.py` / `firestore_repository.py` | In-memory and Firestore persistence, title/occurrence merge rules, deterministic retry-page selection, and proposal storage. |
 
 ### Regex title parsing
 
@@ -70,8 +71,8 @@ The normal RSS path does **not** call Gemini for extraction or candidate validat
 | --- | --- | --- | --- | --- | --- |
 | `rss` | Configured feeds | Regex | Yes / one run-wide actual-HTTP budget | No | Titles, occurrences, parse logs, cache |
 | `reparse-unfound` | Retained retryable source parse logs | AI | Yes / one run-wide actual-HTTP budget | Extract + conditional validate | Titles, occurrences, source-log lifecycle, cache |
-| `recheck-existing` | Stored titles not marked `aiValidated` | No new regex parse | Yes / one run-wide actual-HTTP budget | Audit + conditional validate | Explicit valid flag or review parse logs; no catalog repair |
-| `all` | All of the above | Mixed | One shared budget across phases | Yes in phases 2-3 | Union of all writes |
+| `recheck-existing` | Stored titles with unvalidated occurrence clusters | No new regex parse | Yes / one run-wide actual-HTTP budget | Audit + conditional validate | Occurrence validation, review logs, and audit proposals; no catalog repair |
+| `all` | RSS, audit, and reparse inputs | Mixed | One shared budget across phases | Yes in phases 2-3 | Union of those three phases; never proposal application |
 
 Non-parse-only runs first load manual mappings and prune completed parse logs
 older than seven days. Retryable work is retained regardless of age. The configured trigger (`schedule`, `manual`, or `local`) is
@@ -114,24 +115,45 @@ errors.
 
 ### 3. Existing-database audit (`--mode recheck-existing`)
 
-1. Load all titles and exclude records already marked `aiValidated`.
-2. Optionally filter by `audit_days`, then process newest titles first in batches of 15.
-3. Load all occurrences. Titles without occurrences are recorded as orphan `needs_review` outcomes and are not sent to Gemini; titles with occurrences currently use the first raw title as the audit input until occurrence-level audit is introduced.
+1. `ScannerService` delegates the phase to `ExistingTitleAuditService`, which loads titles not already aggregate-valid.
+2. Optionally filter occurrence clusters by `audit_days`, then process newest titles first in batches of 15.
+3. Group occurrences by `(sourceFeedId, rawTitle)`. Titles without occurrences are recorded as orphan `needs_review` outcomes and are not sent to Gemini.
 4. The audit prompt and deterministic policy distinguish a later season year in the raw title from the series' first broadcast year in OMDb; a difference alone is not a mismatch.
-5. Require complete response coverage and an explicit boolean `is_valid_match` for every requested ID. Only an explicit valid result sets `aiValidated=true` and `aiCheckedAt`.
+5. Require complete response coverage and an explicit boolean `is_valid_match` for every requested cluster ID. Only a cluster accepted by both AI and deterministic policy receives occurrence-level `validationStatus=valid`; the aggregate title flag is set only when every occurrence is current-policy valid.
 6. For an explicit mismatch, use Gemini's corrected title/year/type for a diagnostic `OmdbResolver` lookup when a corrected title exists, and run the result through the shared match policy.
 7. Classify missing correction, confirmed no-match, quota, transport, malformed, and candidate validation outcomes in the review log.
 8. Keep the current title and every occurrence in place for mismatches, suggestions, uncertain evidence, and retryable failures. Persist `decision=needs_review` with structured audit details; this stage does not migrate or delete catalog data.
-
-The later proposal/application stages will define review and rollback workflows; this temporary stage intentionally stops at a persisted review outcome.
+9. For each mismatch cluster, emit schema-v2 proposals in chunks of at most 200 occurrences. The deterministic v3 ID covers source title, source feed, normalized raw title, sorted occurrence IDs, and policy version.
+10. Emit `repair` only when a complete typed target exists; otherwise emit non-actionable `review_only`. Both carry exact source and occurrence fingerprints. Existing legacy/schema-v1 proposals remain readable but cannot be applied and are not automatically migrated.
 
 ### 4. Combined run (`--mode all`)
 
-The phases run sequentially: RSS scan, DB audit, then parse-log reprocessing. RSS writes are flushed before the audit, so newly added titles may be audited immediately. Review logs written by the DB audit may be selected for AI reprocessing in the same run; the audit itself does not delete catalog data.
+The phases run sequentially: RSS scan, DB audit, then parse-log reprocessing.
+RSS writes are flushed before the audit. By default, same-run IDs are excluded
+from later phases to avoid chaining newly written data through multiple phases.
+The audit may create proposals, but `mode=all` never invokes proposal
+application and does not move or delete catalog data through a proposal.
 
 The final run status is `succeeded` when `error_count == 0`. An incomplete AI
 phase records a run error and produces `partial`; failed/configuration outcomes
 map to a non-zero CLI exit code.
+
+### 5. Explicit proposal application (`--mode apply-proposals`)
+
+Application is separate from audit and `mode=all`. It accepts one explicit
+proposal ID; bulk or automatic application is unsupported. Dry-run performs
+planning only, acquires no lease, and writes nothing. A live proposal must be
+approved, schema v2, `actionKind=repair`, current-policy, fully fingerprinted,
+and contain no more than 200 unique named occurrences.
+
+The Firestore store acquires a per-source lease by changing `approved` to
+`applying`, with `leaseOwner` and `leasedUntil`. Before commit it rechecks lease
+ownership and expiry, proposal fields, exact source and occurrence
+fingerprints, and source membership. Target merge, named occurrence writes,
+source occurrence deletes, conditional source-title update/deletion, proposal
+`applied` status, and lease cleanup occur in one transaction. A transaction
+failure leaves no partial catalog move; stale or expired work requires review
+rather than reconstruction.
 
 ### Legacy execution
 
@@ -158,45 +180,16 @@ map to a non-zero CLI exit code.
 	UIDs bound in both rules and adapters. Browser builds contain no scanner
 	credentials or dispatch token.
 
-## Inconsistencies and Bugs
+## Current Risks and Deferred Work
 
-| Priority | Finding | Impact | Recommended fix |
-| --- | --- | --- | --- |
-| Resolved | Workflow dispatch input handling and scanner process exit semantics. | Prompt 0A validates inputs outside shell source, uses an argument array, and maps `succeeded/partial/failed` to `0/2/1`. | Keep the workflow static regression test and documented exit-code contract green. |
-| Resolved | Allowlist membership previously granted settings and manual-mapping writes without enforcing the documented `role`. | Prompt 0B restricts those writes to explicit admins and validates document shape/ownership. | Keep the rules emulator suite green. |
-| Resolved | Client configuration previously exposed scanner credentials/control through browser storage and Vite env configuration. | Prompt 0B removes PAT/OMDb credentials and uses GitHub's protected Actions UI. | Keep the bundle/config regression test green. |
-| Resolved for Prompt 3 | The implementation and status documents disagreed about Gemini model handling and valid `gemini-2.5-flash*` IDs. | A model setting could be silently changed or use a generation payload incompatible with the selected model. | The configured ID is preserved and AI-mode startup validates the active `models.list` entry supports `generateContent`; generation-setting migration remains Prompt 6. |
-| Resolved for Prompt 1 | AI audit is fail-open: a missing item/result defaults to `is_valid_match=True`; candidate validation also accepts missing/failed AI responses. | Partial or malformed AI output can validate wrong data, followed by destructive moves/deletes. | Recheck batches now require complete IDs and explicit booleans, candidate validation fails closed, and uncertain results become review-only outcomes. Full confidence/proposal architecture remains deferred. |
-| Critical | DB audit judges a title from only its first occurrence, then moves or deletes every occurrence. | One unrepresentative occurrence can corrupt the entire title aggregate. | Audit each distinct raw-title cluster, split incorrect occurrences, and keep the existing title while any occurrence still validates. |
-| Resolved for Prompt 1 | Audit treated OMDb no-match, quota exhaustion, and transport failure as the same missing replacement, then deleted the title and all occurrences. A missing corrected title had the same outcome. | A timeout, exhausted quota, bad credential, or incomplete AI result could erase valid catalog data. | Recheck now preserves catalog data and stores distinct temporary `omdbOutcome` values in `decision=needs_review` logs; resolver/proposal architecture remains deferred. |
-| High | AI audit applies a generic ±1 year rule to series. A raw title can contain a later season's year, while OMDb and `Title.year` contain the show's first broadcast year. | Correct matches such as a 2012 season of a series that started in 2007 can be marked invalid and enter the destructive repair/delete path. | Give years explicit semantics (`movieReleaseYear`, `seasonYear`, `seriesStartYear`, and broadcast range); apply ±1 only to movies; for series, validate that the season year is inside the broadcast range or treat it as non-disqualifying when the range is unavailable. Update both AI prompts and deterministic tests. |
-| High | `aiValidated` is stored on the aggregate title and preserved by later RSS merges. New occurrences attached to an already validated title do not invalidate the flag and will never be audited. | A later false-positive occurrence can hide permanently behind an earlier title-level validation. | Track validation per occurrence/raw-title cluster and include a validation policy version; invalidate aggregate status whenever a new or changed occurrence is attached. |
-| Resolved | `--parse-only --mode all` is rejected and parse-only exits before AI/persistence phases. | Parse-only cannot reach OMDb, Gemini, Firestore, or parse-log writes. | Keep the CLI and scanner regression tests green. |
-| Resolved for Prompt 5B | Successful log reprocessing did not resolve/update the source log. | The same unresolved item could be selected on every run until pruning. | Reparse now updates the original source log with same-ID resolution metadata. |
-| Resolved for Prompt 5B | Reprocessed occurrences lost `feedEntryId` and `torrentUrl`; their ID was derived from raw title while the stored fields could not reproduce it. | Provenance was lost and later migration could change/collide occurrence IDs. | Reparse now requires retained context and reuses the v2 source-item ID and fields. |
-| Resolved for Prompt 3 | Matching/validation code was copied between RSS, reparse, and audit lookup paths. | The same candidate could be resolved with different cache, error, or budget behavior in different modes. | All OMDb lookups now use `OmdbResolver`; deterministic matching remains in `match_policy.py`. |
-| High | RSS accepts documentary/short as movie-like, while AI flows use strict `movie == media_type`; AI year checks omit `short`. | Mode-dependent type decisions and missed validation. | Define one compatibility matrix (`movie` may or may not include documentary/short) and use it everywhere. |
-| High | Genre-first OMDb normalization can convert a documentary or short **series** into `documentary` or `short`, after which a series feed rejects it. | Correct documentary series can be classified as movie-like and dropped. | Preserve source kind separately from content genre, for example `sourceType=series` plus `contentKind=documentary`; base feed compatibility on source kind. |
-| High | Audit/reparse subtract OMDb year from AI year without checking whether OMDb year is `None`. | Valid OMDb payloads with `N/A` year can raise `TypeError`. | Guard both values before arithmetic and return an explicit `year_unknown` decision. |
-| Resolved for Prompt 3 | Audit/reparse previously bypassed OMDb cache, request limits, counters, and timing; quota errors were swallowed as ordinary no-match results. | Excess API traffic, misleading run metrics, and repeated calls after quota exhaustion. | `OmdbResolver` now owns cache/API timing, counts actual HTTP attempts including fallbacks, and stops later phases after quota exhaustion. |
-| Resolved for Prompt 3 | Most OMDb `Response=False` errors other than text containing `limit reached` were previously treated as `OmdbNoMatchError`. | Authentication, malformed-request, or service errors could suppress a valid title for two days. | OMDb response categories are explicit; only confirmed not-found responses are negative-cached, while credential and service failures become typed non-cacheable outcomes. |
-| Resolved for Prompt 3 | Cache key omitted media type and year semantics. | Same-title, same-year movie and series requests could share an invalid positive/negative cache entry. | The v2 key includes normalized title, year semantics, source type, and optional lookup identity; old type-less entries are ignored until natural expiry. |
-| Resolved | Feed URLs are passed directly to `feedparser` with no scheme/host validation, timeout, size limit, entry cap, or `bozo`/HTTP check. | SSRF/local-file reads, hangs, amplification, and silent partial feeds were possible. | `FeedFetcher` now owns the allowlist, redirect/IP checks, response limits, and explicit parse-error handling; fixture reads require `--feed-file`. |
-| Resolved for Prompt 4C | RSS wrote the source publication timestamp into both `firstSeenAt` and `lastSeenAt`. | New source writes preserve publication separately and merge earliest/latest scanner observation times. Audit recency policy remains owned by Prompt 7B. | Keep rescan timestamp and source-context regression tests green. |
-| Resolved for Prompt 5B | Manual mappings were used only while processing a live RSS entry, not while reprocessing parse logs. | A correction remained unused when the source entry left the feed, while Gemini kept retrying it. | Reparse resolves retained manual mappings before AI and preserves enough source context to complete the occurrence. |
-| Resolved for Prompt 1 | A title without occurrences was audited by using its own stored title as the raw source text. | Orphaned or partially written titles could self-validate without any source evidence. | Orphans now persist as `decision=needs_review` and are never sent to the AI audit. |
-| Medium | RSS regex parsing runs twice per entry, including entries later removed by `force_days`. | Duplicate CPU work and possible future divergence between prefetch and processing. | Parse once into an entry context, filter by date first, then use the same parsed result for prefetch and processing. |
-| Resolved for Prompt 5B | Reparse labeled every AI item as a movie and did not preserve feed type in parse logs. | Series extraction was biased and differed from normal RSS behavior. | Reparse uses retained feed type and sends `unknown` when it is absent. |
-| Resolved for Prompt 5B | Retry selection previously included every ignored log and could miss eligible work beyond the newest records. | Fake and Firestore repositories now expose bounded deterministic retry pages and derive conservative compatibility state for legacy logs. Reparse now owns cursor continuation and source-identity deduplication. | Keep repository parity, cursor, lifecycle, and provenance tests green. |
-| Resolved for Prompt 5A | Unresolved logs were pruned after seven days before reprocessing started. | Age-based retention now removes only terminal/resolved records and preserves retryable work. | Keep old-retryable retention tests green. |
-| Resolved for Prompt 5B | Manual mappings were deleted immediately after IMDb retrieval, before filtering and durable catalog writes. | A later rejection/write failure lost the user's correction. | RSS and reparse consume a mapping only after filtering and durable catalog/source-log persistence. |
-| Medium | Reparse successes are not marked `aiValidated`; repair counters previously counted upserts as creations. | Repaired data can be re-audited, while later repair metrics may still need richer outcomes. | Prompt 5B fixes reparse created counters by checking existing records; validation provenance remains for the later audit contract. |
-| Resolved for Prompt 4C | Firestore `upsert_many()` overwrote instead of applying the merge contract. | Bulk title, occurrence, and source-log writes now delegate to the same transactional merge path as single writes. | Keep fake/Firestore single-versus-bulk contract tests green. |
-| Medium | Extraction/validation confidence and AI delay/cooldown settings are not enforced; the audit response schema does not expose confidence at all. | Low-confidence output is accepted and configured rate-control behavior is misleading. | Add confidence to the audit contract, enforce thresholds and one centralized retry/rate limiter, and remove unsupported settings. |
-| Resolved for Prompt 4B | Occurrence/log IDs omitted feed identity, and fallback title IDs were built from different title/year semantics in RSS versus reparse. | Equal GUIDs across feeds could overwrite a global parse log or merge same-title occurrences; IMDb-less matches could produce duplicate titles. | New writes use source-aware v2 IDs and canonical resolved title IDs; explicit v1 helpers support natural coexistence without reinterpretation or bulk migration. |
-| Medium | Regex heuristics split valid titles such as `Face/Off`, remove arbitrary trailing parentheses, accept numeric-only candidates, and do not bound years. | Incorrect title/year extraction produces false OMDb matches or unnecessary AI retries. | Parse recognized trailing metadata blocks, protect title slashes, require letters, validate year range, and return parse confidence/reasons. |
-| Resolved for Prompt 1 | Fake repositories exposed mutable model objects, so audit could change seeded state even in dry-run before the write guard. Empty CLI fakes also make standalone recheck/reparse runs non-representative. | Dry-run tests could lie about mutation safety and fake-mode audit/reparse silently do no useful work. | Fake repositories now return/store defensive copies, and recheck uses a copied title before any validation flag update. |
-| Low | Local run scripts call a missing root `movie_scanner.py`; local docs also pass an unsupported positional feed path to the new CLI. | Documented local execution fails or accidentally encourages the legacy path. | Point wrappers/docs to `python -m movies_feed.cli` and expose an explicit `--feed-file` option if fixture parsing is required. |
+| Status | Fact | Operational consequence |
+| --- | --- | --- |
+| Blocked | Production application still requires the Checkpoint F automated and staging gates plus a verified backup/export. | Do not enable production mutation before those gates pass. |
+| Deferred | Frontend proposal review and approval UI is not implemented. | Review and approval use the supported operator path outside the frontend. |
+| Deferred | Automatic migration of legacy proposals is not implemented. | Schema-v1 records remain readable but non-actionable; rerun the audit to generate current proposals. |
+| Deferred | Bulk and automatic proposal application are unsupported. | Apply at most one explicitly selected, reviewed proposal per invocation. |
+| Current | Legacy retry logs without sufficient source context cannot reproduce a v2 source identity. | They remain retryable but are skipped until recoverable provenance is supplied. |
+| Current | OMDb quota exhaustion stops remaining lookups and makes the run non-successful. | Monitor cache reuse, actual-attempt counters, and `partial`/`failed` outcomes. |
 
 ## Recommended Target Flow
 
@@ -209,12 +202,11 @@ map to a non-zero CLI exit code.
 7. Produce a typed decision such as `matched`, `retryable`, `rejected`, or `needs_review`.
 8. Persist source publication time separately from scanner observation time.
 9. Persist the title, occurrence, source-log resolution, cache, and mapping consumption atomically where possible.
-10. Make DB audit generate review proposals from a stable phase input snapshot; apply approved occurrence-level migrations separately.
+10. Make DB audit generate bounded schema-v2/v3 proposals from exact snapshots; apply one explicitly approved repair separately under a lease and one transaction.
 
-Before enabling the target flow in production, complete the workflow/control
-plane and fetch-boundary prerequisites in Prompts 0A-0C. In particular, a green
-GitHub job must mean that the scanner returned a successful exit code, and a
-configured feed URL must never bypass the code-owned fetch policy.
+Before enabling proposal application in production, complete the Checkpoint F
+release gate, verify a backup/export, dry-run one reviewed proposal, and confirm
+the automated and staging results are green.
 
 ## Minimum Regression Coverage
 

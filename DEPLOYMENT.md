@@ -124,11 +124,64 @@ Do not wait for the first cron execution.
 5. Trigger `.github/workflows/scanner.yml` manually via `workflow_dispatch` with `dry_run: true` and a bounded input set.
 6. Inspect sanitized run counters and confirm no production Firestore write occurred by comparing the datastore before and after. Do not use `titles_created: 0` or `occurrences_created: 0` as the sole proof: the current dry-run counters are simulated and may not reflect existing records.
 7. Trigger `workflow_dispatch` without dry-run mode (`dry_run: false`) only after the job's exit-code and partial-run behavior is verified.
-8. `mode=all` is non-destructive: it never applies proposals. Production proposal application is temporarily disabled during remediation.
+8. `mode=all` is non-destructive: it generates audit proposals but never applies
+  them. Proposal application is a separate, explicit-ID operation described
+  below.
 9. In Firebase Console, verify one `scanRuns/{run_id}` record, title documents under `titles/{id}`, occurrence documents under `titles/{id}/occurrences/{occ_id}`, and cached OMDb entries in `omdbCache`.
 10. Rerun `workflow_dispatch` once more and verify no duplicate title or occurrence documents are created due to deterministic ID merging.
 
 If OMDb reports a daily limit, stop repeated manual runs and verify cache behavior.
+
+## Production Proposal Application
+
+`all` is never an application mode. Apply exactly one reviewed proposal by its
+explicit ID using `apply-proposals`; there is no supported bulk-application
+command.
+
+1. Complete a provider-supported Firestore backup/export and verify that the
+  export succeeded. Record its export identifier, completion time, project,
+  and the operator who confirmed it. Do not continue with a pending or failed
+  export.
+2. Review the proposal status, target, source fingerprint, occurrence
+  fingerprints, and evidence. The proposal must be approved and contain no
+  more than 200 occurrences.
+3. Run the exact proposal as a dry run. The production enable gate is not
+  required for this command:
+
+  ```bash
+  python -m movies_feed.cli --config legacy/config.json --mode apply-proposals --proposal-id <proposal-id> --dry-run
+  ```
+
+4. Confirm that the dry-run plan names the expected target, occurrence count,
+  and source-deletion decision. Reconfirm the recorded export from step 1
+  immediately before enabling writes.
+5. Enable production application only for the operator session, then apply the
+  same explicit proposal ID:
+
+  ```powershell
+  $env:MEDIADOCK_ENABLE_PROPOSAL_APPLICATION = "true"
+  python -m movies_feed.cli --config legacy/config.json --mode apply-proposals --proposal-id <proposal-id>
+  Remove-Item Env:MEDIADOCK_ENABLE_PROPOSAL_APPLICATION
+  ```
+
+  ```bash
+  export MEDIADOCK_ENABLE_PROPOSAL_APPLICATION=true
+  python -m movies_feed.cli --config legacy/config.json --mode apply-proposals --proposal-id <proposal-id>
+  unset MEDIADOCK_ENABLE_PROPOSAL_APPLICATION
+  ```
+
+6. Verify the proposal is `applied`, inspect the target title and moved
+  occurrences, and retain the run ID with the backup confirmation. Remove the
+  enable environment variable even when the command fails.
+
+If a dry run or application reports stale evidence, stop and review the changed
+source title and occurrences; do not apply the old proposal. If a proposal is
+`failed`, review its failure code and reason; failed proposals are terminal and
+cannot be retried. Rerun `recheck-existing` to generate fresh proposals from the
+current catalog, review and approve the replacement, then repeat the dry-run
+sequence with its new ID. Proposal generation chunks occurrence evidence at 200
+items. An older or malformed proposal above that bound is ineligible and must be
+regenerated rather than split or edited manually.
 
 ## GitHub Pages Deployment
 
@@ -195,12 +248,21 @@ bulk migration or production destructive execution (e.g., applying audit proposa
 
 #### Concurrency and Limits
 
-When executing bulk catalog operations (such as applying audit proposals):
+When applying one audit proposal:
 - Application operations use a compare-and-set lease on the `AuditProposal` to transition to `applying`.
 - Concurrent proposals modifying occurrences for the same source title are prevented by lease checks.
-- A stale lease (crashed worker) will be recovered to `failed` on the next attempt; the proposal must be reviewed and restarted rather than blindly applying old evidence.
-- Writes (occurrences, titles, logs) perform individual deterministic upserts and deletes. They do NOT execute in a single global batch. If an operation exceeds Firestore batch limits or crashes mid-execution, the failure is localized. The source Title and source Occurrences may be partially moved.
-- The operator must ensure a backup/export checkpoint exists before running destructive repairs. In the event of an unrecoverable failure during a multi-write application, the documented operator recovery action is to restore from the latest export or to manually reconstruct the remaining occurrences using the `failed` proposal's planned target.
+- A stale lease is recovered to `failed` on the next attempt. Review the failure
+  and regenerate a proposal from current evidence; do not retry the failed ID.
+- A proposal may contain at most 200 occurrences. Proposal generation chunks
+  larger source groups into separately reviewed proposals within that bound.
+- The title, occurrence, proposal-status, and lease writes for one application
+  commit in a single Firestore transaction. A failed or conflicted transaction
+  is rolled back by Firestore, so it does not leave partially moved
+  occurrences and requires no manual reconstruction.
+- If verification finds that a successfully committed proposal contained an
+  operator-approved but incorrect target, stop further applications and use
+  the confirmed provider export to restore according to the provider recovery
+  procedure. Do not attempt ad hoc partial document reconstruction.
 
 ## Secret Rotation
 

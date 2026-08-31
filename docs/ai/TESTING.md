@@ -2,10 +2,8 @@
 
 ## Status
 
-These are the intended canonical checks used by PR CI. The repository baseline
-must be green before a refactoring stage is considered complete; at the
-2026-08-25 review, the backend suite still had a local Firestore dependency
-import error, so the previous "verified" wording was premature.
+These are the canonical checks used by PR CI and the Checkpoint F release gate.
+A release is blocked unless every required automated and staging check passes.
 
 ## Current Canonical Check
 
@@ -40,6 +38,19 @@ parse-log writes. RSS fetching is still required to obtain the feed entries.
 The CLI preflight checks mode-specific Firebase, OMDb, and Gemini configuration
 by presence only. It reports secret names and never prints their values.
 
+`recheck-existing` delegates cluster auditing and proposal production to
+`ExistingTitleAuditService`. Tests cover schema-v2 proposals, deterministic v3
+IDs, `review_only` versus `repair`, and 200-occurrence chunking. Proposal
+application tests must prove that legacy/schema-v1 and `review_only` proposals
+are ineligible, dry-run performs no writes or lease acquisition, a live attempt
+holds the per-source lease, and the catalog move plus final `applied` status
+commit in one Firestore transaction or not at all.
+
+`--mode all` covers RSS, existing-title audit, and parse-log reprocessing. It
+must not enter proposal application. There is no supported test or production
+path for bulk or automatic proposal application; application tests select one
+explicit proposal ID.
+
 When workflow files change, also run a YAML/workflow linter such as
 `actionlint` when available. If no linter is installed, run the repository's
 deterministic workflow static checks and record that limitation; do not claim
@@ -64,8 +75,8 @@ workflow validation from `git diff` alone.
 - `LOCAL_DEVELOPMENT.md` explains setup and human workflow, then links here.
 - `DEPLOYMENT.md` owns deployed smoke checks and operational verification.
 - Add a command only after it succeeds in the actual repository.
-- Keep commands identical between this file and workflows once Prompt 0A is
-	applied; until then, document any environment-only difference explicitly.
+- Keep commands identical between this file and workflows; document any
+	environment-only difference explicitly.
 - Use [`GEMINI_MODELS.md`](../GEMINI_MODELS.md) when testing model configuration;
 	a catalog entry is not a substitute for a runtime capability check.
 
@@ -79,3 +90,11 @@ workflow validation from `git diff` alone.
 	to the production `FeedFetcher`.
 - Never snapshot service-account data, API keys, or private catalog records.
 - Never test by calling live RSS, OMDb, Gemini, or production Firestore.
+- Existing-title audit tests must assert stable schema-v2/v3 proposals per
+	source/raw-title cluster and splitting at 200 occurrences.
+- Application tests must assert that legacy and `review_only` proposals cannot
+	acquire a lease or mutate catalog data.
+- Firestore application tests must assert lease-owner revalidation and atomic
+	movement of only the named occurrences with the final proposal status.
+- `mode=all` and proposal dry-run tests must assert zero proposal-driven catalog
+	mutation.

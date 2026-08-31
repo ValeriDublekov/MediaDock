@@ -2,10 +2,9 @@
 
 ## Status
 
-This describes the target architecture. Bootstrap (P00/M0), the MVP wiring,
-workflow/client hardening, and the bounded RSS boundary from Prompts 0A-0C are
-present. The remaining refactoring work is tracked in
-`docs/BACKEND_REFACTORING_PROMPTS.md`.
+This describes the implemented architecture at the Checkpoint F release gate.
+The remaining release work is tracked in
+`docs/backend-refactoring-plan/06_CHECKPOINT_F_RELEASE.md`.
 
 ## Components
 
@@ -36,6 +35,23 @@ only active caller of `feedparser`.
 content kind, broadcast ranges, year semantics, exclusions, and typed
 accepted/rejected/ambiguous decisions. OMDb normalization supplies its input;
 scanner modes do not duplicate those deterministic checks.
+
+`ExistingTitleAuditService` owns existing-title audit orchestration. It groups
+occurrences by source feed and raw title, evaluates deterministic and AI
+evidence, writes occurrence-level validation for valid clusters, records
+review outcomes, and produces bounded audit proposals for mismatches. It does
+not move occurrences, delete titles, approve proposals, or apply proposals.
+`ScannerService` supplies its repositories and callbacks and invokes it for
+`recheck-existing`; proposal application is a separate
+`ProposalApplicationService` path.
+
+Current audit producers write proposal schema v2 with deterministic v3 IDs.
+A v3 ID covers the source title, source feed, normalized raw title, sorted
+occurrence IDs, and policy version. `review_only` proposals preserve evidence
+but cannot mutate the catalog. `repair` proposals additionally contain a typed
+target plus exact source-title and occurrence fingerprints. Each proposal is
+limited to 200 occurrences; larger clusters are emitted as multiple bounded
+proposals.
 
 ### Frontend
 
@@ -135,8 +151,17 @@ still depends on Authentication and Firestore rules.
         resolver budget counts actual OMDb HTTP attempts across all scanner
         phases; a quota response stops further OMDb requests for the run.
 - Existing-title audit mismatches and uncertain evidence are persisted as
-        `needs_review` outcomes; the audit phase does not delete titles or move
-        occurrences.
+        `needs_review` outcomes and audit proposals; the audit phase does not
+        delete titles or move occurrences.
+- Legacy schema-v1 proposals remain readable but are non-actionable. They are
+        not automatically migrated or reconstructed into repair proposals.
+- Live application is limited to one explicit, approved, current-policy,
+        schema-v2 `repair` proposal. A per-source lease serializes attempts, and
+        the Firestore commit rechecks the lease, proposal, fingerprints, and
+        membership before moving at most 200 named occurrences in one
+        transaction. A failed transaction commits no partial catalog move.
+- Dry-run planning does not acquire a lease or write. Scanner `mode=all` runs
+        RSS, audit, and reparse phases only; it never applies proposals.
 - Scan runs record bounded error summaries without secrets.
 - Repository writes are idempotent so a workflow rerun is safe.
 - Frontend exposes loading, empty, denied, retryable error, and end states.
@@ -150,4 +175,6 @@ still depends on Authentication and Firestore rules.
 - Notifications and user preference features.
 - Automated legacy JSON data migrations.
 - Frontend review UI for audit proposals.
+- Automatic migration of legacy audit proposals.
+- Automatic or bulk proposal application.
 - Firestore indexes for future multi-field combinations beyond current query demands.

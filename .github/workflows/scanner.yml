@@ -22,7 +22,7 @@ on:
         required: false
         default: "0"
       mode:
-        description: "Scan mode: rss (feed scan), recheck-existing (AI audit DB), reparse-unfound (AI reparse unmapped), or all"
+        description: "Scan mode: rss, recheck-existing, reparse-unfound, all, or apply-proposals"
         type: choice
         required: false
         default: "rss"
@@ -31,6 +31,17 @@ on:
           - "recheck-existing"
           - "reparse-unfound"
           - "all"
+          - "apply-proposals"
+      proposal_id:
+        description: "One previously approved proposal ID (apply-proposals only)"
+        type: string
+        required: false
+        default: ""
+      backup_confirmation:
+        description: "Enter BACKUP_CONFIRMED before production application"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -81,12 +92,20 @@ jobs:
           SCANNER_FORCE_DAYS: ${{ inputs.force_days }}
           SCANNER_AUDIT_DAYS: ${{ inputs.audit_days }}
           SCANNER_MODE: ${{ inputs.mode }}
+          SCANNER_PROPOSAL_ID: ${{ inputs.proposal_id }}
+          SCANNER_BACKUP_CONFIRMATION: ${{ inputs.backup_confirmation }}
+          PROPOSAL_APPLICATION_ENABLED: ${{ vars.MEDIADOCK_ENABLE_PROPOSAL_APPLICATION }}
+          SCANNER_EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           dry_run="${SCANNER_DRY_RUN:-false}"
           force_days="${SCANNER_FORCE_DAYS:-0}"
           audit_days="${SCANNER_AUDIT_DAYS:-0}"
           mode="${SCANNER_MODE:-rss}"
+          proposal_id="${SCANNER_PROPOSAL_ID:-}"
+          backup_confirmation="${SCANNER_BACKUP_CONFIRMATION:-}"
+          application_enabled="${PROPOSAL_APPLICATION_ENABLED:-false}"
+          event_name="${SCANNER_EVENT_NAME:-schedule}"
 
           case "$dry_run" in
             true|false) ;;
@@ -101,11 +120,36 @@ jobs:
             exit 1
           fi
           case "$mode" in
-            rss|recheck-existing|reparse-unfound|all) ;;
+            rss|recheck-existing|reparse-unfound|all|apply-proposals) ;;
             *) printf '%s\n' 'mode is not supported' >&2; exit 1 ;;
           esac
 
           scanner_args=(--config legacy/config.json --mode "$mode" --force-days "$force_days" --audit-days "$audit_days")
+          if [[ "$mode" == "apply-proposals" ]]; then
+            if [[ "$event_name" != "workflow_dispatch" ]]; then
+              printf '%s\n' 'apply-proposals is available only through manual dispatch' >&2
+              exit 1
+            fi
+            if [[ -z "$proposal_id" ]]; then
+              printf '%s\n' 'proposal_id is required for apply-proposals' >&2
+              exit 1
+            fi
+            scanner_args+=(--proposal-id "$proposal_id")
+            if [[ "$dry_run" != "true" ]]; then
+              if [[ "$backup_confirmation" != "BACKUP_CONFIRMED" ]]; then
+                printf '%s\n' 'backup_confirmation must equal BACKUP_CONFIRMED' >&2
+                exit 1
+              fi
+              if [[ "$application_enabled" != "true" ]]; then
+                printf '%s\n' 'proposal application deployment gate is disabled' >&2
+                exit 1
+              fi
+              export MEDIADOCK_ENABLE_PROPOSAL_APPLICATION=true
+            fi
+          elif [[ -n "$proposal_id" || -n "$backup_confirmation" ]]; then
+            printf '%s\n' 'proposal inputs are supported only with apply-proposals' >&2
+            exit 1
+          fi
           if [[ "$dry_run" == "true" ]]; then
             scanner_args+=(--dry-run)
           fi

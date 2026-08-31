@@ -24,13 +24,13 @@ Usage: .\scripts\run_scanner.ps1 [OPTIONS]
 
 Options:
   -Config PATH       Path to configuration JSON file (default: legacy/config.json)
-  -Mode MODE         Scanner mode (rss, recheck-existing, reparse-unfound, apply-proposals, all)
+    -Mode MODE         Scanner mode (rss, recheck-existing, reparse-unfound, all, apply-proposals)
   -DryRun            Run without writing to Firestore
   -ParseOnly         Download/parse RSS only, no external APIs (requires -Mode rss)
   -FeedFile PATH     Path to local feed file (requires -Mode rss -ParseOnly)
   -ForceDays N       Force scan N days back (0-30)
   -AuditDays N       Audit N days back (0-30)
-  -ProposalId ID     ID of proposal to apply
+    -ProposalId ID     Explicit ID of the single proposal to plan/apply
   -RejectProposal    Reject proposal instead of applying
   -FakeRepos         Use fake repositories (no Firebase)
   -Help              Show this help message
@@ -39,7 +39,11 @@ Examples:
   .\scripts\run_scanner.ps1 -Mode rss
   .\scripts\run_scanner.ps1 -Mode rss -ParseOnly -FeedFile backend\tests\fixtures\movies_feed.atom
   .\scripts\run_scanner.ps1 -Mode recheck-existing -DryRun
-  .\scripts\run_scanner.ps1 -Mode apply-proposals -ProposalId prop-123
+    .\scripts\run_scanner.ps1 -Mode apply-proposals -ProposalId prop-123 -DryRun
+
+Notes:
+    -Mode all never applies proposals; there is no bulk proposal application mode.
+    Non-dry-run application also requires MEDIADOCK_ENABLE_PROPOSAL_APPLICATION=true.
 
 "@ -ForegroundColor Cyan
     exit 0

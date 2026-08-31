@@ -207,6 +207,23 @@ class TestCliConfiguration(unittest.TestCase):
                 environment={},
             )
 
+    def test_main_rejects_more_than_one_proposal_id(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "movies_feed.cli.ScannerService"
+        ) as scanner_type:
+            self.assertEqual(
+                main([
+                    "--fake-repos",
+                    "--dry-run",
+                    "--mode", "apply-proposals",
+                    "--proposal-id", "prop-123",
+                    "--proposal-id", "prop-456",
+                ]),
+                EXIT_CONFIGURATION_ERROR,
+            )
+
+        scanner_type.assert_not_called()
+
     def test_reject_proposal_requires_an_explicit_proposal_id(self) -> None:
         with self.assertRaisesRegex(ConfigurationError, "--proposal-id"):
             validate_runtime_configuration(

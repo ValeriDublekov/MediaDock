@@ -21,7 +21,7 @@ Options:
   --feed-file PATH   Path to local feed file (requires --mode rss --parse-only)
   --force-days N     Force scan N days back (0-30)
   --audit-days N     Audit N days back (0-30)
-  --proposal-id ID   ID of proposal to apply
+    --proposal-id ID   Explicit ID of the single proposal to plan/apply
   --reject-proposal  Reject proposal instead of applying
   --fake-repos       Use fake repositories (no Firebase)
   --help             Show this help message
@@ -30,7 +30,11 @@ Examples:
   ./scripts/run_scanner.sh --mode rss
   ./scripts/run_scanner.sh --mode rss --parse-only --feed-file backend/tests/fixtures/movies_feed.atom
   ./scripts/run_scanner.sh --mode recheck-existing --dry-run
-  ./scripts/run_scanner.sh --mode apply-proposals --proposal-id prop-123
+    ./scripts/run_scanner.sh --mode apply-proposals --proposal-id prop-123 --dry-run
+
+Notes:
+    --mode all never applies proposals; there is no bulk proposal application mode.
+    Non-dry-run application also requires MEDIADOCK_ENABLE_PROPOSAL_APPLICATION=true.
 EOF
 }
 

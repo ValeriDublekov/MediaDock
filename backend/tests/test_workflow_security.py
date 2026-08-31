@@ -55,6 +55,8 @@ class TestWorkflowSecurity(unittest.TestCase):
         self.assertIn("SCANNER_FORCE_DAYS: ${{ inputs.force_days }}", self.scanner_workflow)
         self.assertIn("SCANNER_AUDIT_DAYS: ${{ inputs.audit_days }}", self.scanner_workflow)
         self.assertIn("SCANNER_MODE: ${{ inputs.mode }}", self.scanner_workflow)
+        self.assertIn("SCANNER_PROPOSAL_ID: ${{ inputs.proposal_id }}", self.scanner_workflow)
+        self.assertIn("SCANNER_BACKUP_CONFIRMATION: ${{ inputs.backup_confirmation }}", self.scanner_workflow)
         for block in _shell_run_blocks(self.scanner_workflow):
             self.assertNotIn("${{", block)
 
@@ -66,12 +68,22 @@ class TestWorkflowSecurity(unittest.TestCase):
         self.assertIn('python -m movies_feed.cli "${scanner_args[@]}"', self.scanner_workflow)
         self.assertNotIn("EXTRA_ARGS", self.scanner_workflow)
 
-    def test_scanner_workflow_has_no_proposal_application_inputs(self) -> None:
-        self.assertNotIn("apply-proposals", self.scanner_workflow)
-        self.assertNotIn("proposal_id", self.scanner_workflow)
+    def test_scanner_workflow_gates_one_manual_proposal_application(self) -> None:
+        self.assertIn('- "apply-proposals"', self.scanner_workflow)
+        self.assertIn('[[ "$event_name" != "workflow_dispatch" ]]', self.scanner_workflow)
+        self.assertIn('[[ -z "$proposal_id" ]]', self.scanner_workflow)
+        self.assertIn('[[ "$backup_confirmation" != "BACKUP_CONFIRMED" ]]', self.scanner_workflow)
+        self.assertIn('[[ "$application_enabled" != "true" ]]', self.scanner_workflow)
+        self.assertIn('scanner_args+=(--proposal-id "$proposal_id")', self.scanner_workflow)
+        self.assertIn("PROPOSAL_APPLICATION_ENABLED: ${{ vars.MEDIADOCK_ENABLE_PROPOSAL_APPLICATION }}", self.scanner_workflow)
+        self.assertNotIn("list_approved", self.scanner_workflow)
         self.assertNotIn("reject_proposal", self.scanner_workflow)
-        self.assertNotIn("--proposal-id", self.scanner_workflow)
         self.assertNotIn("--reject-proposal", self.scanner_workflow)
+
+    def test_scanner_dry_run_does_not_require_the_mutation_gate(self) -> None:
+        gate_position = self.scanner_workflow.index('[[ "$application_enabled" != "true" ]]')
+        mutation_position = self.scanner_workflow.rindex('if [[ "$dry_run" != "true" ]]')
+        self.assertGreater(gate_position, mutation_position)
 
     def test_external_actions_are_pinned_to_commits(self) -> None:
         for path, workflow in self.workflows.items():

@@ -2,57 +2,66 @@
 
 ## Current Milestone
 
-MVP wiring is present; production hardening is not complete.
+`partial` - Checkpoint F release preparation is in progress. Checkpoints A-E
+are implemented; production proposal application remains disabled until the
+F2-F5 operations, workflow, automated, and staging gates pass.
 
-## Completed
+## Done
 
-- M0: Sanitized legacy implementation, safe configuration.
-- Backend: Scaffolded installable Python backend with title parser unit tests.
-- P09A/B: Scaffolded Vite React frontend with Firebase auth and repository boundaries.
-- P10: Implemented newest-first catalog querying, custom pagination, and UI.
-- P12-P14: Pull-request CI, daily scanner workflow, and GitHub Pages deployment are present; workflow security and failure semantics still require hardening.
-- P15: Integration and documentation audit identified open backend, workflow, authorization, and client-secret risks.
-- AI matcher: Gemini extraction/validation exists with inline prompts and a current default of `gemini-3.1-flash-lite`; see [`GEMINI_MODELS.md`](../GEMINI_MODELS.md).
-- Prompt 0A: Scanner workflow inputs, mode-aware CLI preflight, process exit codes, parse-only isolation, explicit emulator project IDs, and locked backend CI dependencies are implemented.
-- Prompt 0B: Reader/admin rules, validated scanner settings and manual mappings, authenticated `createdBy`/`updatedBy`, and removal of browser scanner credentials are implemented.
-- Prompt 0C: Bounded HTTPS RSS fetching, public DNS and redirect validation, response/entry limits, bozo rejection, and explicit `--feed-file` fixture input are implemented.
-- Prompt 1: Existing-title audit is fail-closed and review-only; incomplete AI/OMDb evidence cannot delete or migrate catalog records, and fake repositories are defensive-copy safe for dry-run.
-- Prompt 2: Shared typed media/year policy is used by RSS, reparse, and audit candidate checks; source type is stored separately from content kind, and series broadcast ranges preserve later-season semantics.
-- Prompt 3: `OmdbResolver` provides typed outcomes, versioned type/semantics-aware cache entries, actual HTTP-attempt accounting, a run-wide quota budget across all modes, and Gemini model capability preflight without model-ID remapping.
-- Prompt 4A: Optional typed `SourceContext` and source/audit event kinds round-trip without inventing provenance for legacy documents.
-- Prompt 4B: Source-aware v2 occurrence/source-log IDs, isolated audit IDs, canonical fallback title IDs, and explicit v1 natural coexistence are implemented.
-- Prompt 4C: RSS and reparse writes retain stable source context, separate publication from observation time, and use matching single/bulk repository merge semantics with defensive copies.
-- Prompt 5A: Parse logs have explicit retry lifecycle metadata, conservative legacy-state derivation, deterministic paginated retry selection, and retention that preserves old retryable work.
-- Prompt 5B: Reparse traverses all retry pages, resolves retained manual mappings before Gemini, deduplicates by v2 source identity, preserves source provenance, updates the original log lifecycle, and consumes mappings only after durable writes.
-- Prompt 6A: Shared validation in `ai_validator.py` strictly validates Gemini responses with bounded payloads, exact types/ranges (`movie`/`series`), and fail-closed confidence thresholds (0.70 extraction/candidate, 0.80 audit).
-- Prompt 6B: Injected clock/sleep dependencies, deterministic retry policy (429/5xx/timeout), 403 cooldowns, header-only key transport (`x-goog-api-key`), bounded responses, and secret-safe structured logging in `AiMatcher`.
-- Prompt 7A: Defined idempotent `AuditProposal` storage contract, deterministic proposal IDs, status transition validation, evidence size limit (32 KiB), secret redaction, and Fake/Firestore repository parity.
-- Prompt 8A: Implemented Proposal Application Service, proposal state machine abstractions, and fake-repository tests with `apply_proposal`, dry-run, and target merging support.
-- Prompt 9B: Refined parser heuristics, embedded slash preservation (`Face/Off`), realistic release years (1888–2035), Latin letter requirement, series markers, and confidence/reasons diagnostics.
-- Prompt 10B: Aligned local/CI operations with active package backend and verified contracts. Updated execution scripts, documented deferred items (migrations, frontend review UI, indexes), and marked legacy execution unsupported.
+- `done` - Bounded RSS fetching, mode-aware CLI preflight, shared typed match
+	policy, versioned OMDb cache, run-wide request budget, source-aware IDs, and
+	explicit parse-log retry lifecycle are implemented.
+- `done` - `ExistingTitleAuditService` audits each source/raw-title cluster,
+	writes occurrence validation, and generates schema-v2 proposals with
+	deterministic v3 IDs in chunks of at most 200 occurrences.
+- `done` - Legacy/schema-v1 and schema-v2 `review_only` proposals coexist as
+	readable, non-actionable records. Current `repair` proposals carry a typed
+	target and exact source/occurrence fingerprints.
+- `done` - Proposal planning is side-effect free; dry-run acquires no lease and
+	performs no writes. Live Firestore application uses a per-source lease and
+	one transaction for revalidation, occurrence movement, title updates, and
+	final proposal status.
+- `done` - Scanner `mode=all` runs RSS, audit, and reparse only. It does not
+	invoke proposal application.
+- `done` - Firestore rules distinguish readers from admins and CI uses explicit
+	emulator project IDs and locked backend dependencies.
 
-## Next Prompt
+## Partial
 
-Run Prompt 11 in `docs/BACKEND_REFACTORING_PROMPTS.md`.
+- `partial` - Checkpoint F documentation and operational instructions are being
+	aligned with the implemented contracts.
+- `partial` - Explicit single-proposal application exists in the backend, but
+	production workflow exposure remains gated by F3 and the final release checks.
 
 ## Blockers
 
-- Firebase project identifiers and an authorized user account must be configured for production.
-- Production launch still requires AI validation, proposal, and application stages.
-- The Firestore rules emulator could not run in this local environment because Java is unavailable; CI installs Java 21 and runs the same rules test.
+- `blocked` - Production application cannot be enabled until the complete F4
+	automated gate and F5 staging scenario pass and a verified backup/export is
+	available.
+- `blocked` - Production smoke checks require configured Firebase project
+	identifiers and an authorized account.
 
+## Deferred
 
-## Residual Risks
+- `deferred` - Frontend proposal review and approval UI.
+- `deferred` - Automatic migration of legacy audit proposals; legacy records
+	remain readable and non-actionable.
+- `deferred` - Automatic or bulk proposal application.
+- `deferred` - Admin control plane, full-text search, and future indexes beyond
+	current query requirements.
 
-- The OMDb rate limit can halt scanner execution for the day. Cache reuse, actual-attempt counters, and partial-run status must be monitored.
-- Allowlist addition requires a manual write to the Firestore database using Firebase Console until an admin control plane exists.
-- The current `AiMatcher` payload needs compatibility review before changing the model to Gemini 3.6/3.7; full AI hardening remains Prompt 6.
-- Unpaginated local filtering currently handles all pages loaded into memory, which may become slow if thousands of entries are retained locally.
-- Legacy retry logs without enough retained source context remain retryable but are skipped by automated reparse until an operator supplies recoverable provenance.
+## Current Release Gate
+
+Complete Checkpoint F in
+`docs/backend-refactoring-plan/06_CHECKPOINT_F_RELEASE.md`: operations and
+recovery documentation (F2), guarded manual workflow exposure for one explicit
+proposal (F3), the complete automated gate (F4), and staging plus controlled
+production verification (F5).
 
 ## Update Rules
 
-- Keep only current facts, blockers, and one next prompt.
+- Keep only current `done`, `partial`, `blocked`, and `deferred` facts plus the
+	current release gate.
 - Replace completed-step detail with milestone summaries.
 - Do not duplicate Git history, test output, or architecture decisions.
 - Keep this file under 100 lines.

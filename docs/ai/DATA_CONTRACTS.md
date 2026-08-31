@@ -10,9 +10,9 @@
 - IDs and upserts are deterministic to make workflow reruns safe.
 
 This document contains the current storage contract. Source context fields are
-populated consistently for new RSS occurrences and source logs. Parse-log retry
-state is explicit; the audit-proposal collection is a later-stage change.
-OMDb cache keys are versioned by Prompt 3. A stage that
+populated consistently for new RSS occurrences and source logs, parse-log retry
+state is explicit, and audit proposals use the schema-v2 contract below. OMDb
+cache keys are versioned. A stage that
 changes any of these contracts must update this file, add emulator/fake
 compatibility tests, and document backward-read and migration behavior in the
 same change.
@@ -337,13 +337,15 @@ catalog data. Manual mappings are consumed only after filtering and durable
 title, occurrence, and source-log writes succeed. Dry-run does not consume
 mappings or mutate logs/catalog data.
 
-The existing-title audit is review-only in the current stage. A complete batch
-must contain exactly one result for every requested ID, and each result must
-contain an explicit boolean `is_valid_match`. Only an explicit valid result may
-set `titles/{titleId}.aiValidated=true`; missing, malformed, incomplete, or
-low-confidence results leave the title unchanged. Mismatch suggestions are
-retained in the review log and never move occurrences or delete a title.
-Titles with no occurrences are persisted as `decision=needs_review` with
+`ExistingTitleAuditService` owns existing-title auditing. It groups occurrences
+by `(sourceFeedId, rawTitle)`, and a complete AI batch must contain exactly one
+result for every requested cluster ID with an explicit boolean
+`is_valid_match`. Only a cluster accepted by both AI and deterministic policy
+receives occurrence-level validation. Missing, malformed, incomplete, or
+low-confidence results leave catalog data unchanged. Mismatches create a
+review log and a proposal, but the audit service never moves occurrences,
+deletes titles, approves proposals, or invokes proposal application. Titles
+with no occurrences are persisted as `decision=needs_review` with
 `auditOutcome=orphan` and are never compared with their stored title.
 
 ## `auditProposals/{proposalId}`
@@ -352,7 +354,7 @@ Idempotent review proposals generated during existing-title audits before moving
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `id` | string | Deterministic proposal ID derived from `sourceTitleId`, raw title cluster, and `policyVersion` |
+| `id` | string | Deterministic v3 proposal ID described below |
 | `sourceTitleId` | string | Source title ID currently anchoring the occurrences |
 | `occurrenceIds` | string[] | Exact list of occurrence IDs proposed for re-linking or update |
 | `rawTitleCluster` | string[] | Cluster of raw torrent/feed title strings represented |
@@ -373,6 +375,23 @@ Idempotent review proposals generated during existing-title audits before moving
 | `leasedUntil` | Timestamp or null | Expiry of the active application lease; cleared with `leaseOwner` |
 | `failureCode` | string or null | Bounded, stable code for a failed or stale application outcome |
 | `failureReason` | string or null | Sanitized bounded reason for the failure; never proposal evidence or an exception dump |
+
+Current producers write `schemaVersion=2`. Their proposal ID is the lowercase
+SHA-256 digest of the UTF-8 tuple
+`v3:proposal:<source-title-id>:<source-feed-id>:<normalized-raw-title>:<sorted-comma-separated-occurrence-ids>:<policy-version>`.
+This makes retries for the same cluster chunk idempotent while distinguishing
+changes to exact occurrence membership. The older v2 proposal-ID helper and
+schema-v1 documents may coexist with current records, but application never
+infers a schema from an ID.
+
+`review_only` records contain bounded evidence for operator review and are
+never actionable. A schema-v2 `repair` record is actionable only when its
+typed `target`, `sourceTitleFingerprint`, and exact
+`occurrenceFingerprints` are complete and all application preconditions pass.
+The producer chunks a cluster into deterministic proposals of at most 200
+occurrences. Automatic migration of legacy proposals is deferred; legacy
+records stay readable and non-actionable until a current audit regenerates
+new schema-v2 proposals.
 
 ### Status Transitions
 
@@ -471,12 +490,14 @@ are forbidden. Dry-run acquires no lease and performs no repository write.
 
 ### Application Semantics
 
+- Application accepts one explicit proposal ID; bulk or automatic application is not supported.
 - The proposal application process is idempotent (`approved` -> `applying` -> `applied` or `failed`).
 - Stale source data (the source title no longer exists or the occurrences are missing) returns the proposal to `failed` without applying evidence.
 - Dry-run mode produces a plan with zero repository mutation.
 - Same source/target resolution is a no-op that explicitly skips.
 - Target titles are merged with preserving earliest `firstSeenAt` and latest `lastSeenAt` from occurrences.
 - A source title is deleted only when it has no remaining occurrences.
+- Scanner `mode=all` does not invoke proposal application and is non-destructive with respect to proposal-driven catalog repair.
 
 ### Occurrence-Level Validation Metadata Location
 
