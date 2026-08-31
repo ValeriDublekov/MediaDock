@@ -19,25 +19,6 @@ Each new stage below is intentionally written as `Scope`, `Non-goals`, `Contract
 implementing an earlier one. If an existing implementation already satisfies a
 bullet, add or verify the regression test and leave the behavior unchanged.
 
-
-## Prompt 9A: Make RSS Ingestion Single-Pass
-
-```text
-Goal: use FeedFetcher and parse each accepted RSS entry once.
-
-Scope: scanner RSS ingestion, a typed parsed-entry context, focused fetcher/scanner tests, and directly affected docs. Do not reimplement networking; configured URLs must continue through the code-owned FeedFetcher. Apply force_days before title parsing when a source date exists, create one parsed context per source item, and reuse it for cache prefetch and processing. Remove the duplicate prefetch parse path.
-
-Contract: each accepted entry is parsed exactly once; the same parsed context drives cache prefetch and processing, and force_days can prevent parsing when the source date is outside the window.
-
-Non-goals: do not change parser heuristics, resolver behavior, retry selection, or the FeedFetcher security policy.
-
-Work: make parse errors and source metadata travel with the single context, while preserving current valid fixture behavior and parse-only isolation.
-
-Tests: force_days before parse, one parse call per entry, same parsed result used for prefetch/processing, source publication handling, redirects/private IP/size/timeout/status/content-type/bozo/entry-limit fixtures, and parse-only no-API behavior.
-
-Done when: each accepted entry has one parse result, no untrusted URL bypasses FeedFetcher, and narrow plus full backend tests pass.
-```
-
 ## Prompt 9B: Refine Parser Heuristics and Confidence
 
 ```text

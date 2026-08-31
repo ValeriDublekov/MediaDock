@@ -7,7 +7,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-import feedparser
+try:
+    import feedparser
+except ImportError:
+    feedparser = None
 
 from .ids import (
     clean_title_for_comparison,
@@ -1448,27 +1451,47 @@ class ScannerService:
         parsed = ctx.parsed
         parse_error = ctx.parse_error
 
-        if not parsed or not parsed.title:
+        if not parsed or not parsed.title or parsed.confidence < 0.7:
             run.ignored_entries += 1
             if parse_error:
                 run.error_count += 1
                 run.error_summary.append(f"Parse error for '{raw_title}': {parse_error}")
 
+            if not parsed or not parsed.title:
+                ignore_reason = "parse_error" if parse_error else "no_title"
+                error_msg = parse_error
+            else:
+                primary_reason = parsed.reasons[0] if parsed.reasons else "ambiguous"
+                ignore_reason = f"low_confidence_parse:{primary_reason}"
+                error_msg = f"Low parse confidence ({parsed.confidence:.2f}): {', '.join(parsed.reasons)}"
+
+            trace_details = {
+                "rawTitle": raw_title,
+                "feedName": feed_name,
+                "feedType": feed_def.get("type"),
+                "parseConfidence": parsed.confidence if parsed else 0.0,
+                "parseReasons": list(parsed.reasons) if parsed else ["parse_error"],
+            }
+            if parsed and parsed.title:
+                trace_details["parsedTitle"] = parsed.title
+                trace_details["parsedYear"] = ctx.lookup_year
+
             self._log_parse_entry(
                 raw_title=raw_title,
                 feed_name=feed_name,
                 parsed_successfully=False,
-                parsed_title=None,
-                parsed_year=None,
+                parsed_title=parsed.title if (parsed and parsed.title) else None,
+                parsed_year=ctx.lookup_year if parsed else None,
                 omdb_status="not_parsed",
                 ignored=True,
-                ignore_reason="parse_error" if parse_error else "no_title",
-                error_message=parse_error,
+                ignore_reason=ignore_reason,
+                error_message=error_msg,
                 feed_entry_id=feed_entry_id,
                 torrent_url=torrent_url,
                 source_feed_id=source_feed_id,
                 source_context=source_context,
                 section_timings=section_timings,
+                trace_details=trace_details,
             )
             return
 
@@ -1481,6 +1504,8 @@ class ScannerService:
             "parsedQuality": parsed.quality or None,
             "parsedRipType": parsed.rip_type or None,
             "parsedIsSeries": parsed.is_series,
+            "parseConfidence": parsed.confidence,
+            "parseReasons": list(parsed.reasons),
             "feedName": feed_name,
             "feedType": feed_def.get("type"),
         }

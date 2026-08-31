@@ -33,15 +33,16 @@ are tracked in `docs/BACKEND_REFACTORING_PROMPTS.md`.
 
 ### Regex title parsing
 
-`parse_rutracker_title()` currently applies this sequence:
+`parse_rutracker_title()` applies this sequence:
 
 1. Remove one leading bracketed prefix.
-2. Extract the first four digits after `[` or a four-digit value in parentheses.
-3. Treat everything before the first `[` as the title section and remove its final parenthesized block.
-4. Split the title section on every `/`.
-5. Use the configured feed type when present; otherwise infer series markers from keywords/regex.
-6. Clean candidates and choose the first "Latin-like" candidate, falling back to the first candidate.
-7. Find quality and rip tags by case-insensitive substring search against configuration lists.
+2. Extract the first four-digit release year within realistic bounds (1888–2035) after `[` or in parentheses (excluding resolution tags such as 1080p/2160p).
+3. Treat text before the first `[` as the title section, stripping trailing director/audio metadata parentheses while preserving meaningful subtitle blocks (e.g. `Death and Rebirth`, `Extended Edition`).
+4. Split title candidate sections on slashes with surrounding whitespace (` / `), preserving embedded title slashes (e.g. `Face/Off`, `Frost/Nixon`, `50/50`, `F/X`).
+5. Use configured feed type when present; otherwise infer series classification from structured series/episode regex markers (avoiding false positives from movie titles containing season/serial words).
+6. Clean candidates, strip series markers, and select the first Latin candidate containing letters. If none has Latin letters, fall back to numeric/ASCII candidates, then to the first candidate.
+7. Find quality and rip tags by case-insensitive substring search against configured/default tag lists.
+8. Calculate parse confidence (0.0 to 1.0) and attach structured diagnostic reason codes (e.g. `valid_year_extracted`, `latin_candidate_selected`, `embedded_slash_preserved`). Low-confidence parses (< 0.70) are routed to retry/review.
 
 The feed type is authoritative: a series-looking title in a `movie` feed is still parsed as a movie.
 
