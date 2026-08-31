@@ -1,5 +1,6 @@
 import datetime
 import unittest
+from typing import Any, Dict
 from unittest.mock import MagicMock
 
 try:
@@ -10,7 +11,7 @@ except ImportError:
     from test_scanner import MockOmdbClient
 
 from movies_feed.match_policy import parse_broadcast_range
-from movies_feed.audit_proposal import ProposalTarget
+from movies_feed.audit_proposal import ProposalTarget, audit_proposal_from_dict
 from movies_feed.metadata_resolver import MetadataOutcome, MetadataOutcomeStatus
 from movies_feed.models import Occurrence, ScanRun, Title
 from movies_feed.omdb_client import OmdbLimitReachedError, OmdbMovieResult, OmdbTransportError
@@ -926,6 +927,7 @@ class TestExistingTitleAudit(unittest.TestCase):
         audit_log = self.parse_log_repo.get_all()[0]
         self.assertEqual(audit_log.trace_details["candidateOutcome"], "valid_suggestion")
 
+        proposal = audit_proposal_from_dict(proposal.to_dict())
         proposal.status = "approved"
         self.proposal_repo.upsert(proposal)
         self.assertEqual(self.proposal_repo.get(proposal.id).status, "approved")

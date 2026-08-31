@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { doc, getDoc, setDoc, Firestore } from 'firebase/firestore';
-import { getAuth, getDb } from './firebaseApp';
+import { doc, getDoc, Firestore } from 'firebase/firestore';
+import { getDb } from './firebaseApp';
 import { GlobalSettings, SettingsRepository, DEFAULT_SETTINGS, isValidSettings } from '../domain/settings';
 
 export class FirestoreSettingsAdapter implements SettingsRepository {
@@ -39,22 +39,7 @@ export class FirestoreSettingsAdapter implements SettingsRepository {
     if (!isValidSettings(settings)) {
       throw new Error('Scanner settings are invalid. Review the settings and try again.');
     }
-
-    const db = this.getDbInstance();
-    const userId = getAuth().currentUser?.uid;
-    if (!userId) {
-      throw new Error('Authentication required to update scanner settings.');
-    }
-    const docRef = doc(db, 'titles', 'settings_config');
-    await setDoc(docRef, {
-      rssFeeds: settings.rssFeeds,
-      excludedGenres: settings.excludedGenres,
-      excludedCountries: settings.excludedCountries,
-      minMovieRating: settings.minMovieRating,
-      minSeriesRating: settings.minSeriesRating,
-      minImdbVotes: settings.minImdbVotes,
-      updatedBy: userId,
-    });
+    throw new Error('Scanner settings are read-only in the browser and must be updated server-side.');
   }
 }
 

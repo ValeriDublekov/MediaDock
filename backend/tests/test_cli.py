@@ -141,6 +141,7 @@ class TestCliConfiguration(unittest.TestCase):
             {**valid, "extra": True},
             {**valid, "minMovieRating": 11},
             {**valid, "rssFeeds": {"movies": {"url": "https://feed.example.test/movies.atom", "type": "invalid"}}},
+            {**valid, "rssFeeds": {"movies": {"url": "http://feed.example.test/movies.atom", "type": "movie"}}},
             {**valid, "excludedGenres": [""]},
         ):
             with self.subTest(invalid=invalid), self.assertRaises(ConfigurationError):

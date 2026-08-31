@@ -247,6 +247,42 @@ class FirestoreProposalApplicationStore(RepositoryProposalApplicationStore):
             source_deleted=source_deleted,
         )
 
+    def _mark_aborted_commit_failed(
+        self,
+        proposal_id: str,
+        lease_owner: str,
+        now: datetime.datetime,
+    ) -> None:
+        proposal_ref = self.proposal_repository.collection_ref.document(proposal_id)
+
+        @firestore.transactional
+        def _mark_failed_tx(transaction):
+            snapshot = proposal_ref.get(transaction=transaction)
+            if not snapshot.exists:
+                return
+            data = snapshot.to_dict() or {}
+            if data.get("status") != "applying" or data.get("leaseOwner") != lease_owner:
+                return
+            source_title_id = data.get("sourceTitleId")
+            failed_data = copy.deepcopy(data)
+            failed_data.update(
+                {
+                    "status": "failed",
+                    "leaseOwner": None,
+                    "leasedUntil": None,
+                    "updatedAt": now,
+                    "failureCode": "commit_failed",
+                    "failureReason": "Application transaction failed before commit",
+                }
+            )
+            transaction.set(proposal_ref, failed_data)
+            if isinstance(source_title_id, str) and source_title_id:
+                transaction.delete(
+                    self.db.collection(_LEASE_COLLECTION).document(source_title_id)
+                )
+
+        _mark_failed_tx(self.db.transaction())
+
     def commit_application(
         self,
         plan: Any,
@@ -303,11 +339,55 @@ class FirestoreProposalApplicationStore(RepositoryProposalApplicationStore):
                     "Application lease owner does not match",
                     plan,
                 )
-            lease_expiry = _as_utc(proposal_data.get("leasedUntil"))
+            source_title_id = proposal_data.get("sourceTitleId")
             normalized_now = _as_utc(now)
-            if normalized_now is None or lease_expiry is None or normalized_now >= lease_expiry:
+            if not isinstance(source_title_id, str) or not source_title_id:
                 return self._commit_result(
-                    "failed", "lease_expired", "Application lease has expired", plan
+                    "failed",
+                    "proposal_invalid",
+                    "Proposal source title is invalid",
+                    plan,
+                )
+            if normalized_now is None:
+                return self._commit_result(
+                    "failed",
+                    "invalid_commit_time",
+                    "Application commit time is invalid",
+                    plan,
+                )
+            source_lease_ref = self.db.collection(_LEASE_COLLECTION).document(
+                source_title_id
+            )
+
+            def _finish_failed_attempt(
+                outcome: str,
+                reason_code: str,
+                reason: str,
+            ) -> ApplicationCommitResult:
+                failed_proposal_data = copy.deepcopy(proposal_data)
+                failed_proposal_data.update(
+                    {
+                        "status": "failed",
+                        "leaseOwner": None,
+                        "leasedUntil": None,
+                        "updatedAt": normalized_now,
+                        "failureCode": "stale" if outcome == "stale" else reason_code,
+                        "failureReason": reason[:500],
+                    }
+                )
+                transaction.set(proposal_ref, failed_proposal_data)
+                transaction.delete(source_lease_ref)
+                return self._commit_result(
+                    outcome,
+                    reason_code,
+                    reason,
+                    plan,
+                )
+
+            lease_expiry = _as_utc(proposal_data.get("leasedUntil"))
+            if lease_expiry is None or normalized_now >= lease_expiry:
+                return _finish_failed_attempt(
+                    "failed", "lease_expired", "Application lease has expired"
                 )
 
             occurrence_ids = tuple(getattr(plan, "occurrence_ids", ()))
@@ -320,16 +400,15 @@ class FirestoreProposalApplicationStore(RepositoryProposalApplicationStore):
                     for occurrence_id in occurrence_ids
                 )
             ):
-                return self._commit_result(
+                return _finish_failed_attempt(
                     "ineligible",
                     "occurrence_ids",
                     "Application plan occurrence membership is invalid",
-                    plan,
                 )
 
             target = getattr(plan, "target", None)
             target_data = proposal_data.get("target")
-            source_title_id = getattr(plan, "source_title_id", None)
+            plan_source_title_id = getattr(plan, "source_title_id", None)
             if (
                 proposal_data.get("schemaVersion") != 2
                 or proposal_data.get("actionKind") != "repair"
@@ -337,25 +416,23 @@ class FirestoreProposalApplicationStore(RepositoryProposalApplicationStore):
                 or not isinstance(target_data, Mapping)
                 or target is None
                 or target.to_dict() != dict(target_data)
-                or proposal_data.get("sourceTitleId") != source_title_id
+                or source_title_id != plan_source_title_id
                 or tuple(proposal_data.get("occurrenceIds") or ()) != occurrence_ids
             ):
-                return self._commit_result(
+                return _finish_failed_attempt(
                     "ineligible",
                     "plan_precondition",
                     "Application proposal no longer matches the application plan",
-                    plan,
                 )
 
             target_title_id = get_title_id_v2(
                 target.imdb_id, target.title, target.year, target.media_type
             )
             if target_title_id != getattr(plan, "target_title_id", None):
-                return self._commit_result(
+                return _finish_failed_attempt(
                     "ineligible",
                     "target_changed",
                     "Application target no longer matches the application plan",
-                    plan,
                 )
 
             plan_source_fingerprint = dict(
@@ -377,11 +454,10 @@ class FirestoreProposalApplicationStore(RepositoryProposalApplicationStore):
                 or _freeze_value(validated_source_fingerprint)
                 != _freeze_value(plan_source_fingerprint)
             ):
-                return self._commit_result(
+                return _finish_failed_attempt(
                     "ineligible",
                     "source_fingerprint_changed",
                     "Proposal source fingerprint no longer matches the application plan",
-                    plan,
                 )
 
             plan_occurrence_fingerprints = dict(
@@ -395,11 +471,10 @@ class FirestoreProposalApplicationStore(RepositoryProposalApplicationStore):
                 or set(plan_occurrence_fingerprints) != set(occurrence_ids)
                 or set(proposal_occurrence_fingerprints) != set(occurrence_ids)
             ):
-                return self._commit_result(
+                return _finish_failed_attempt(
                     "ineligible",
                     "occurrence_fingerprint_membership",
                     "Proposal occurrence fingerprints no longer match the application plan",
-                    plan,
                 )
             for occurrence_id in occurrence_ids:
                 proposal_fingerprint = _validated_fingerprint(
@@ -411,14 +486,15 @@ class FirestoreProposalApplicationStore(RepositoryProposalApplicationStore):
                     or _freeze_value(proposal_fingerprint)
                     != _freeze_value(plan_occurrence_fingerprints[occurrence_id])
                 ):
-                    return self._commit_result(
+                    return _finish_failed_attempt(
                         "ineligible",
                         "occurrence_fingerprint_changed",
                         f"Occurrence fingerprint for {occurrence_id} no longer matches the application plan",
-                        plan,
                     )
 
-            source_title_ref = self.title_repository.collection_ref.document(source_title_id)
+            source_title_ref = self.title_repository.collection_ref.document(
+                plan_source_title_id
+            )
             target_title_ref = self.title_repository.collection_ref.document(target_title_id)
             source_occurrences_ref = source_title_ref.collection("occurrences")
             target_occurrences_ref = target_title_ref.collection("occurrences")
@@ -440,66 +516,61 @@ class FirestoreProposalApplicationStore(RepositoryProposalApplicationStore):
             }
 
             if not source_title_snapshot.exists:
-                return self._commit_result(
-                    "stale", "source_title_missing", "Source title no longer exists", plan
+                return _finish_failed_attempt(
+                    "stale", "source_title_missing", "Source title no longer exists"
                 )
             source_title = title_from_dict(source_title_snapshot.to_dict() or {})
             if _freeze_value(
                 _canonical_source_fingerprint_from_title(source_title)
             ) != _freeze_value(plan_source_fingerprint):
-                return self._commit_result(
+                return _finish_failed_attempt(
                     "stale",
                     "source_title_changed",
                     "Source title fingerprint is stale",
-                    plan,
                 )
 
             source_occurrences: dict[str, Occurrence] = {}
             for occurrence_id in occurrence_ids:
                 occurrence_snapshot = source_occurrence_by_id.get(occurrence_id)
                 if occurrence_snapshot is None or not occurrence_snapshot.exists:
-                    return self._commit_result(
+                    return _finish_failed_attempt(
                         "stale",
                         "occurrence_missing",
                         f"Occurrence {occurrence_id} is missing from the source title",
-                        plan,
                     )
                 occurrence = occurrence_from_dict(occurrence_snapshot.to_dict() or {})
                 if _freeze_value(
                     _canonical_occurrence_fingerprint_from_occurrence(occurrence)
                 ) != _freeze_value(plan_occurrence_fingerprints[occurrence_id]):
-                    return self._commit_result(
+                    return _finish_failed_attempt(
                         "stale",
                         "occurrence_changed",
                         f"Occurrence {occurrence_id} fingerprint is stale",
-                        plan,
                     )
                 source_occurrences[occurrence_id] = occurrence
 
             source_occurrence_count = len(source_occurrence_snapshots)
             if source_occurrence_count != getattr(plan, "source_occurrence_count", None):
-                return self._commit_result(
+                return _finish_failed_attempt(
                     "stale",
                     "occurrence_membership_changed",
                     "Source occurrence membership is stale",
-                    plan,
                 )
 
             source_deleted = (
-                source_title_id != target_title_id
+                plan_source_title_id != target_title_id
                 and source_occurrence_count == len(occurrence_ids)
             )
             if source_deleted != getattr(plan, "source_deleted", None):
-                return self._commit_result(
+                return _finish_failed_attempt(
                     "stale",
                     "source_deletion_changed",
                     "Source deletion precondition is stale",
-                    plan,
                 )
 
             staged_target_title = None
             staged_target_occurrences: dict[str, Occurrence] = {}
-            if source_title_id != target_title_id:
+            if plan_source_title_id != target_title_id:
                 moved_first_seen = min(
                     occurrence.first_seen_at for occurrence in source_occurrences.values()
                 )
@@ -567,12 +638,10 @@ class FirestoreProposalApplicationStore(RepositoryProposalApplicationStore):
                 transaction.delete(source_occurrences_ref.document(occurrence_id))
             if source_deleted:
                 transaction.delete(source_title_ref)
-            elif source_title_id != target_title_id:
+            elif plan_source_title_id != target_title_id:
                 transaction.set(source_title_ref, staged_source_title.to_dict())
             transaction.set(proposal_ref, staged_proposal_data)
-            transaction.delete(
-                self.db.collection(_LEASE_COLLECTION).document(source_title_id)
-            )
+            transaction.delete(source_lease_ref)
 
             return self._commit_result(
                 "applied",
@@ -586,6 +655,14 @@ class FirestoreProposalApplicationStore(RepositoryProposalApplicationStore):
         try:
             return _commit_tx(self.db.transaction())
         except Exception as error:
+            try:
+                self._mark_aborted_commit_failed(
+                    proposal_id,
+                    lease_owner,
+                    _as_utc(now) or datetime.datetime.now(datetime.timezone.utc),
+                )
+            except Exception:
+                pass
             return self._commit_result(
                 "failed",
                 "commit_failed",

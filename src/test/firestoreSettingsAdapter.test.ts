@@ -9,7 +9,6 @@ import {
   MAX_SETTINGS_TEXT_LENGTH,
   MAX_SETTINGS_URL_LENGTH,
 } from '../domain/settings';
-import { getAuth } from '../adapters/firebaseApp';
 
 vi.mock('firebase/firestore', () => ({
   doc: vi.fn((db, ...pathSegments) => ({ db, path: pathSegments.join('/') })),
@@ -18,7 +17,6 @@ vi.mock('firebase/firestore', () => ({
 }));
 
 vi.mock('../adapters/firebaseApp', () => ({
-  getAuth: vi.fn(),
   getDb: vi.fn(),
 }));
 
@@ -39,7 +37,6 @@ describe('FirestoreSettingsAdapter', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getAuth).mockReturnValue({ currentUser: { uid: 'admin-123' } } as never);
     adapter = new FirestoreSettingsAdapter(() => mockDb as never);
   });
 
@@ -73,14 +70,13 @@ describe('FirestoreSettingsAdapter', () => {
     expect(firestoreModule.setDoc).not.toHaveBeenCalled();
   });
 
-  it('writes valid settings unchanged except for updatedBy', async () => {
+  it('rejects valid browser writes until a server-side control plane exists', async () => {
     const settings = validSettings();
 
-    await adapter.saveSettings(settings);
-
-    expect(firestoreModule.setDoc).toHaveBeenCalledWith(
-      { db: mockDb, path: 'titles/settings_config' },
-      { ...settings, updatedBy: 'admin-123' },
+    await expect(adapter.saveSettings(settings)).rejects.toThrow(
+      'Scanner settings are read-only in the browser and must be updated server-side.',
     );
+
+    expect(firestoreModule.setDoc).not.toHaveBeenCalled();
   });
 });

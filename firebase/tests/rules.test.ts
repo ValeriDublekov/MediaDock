@@ -227,12 +227,12 @@ describe("MoviesFeed Firestore Rules", () => {
       }));
     });
 
-    it("rejects an empty or overlong feed name", async () => {
+    it("rejects a blank or overlong feed name", async () => {
       const db = await setupAdminUser("admin-456", "admin@example.com");
       const valid = validAdminSettings();
       await assertFails(db.collection("titles").doc("settings_config").set({
         ...valid,
-        rssFeeds: { "": { url: "https://feed.example.test/movies.atom", type: "movie" } },
+        rssFeeds: { " ": { url: "https://feed.example.test/movies.atom", type: "movie" } },
       }));
       await assertFails(db.collection("titles").doc("settings_config").set({
         ...valid,

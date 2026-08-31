@@ -6,6 +6,7 @@ import os
 import re
 import uuid
 from typing import Any, Dict, Mapping, Optional, Sequence
+from urllib.parse import urlparse
 
 from .firestore_repository import (
     FirestoreOccurrenceRepository,
@@ -180,14 +181,19 @@ def validate_settings_document(data: Any) -> Dict[str, Any]:
         if not isinstance(feeds, dict) or len(feeds) > MAX_SETTINGS_FEEDS:
             raise ConfigurationError("Firestore settings contain too many RSS feeds")
         for feed_name, feed in feeds.items():
+            feed_url = feed.get("url") if isinstance(feed, dict) else None
+            parsed_feed_url = urlparse(feed_url) if isinstance(feed_url, str) else None
             if (
                 not isinstance(feed_name, str)
                 or not feed_name.strip()
                 or len(feed_name) > MAX_SETTINGS_TEXT_LENGTH
                 or not isinstance(feed, dict)
                 or set(feed) != {"url", "type"}
-                or not isinstance(feed["url"], str)
-                or not 1 <= len(feed["url"]) <= 2048
+                or not isinstance(feed_url, str)
+                or not 1 <= len(feed_url) <= 2048
+                or parsed_feed_url is None
+                or parsed_feed_url.scheme.lower() != "https"
+                or not parsed_feed_url.hostname
                 or feed["type"] not in ("movie", "series")
             ):
                 raise ConfigurationError("Firestore settings contain an invalid RSS feed")

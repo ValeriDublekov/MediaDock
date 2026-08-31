@@ -2,7 +2,7 @@ import copy
 import datetime
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, cast
 
 from .match_policy import BroadcastRange, ContentKind, SourceType, broadcast_range_from_dict
@@ -318,6 +318,8 @@ class AuditProposal:
     schema_version: int = CURRENT_AUDIT_PROPOSAL_SCHEMA_VERSION
     action_kind: AuditProposalActionKind = "review_only"
     target: Optional[ProposalTarget] = None
+    source_title_fingerprint: Optional[Any] = None
+    occurrence_fingerprints: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip():
@@ -391,6 +393,20 @@ class AuditProposal:
         }
         if self.target is not None:
             res["target"] = self.target.to_dict()
+        if self.source_title_fingerprint is not None:
+            to_dict = getattr(self.source_title_fingerprint, "to_dict", None)
+            res["sourceTitleFingerprint"] = copy.deepcopy(
+                to_dict() if callable(to_dict) else self.source_title_fingerprint
+            )
+        if self.occurrence_fingerprints:
+            res["occurrenceFingerprints"] = {
+                occurrence_id: copy.deepcopy(
+                    fingerprint.to_dict()
+                    if callable(getattr(fingerprint, "to_dict", None))
+                    else fingerprint
+                )
+                for occurrence_id, fingerprint in self.occurrence_fingerprints.items()
+            }
         if self.leased_until is not None:
             res["leasedUntil"] = self.leased_until
         return res
@@ -446,4 +462,6 @@ def audit_proposal_from_dict(d: dict, doc_id: Optional[str] = None) -> AuditProp
         schema_version=schema_version,
         action_kind=action_kind,
         target=target,
+        source_title_fingerprint=copy.deepcopy(d.get("sourceTitleFingerprint")),
+        occurrence_fingerprints=copy.deepcopy(d.get("occurrenceFingerprints") or {}),
     )

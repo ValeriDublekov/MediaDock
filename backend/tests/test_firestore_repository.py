@@ -1,3 +1,4 @@
+import copy
 import os
 import datetime
 import unittest
@@ -379,6 +380,7 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
         self._clear_collection("scanRuns")
         self._clear_collection("parseLogs")
         self._clear_collection("manualMappings")
+        self._clear_collection("auditProposals")
 
         self.base_time = datetime.datetime(2026, 8, 7, 10, 0, 0, tzinfo=self.utc)
         self.earlier_time = datetime.datetime(2026, 8, 7, 9, 0, 0, tzinfo=self.utc)

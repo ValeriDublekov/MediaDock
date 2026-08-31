@@ -286,7 +286,7 @@ class FirestoreProposalApplicationStoreIntegrationTests(unittest.TestCase):
         self.assertEqual(stored_proposal["status"], "applied")
         self.assertIsNone(stored_proposal["leaseOwner"])
 
-    def test_stale_occurrence_causes_no_catalog_or_status_mutation(self) -> None:
+    def test_stale_occurrence_fails_proposal_without_catalog_mutation(self) -> None:
         store, plan, lease = self._seed_ready_application()
         source_ref = self.db.collection("titles").document("source-title")
         occurrence_ref = source_ref.collection("occurrences").document("occurrence-1")
@@ -303,8 +303,13 @@ class FirestoreProposalApplicationStoreIntegrationTests(unittest.TestCase):
             self.db.collection("titles").document(plan.target_title_id).get().exists
         )
         stored_proposal = self.db.collection("auditProposals").document("proposal-1").get().to_dict()
-        self.assertEqual(stored_proposal["status"], "applying")
-        self.assertEqual(stored_proposal["leaseOwner"], lease.lease_owner)
+        self.assertEqual(stored_proposal["status"], "failed")
+        self.assertIsNone(stored_proposal["leaseOwner"])
+        self.assertIsNone(stored_proposal["leasedUntil"])
+        self.assertEqual(stored_proposal["failureCode"], "stale")
+        self.assertFalse(
+            self.db.collection("proposalApplicationLeases").document("source-title").get().exists
+        )
 
     def test_retried_commit_is_idempotent(self) -> None:
         store, plan, lease = self._seed_ready_application()

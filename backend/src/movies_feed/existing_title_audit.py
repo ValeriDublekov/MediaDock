@@ -614,14 +614,14 @@ class ExistingTitleAuditService:
                             status="pending",
                             action_kind="repair" if target is not None else "review_only",
                             target=target,
+                            source_title_fingerprint=ApplicationSourceTitleFingerprint.from_title(
+                                title_record
+                            ),
+                            occurrence_fingerprints={
+                                occ_id: ApplicationOccurrenceFingerprint.from_occurrence(occurrence)
+                                for occ_id, occurrence in occurrence_chunk
+                            },
                         )
-                        prop.source_title_fingerprint = ApplicationSourceTitleFingerprint.from_title(
-                            title_record
-                        )
-                        prop.occurrence_fingerprints = {
-                            occ_id: ApplicationOccurrenceFingerprint.from_occurrence(occurrence)
-                            for occ_id, occurrence in occurrence_chunk
-                        }
                         stats["proposals"] += 1
                         if self._on_proposal_created:
                             self._on_proposal_created(proposal_id)

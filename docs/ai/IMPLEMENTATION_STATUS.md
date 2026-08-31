@@ -3,8 +3,8 @@
 ## Current Milestone
 
 `partial` - Checkpoint F release preparation is in progress. Checkpoints A-E
-are implemented; production proposal application remains disabled until the
-F2-F5 operations, workflow, automated, and staging gates pass.
+and the guarded manual workflow are implemented; production proposal
+application remains disabled until the F4-F5 automated and staging gates pass.
 
 ## Done
 
@@ -20,18 +20,21 @@ F2-F5 operations, workflow, automated, and staging gates pass.
 - `done` - Proposal planning is side-effect free; dry-run acquires no lease and
 	performs no writes. Live Firestore application uses a per-source lease and
 	one transaction for revalidation, occurrence movement, title updates, and
-	final proposal status.
+	final proposal status. Commit-time stale and failed outcomes release the
+	lease and persist a sanitized terminal failure state.
 - `done` - Scanner `mode=all` runs RSS, audit, and reparse only. It does not
 	invoke proposal application.
-- `done` - Firestore rules distinguish readers from admins and CI uses explicit
-	emulator project IDs and locked backend dependencies.
+- `done` - Firestore rules keep scanner settings server-managed, permit only
+	validated admin manual-mapping writes, and CI uses explicit emulator project
+	IDs and locked backend dependencies.
+- `done` - The manual scanner workflow exposes only one explicit proposal per
+	dispatch and requires exact backup confirmation plus the deployment enable
+	gate. Scheduled runs and `mode=all` cannot apply proposals.
 
 ## Partial
 
-- `partial` - Checkpoint F documentation and operational instructions are being
-	aligned with the implemented contracts.
-- `partial` - Explicit single-proposal application exists in the backend, but
-	production workflow exposure remains gated by F3 and the final release checks.
+- `partial` - Checkpoint F awaits the complete automated and staging release
+	gates.
 
 ## Blockers
 
@@ -53,10 +56,8 @@ F2-F5 operations, workflow, automated, and staging gates pass.
 ## Current Release Gate
 
 Complete Checkpoint F in
-`docs/backend-refactoring-plan/06_CHECKPOINT_F_RELEASE.md`: operations and
-recovery documentation (F2), guarded manual workflow exposure for one explicit
-proposal (F3), the complete automated gate (F4), and staging plus controlled
-production verification (F5).
+`docs/backend-refactoring-plan/06_CHECKPOINT_F_RELEASE.md`: the complete
+automated gate (F4), then staging and controlled production verification (F5).
 
 ## Update Rules
 

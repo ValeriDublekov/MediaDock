@@ -7,12 +7,8 @@ import React, { useState, useEffect } from 'react';
 import { GlobalSettings, DEFAULT_SETTINGS, RssFeedConfig } from '../domain/settings';
 import { firestoreSettingsAdapter } from '../adapters/firestoreSettingsAdapter';
 import {
-  Save,
-  RotateCcw,
   Plus,
   Trash2,
-  Check,
-  AlertTriangle,
   Loader2,
   Globe,
   Tag,
@@ -24,8 +20,6 @@ import {
 export const SettingsView: React.FC = () => {
   const [settings, setSettings] = useState<GlobalSettings | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [isSaving, setIsSaving] = useState<boolean>(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Input states for adding items
   const [newFeedName, setNewFeedName] = useState('');
@@ -49,29 +43,6 @@ export const SettingsView: React.FC = () => {
     }
     loadSettings();
   }, []);
-
-  const handleSave = async () => {
-    if (!settings) return;
-    setIsSaving(true);
-    setMessage(null);
-    try {
-      await firestoreSettingsAdapter.saveSettings(settings);
-      setMessage({ type: 'success', text: 'Настройките бяха запазени успешно!' });
-      setTimeout(() => setMessage(null), 5000);
-    } catch (err) {
-      console.error('Error saving settings:', err);
-      setMessage({ type: 'error', text: 'Грешка при запис на настройките в Firestore. Моля опитайте отново.' });
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleResetDefaults = () => {
-    if (window.confirm('Сигурни ли сте, че искате да върнете фабричните настройки?')) {
-      setSettings({ ...DEFAULT_SETTINGS });
-      setMessage({ type: 'success', text: 'Настройките са нулирани до фабричните стойности. Не забравяйте да натиснете "Запази Настройките".' });
-    }
-  };
 
   const handleAddFeed = (e: React.FormEvent) => {
     e.preventDefault();
@@ -167,40 +138,18 @@ export const SettingsView: React.FC = () => {
 
   return (
     <div className="space-y-8" data-testid="settings-panel">
-      {/* Settings Notification Banner */}
-      {message && (
-        <div
-          data-testid="settings-alert-message"
-          className={`p-4 rounded-xl text-sm border flex items-center justify-between gap-3 animate-in fade-in duration-200 ${
-            message.type === 'success'
-              ? 'bg-emerald-950/60 border-emerald-800 text-emerald-200'
-              : 'bg-red-950/60 border-red-800 text-red-200'
-          }`}
-        >
-          <div className="flex items-center gap-2.5">
-            {message.type === 'success' ? (
-              <Check className="w-5 h-5 text-emerald-400 shrink-0" />
-            ) : (
-              <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
-            )}
-            <span className="font-medium">{message.text}</span>
-          </div>
-        </div>
-      )}
-
       {/* Main Settings Header Notice */}
       <div className="bg-neutral-950 border border-neutral-800/80 p-4 rounded-xl flex items-start gap-3 text-xs text-neutral-400">
         <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
         <div className="space-y-1">
-          <p className="font-semibold text-neutral-200">Бележка за синхронизацията:</p>
+          <p className="font-semibold text-neutral-200">Настройки само за преглед</p>
           <p>
-            Промените в <strong>RSS фийдовете</strong>, <strong>филтрирането на жанрове</strong> и <strong>филтрирането на държави</strong> се прилагат директно по време на следващото сканиране на RSS емисиите.
-            Промените в <strong>минималните рейтинги</strong> се ползват като стойности по подразбиране при зареждането на каталога в браузъра.
+            Настройките на scanner-а се управляват от защитена server-side конфигурация. Browser записите са изключени.
           </p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+      <fieldset disabled className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start [&_button]:cursor-not-allowed [&_input]:cursor-not-allowed">
         {/* Left column: RSS Feeds Management (span 2) */}
         <div className="lg:col-span-2 space-y-6">
           {/* RSS Feeds Panel */}
@@ -503,40 +452,7 @@ export const SettingsView: React.FC = () => {
             </form>
           </div>
         </div>
-      </div>
-
-      {/* Footer sticky-style save actions */}
-      <div className="flex items-center justify-between pt-6 border-t border-neutral-800">
-        <button
-          type="button"
-          onClick={handleResetDefaults}
-          data-testid="reset-defaults-settings-btn"
-          className="inline-flex items-center gap-2 min-h-[40px] px-4 py-2 text-sm font-semibold text-neutral-400 hover:text-neutral-200 border border-neutral-800 hover:border-neutral-700 rounded-lg transition-colors cursor-pointer"
-        >
-          <RotateCcw className="w-4 h-4" />
-          Фабрични Настройки
-        </button>
-
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={isSaving}
-          data-testid="save-settings-btn"
-          className="inline-flex items-center gap-2 min-h-[44px] px-6 py-2.5 text-sm font-semibold text-neutral-950 bg-amber-500 hover:bg-amber-400 rounded-lg transition-colors shadow-sm disabled:opacity-50 cursor-pointer"
-        >
-          {isSaving ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin text-neutral-950" />
-              <span>Запазване...</span>
-            </>
-          ) : (
-            <>
-              <Save className="w-4 h-4" />
-              <span>Запази Настройките</span>
-            </>
-          )}
-        </button>
-      </div>
+      </fieldset>
     </div>
   );
 };

@@ -83,13 +83,14 @@ and permits later user-data write adapters without coupling presentation code.
 | Anonymous browser | Authentication flow only; no Firestore data access |
 | Authenticated non-allowlisted user | No catalog access |
 | Allowlisted reader | Read catalog, parse logs, and settings; write only own user preferences |
-| Allowlisted admin | Reader access plus validated scanner-settings and manual-mapping writes |
+| Allowlisted admin | Reader access plus validated manual-mapping writes; scanner settings remain server-managed |
 | Future owner client | Validated CRUD only in own `users/{uid}` namespace |
 | Scanner service account | Catalog/cache/scan writes through Admin SDK |
 
-Do not introduce blanket authenticated writes. Admin editing uses the explicit
-`allowlist/{uid}.role == "admin"` document field, dedicated validated paths, and
-rules tests; it does not reuse owner-data permissions. A missing role remains a
+Do not introduce blanket authenticated writes. Manual-mapping administration
+uses the explicit `allowlist/{uid}.role == "admin"` document field and a
+dedicated validated path. Scanner settings are read-only in the browser until
+a server-side control plane is available. A missing role remains a
 backward-compatible reader, while unknown roles are denied access.
 
 ## Deployment Topology

@@ -175,10 +175,10 @@ rather than reconstruction.
 	`--feed-file` RSS option.
 - CI and local backend checks install the reviewed `backend/requirements.lock`
 	set before the editable package.
-- Allowlisted readers are read-only for scanner settings and manual mappings;
-	only explicit allowlisted admins can write validated documents, with actor
-	UIDs bound in both rules and adapters. Browser builds contain no scanner
-	credentials or dispatch token.
+- Scanner settings are read-only in the browser and remain server-managed;
+	explicit allowlisted admins can write only validated manual mappings, with
+	actor UIDs bound in both rules and adapters. Browser builds contain no
+	scanner credentials or dispatch token.
 
 ## Current Risks and Deferred Work
 
