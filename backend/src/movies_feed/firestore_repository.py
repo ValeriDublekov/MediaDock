@@ -6,10 +6,15 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from google.cloud.firestore_v1.field_path import FieldPath
 
-from .match_policy import broadcast_range_from_dict, effective_source_type
-from .models import (
+from .audit_proposal import (
     AuditProposal,
     InvalidStatusTransitionError,
+    VALID_AUDIT_PROPOSAL_STATUSES,
+    audit_proposal_from_dict,
+    is_valid_proposal_status_transition,
+)
+from .match_policy import broadcast_range_from_dict, effective_source_type
+from .models import (
     ManualMapping,
     OmdbCacheEntry,
     Occurrence,
@@ -20,9 +25,6 @@ from .models import (
     ScanRun,
     SourceContext,
     Title,
-    VALID_AUDIT_PROPOSAL_STATUSES,
-    audit_proposal_from_dict,
-    is_valid_proposal_status_transition,
 )
 from .repository import (
     AuditProposalRepository,
@@ -631,6 +633,29 @@ class FirestoreAuditProposalRepository(AuditProposalRepository):
 
         transaction = self.db.transaction()
         _upsert_tx(transaction)
+
+    def refresh_from_audit(self, proposal: AuditProposal) -> None:
+        doc_ref = self.collection_ref.document(proposal.id)
+
+        @firestore.transactional
+        def _refresh_tx(transaction):
+            snapshot = doc_ref.get(transaction=transaction)
+            if not snapshot.exists:
+                transaction.set(doc_ref, copy.deepcopy(proposal).to_dict())
+                return
+
+            existing = audit_proposal_from_dict(snapshot.to_dict() or {}, doc_id=snapshot.id)
+            if existing.status != "pending":
+                return
+
+            refreshed = copy.deepcopy(proposal)
+            refreshed.created_at = existing.created_at
+            refreshed.status = existing.status
+            refreshed.leased_until = existing.leased_until
+            transaction.set(doc_ref, refreshed.to_dict())
+
+        transaction = self.db.transaction()
+        _refresh_tx(transaction)
 
     def list_by_status(self, status: str, limit: int = 100) -> List[AuditProposal]:
         if limit <= 0:

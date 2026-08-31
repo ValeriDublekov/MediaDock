@@ -188,3 +188,48 @@ def get_audit_proposal_id(
     canonical_raw = f"v2:proposal:{normalized_source_title_id}:{cleaned_cluster}:{normalized_policy_version}"
     return _sha256_id(canonical_raw)
 
+
+def get_audit_proposal_id_v3(
+    source_title_id: str,
+    source_feed_id: str,
+    raw_title: str,
+    occurrence_ids: Sequence[str],
+    policy_version: str,
+) -> str:
+    """Generates a deterministic v3 ID from source and occurrence identity."""
+    normalized_source_title_id = source_title_id.strip() if isinstance(source_title_id, str) else ""
+    if not normalized_source_title_id:
+        raise ValueError("source_title_id is required for a v3 audit proposal ID")
+
+    normalized_source_feed_id = source_feed_id.strip() if isinstance(source_feed_id, str) else ""
+    if not normalized_source_feed_id:
+        raise ValueError("source_feed_id is required for a v3 audit proposal ID")
+
+    normalized_raw_title = normalize_title(raw_title) if isinstance(raw_title, str) else ""
+    if not normalized_raw_title:
+        raise ValueError("raw_title is required for a v3 audit proposal ID")
+
+    if isinstance(occurrence_ids, str):
+        raise ValueError("occurrence_ids are required for a v3 audit proposal ID")
+    try:
+        normalized_occurrence_ids = []
+        for occurrence_id in occurrence_ids:
+            if not isinstance(occurrence_id, str) or not occurrence_id.strip():
+                raise ValueError("occurrence_ids must contain non-empty IDs for a v3 audit proposal ID")
+            normalized_occurrence_ids.append(occurrence_id.strip())
+    except TypeError as exc:
+        raise ValueError("occurrence_ids are required for a v3 audit proposal ID") from exc
+    if not normalized_occurrence_ids:
+        raise ValueError("occurrence_ids are required for a v3 audit proposal ID")
+
+    normalized_policy_version = policy_version.strip() if isinstance(policy_version, str) else ""
+    if not normalized_policy_version:
+        raise ValueError("policy_version is required for a v3 audit proposal ID")
+
+    canonical_raw = (
+        f"v3:proposal:{normalized_source_title_id}:{normalized_source_feed_id}:"
+        f"{normalized_raw_title}:{','.join(sorted(normalized_occurrence_ids))}:"
+        f"{normalized_policy_version}"
+    )
+    return _sha256_id(canonical_raw)
+

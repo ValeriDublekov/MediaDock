@@ -42,19 +42,23 @@ class TestWorkflowSecurity(unittest.TestCase):
         self.assertIn("SCANNER_FORCE_DAYS: ${{ inputs.force_days }}", self.scanner_workflow)
         self.assertIn("SCANNER_AUDIT_DAYS: ${{ inputs.audit_days }}", self.scanner_workflow)
         self.assertIn("SCANNER_MODE: ${{ inputs.mode }}", self.scanner_workflow)
-        self.assertIn("SCANNER_PROPOSAL_ID: ${{ inputs.proposal_id }}", self.scanner_workflow)
-        self.assertIn("SCANNER_REJECT_PROPOSAL: ${{ inputs.reject_proposal }}", self.scanner_workflow)
         for block in _shell_run_blocks(self.scanner_workflow):
             self.assertNotIn("${{", block)
 
     def test_scanner_validates_inputs_and_uses_a_shell_array(self) -> None:
         self.assertIn("[[ \"$force_days\" =~ ^[0-9]+$ ]]", self.scanner_workflow)
         self.assertIn("[[ \"$audit_days\" =~ ^[0-9]+$ ]]", self.scanner_workflow)
-        self.assertIn("[[ \"$proposal_id\" =~ ^[a-zA-Z0-9_-]+$ ]]", self.scanner_workflow)
         self.assertIn("case \"$mode\"", self.scanner_workflow)
         self.assertIn("scanner_args=(", self.scanner_workflow)
         self.assertIn('python -m movies_feed.cli "${scanner_args[@]}"', self.scanner_workflow)
         self.assertNotIn("EXTRA_ARGS", self.scanner_workflow)
+
+    def test_scanner_workflow_has_no_proposal_application_inputs(self) -> None:
+        self.assertNotIn("apply-proposals", self.scanner_workflow)
+        self.assertNotIn("proposal_id", self.scanner_workflow)
+        self.assertNotIn("reject_proposal", self.scanner_workflow)
+        self.assertNotIn("--proposal-id", self.scanner_workflow)
+        self.assertNotIn("--reject-proposal", self.scanner_workflow)
 
     def test_scanner_actions_are_pinned_to_commits(self) -> None:
         self.assertRegex(

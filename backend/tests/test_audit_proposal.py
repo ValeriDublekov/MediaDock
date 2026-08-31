@@ -1,5 +1,7 @@
 import datetime
+from dataclasses import FrozenInstanceError
 import unittest
+from typing import Optional
 
 try:
     from . import _test_stubs
@@ -8,6 +10,7 @@ except ImportError:
 
 from movies_feed import (
     AuditProposal,
+    BroadcastRange,
     FakeAuditProposalRepository,
     InvalidStatusTransitionError,
     audit_proposal_from_dict,
@@ -16,6 +19,8 @@ from movies_feed import (
     measure_evidence_size_bytes,
     redact_secrets,
 )
+from movies_feed.audit_proposal import ProposalSourceSnapshot, ProposalTarget
+from movies_feed.ids import get_audit_proposal_id_v3
 
 from unittest.mock import MagicMock
 import sys
@@ -158,6 +163,9 @@ class AuditProposalTests(unittest.TestCase):
         created_at=None,
         updated_at=None,
         status: str = "pending",
+        schema_version: int = 2,
+        action_kind: str = "review_only",
+        target: Optional[ProposalTarget] = None,
     ) -> AuditProposal:
         return AuditProposal(
             id=proposal_id,
@@ -172,6 +180,9 @@ class AuditProposalTests(unittest.TestCase):
             created_at=created_at or self.now,
             updated_at=updated_at or self.now,
             status=status,
+            schema_version=schema_version,
+            action_kind=action_kind,
+            target=target,
         )
 
     # 1. Deterministic ID Generation Tests
@@ -197,6 +208,69 @@ class AuditProposalTests(unittest.TestCase):
             get_audit_proposal_id("", cluster, "v1")
         with self.assertRaises(ValueError):
             get_audit_proposal_id(source_id, [], "v1")
+
+    def test_v3_proposal_id_generation(self) -> None:
+        source_title_id = "tt0133093"
+        source_feed_id = "feed-main"
+        raw_title = "  The   Matrix 1999 1080p  "
+        occurrence_ids = ["occ-2", "occ-1"]
+
+        proposal_id = get_audit_proposal_id_v3(
+            source_title_id,
+            source_feed_id,
+            raw_title,
+            occurrence_ids,
+            "policy-v1",
+        )
+        reordered_id = get_audit_proposal_id_v3(
+            source_title_id,
+            source_feed_id,
+            raw_title.upper(),
+            list(reversed(occurrence_ids)),
+            "policy-v1",
+        )
+        self.assertEqual(proposal_id, reordered_id)
+        self.assertNotEqual(
+            proposal_id,
+            get_audit_proposal_id_v3(
+                source_title_id,
+                "feed-secondary",
+                raw_title,
+                occurrence_ids,
+                "policy-v1",
+            ),
+        )
+        self.assertNotEqual(
+            proposal_id,
+            get_audit_proposal_id_v3(
+                source_title_id,
+                source_feed_id,
+                raw_title,
+                ["occ-1", "occ-3"],
+                "policy-v1",
+            ),
+        )
+        self.assertNotEqual(
+            proposal_id,
+            get_audit_proposal_id_v3(
+                source_title_id,
+                source_feed_id,
+                raw_title,
+                occurrence_ids,
+                "policy-v2",
+            ),
+        )
+        self.assertEqual(len(proposal_id), 64)
+
+        for args in (
+            ("", source_feed_id, raw_title, occurrence_ids, "policy-v1"),
+            (source_title_id, "", raw_title, occurrence_ids, "policy-v1"),
+            (source_title_id, source_feed_id, "", occurrence_ids, "policy-v1"),
+            (source_title_id, source_feed_id, raw_title, [], "policy-v1"),
+            (source_title_id, source_feed_id, raw_title, occurrence_ids, ""),
+        ):
+            with self.assertRaises(ValueError):
+                get_audit_proposal_id_v3(*args)
 
     # 2. Secret Redaction Tests
     def test_secret_redaction(self) -> None:
@@ -258,6 +332,9 @@ class AuditProposalTests(unittest.TestCase):
         self.assertEqual(d["sourceTitleId"], "tt0133093")
         self.assertEqual(d["status"], "pending")
         self.assertEqual(d["confidence"], 0.95)
+        self.assertEqual(d["schemaVersion"], 2)
+        self.assertEqual(d["actionKind"], "review_only")
+        self.assertNotIn("target", d)
 
         restored = audit_proposal_from_dict(d, doc_id="prop-123")
         self.assertEqual(restored.id, proposal.id)
@@ -272,6 +349,113 @@ class AuditProposalTests(unittest.TestCase):
         self.assertEqual(restored.created_at, proposal.created_at)
         self.assertEqual(restored.updated_at, proposal.updated_at)
         self.assertEqual(restored.status, proposal.status)
+        self.assertEqual(restored.schema_version, proposal.schema_version)
+        self.assertEqual(restored.action_kind, proposal.action_kind)
+        self.assertEqual(restored.target, proposal.target)
+
+    def test_repair_proposal_round_trip(self) -> None:
+        target = ProposalTarget(
+            title="The Matrix",
+            year=1999,
+            imdb_id="tt0133093",
+            media_type="movie",
+        )
+        proposal = self.make_proposal(action_kind="repair", target=target)
+
+        serialized = proposal.to_dict()
+        self.assertEqual(proposal.schema_version, 2)
+        self.assertEqual(serialized["schemaVersion"], 2)
+        self.assertEqual(serialized["actionKind"], "repair")
+        self.assertEqual(serialized["target"], target.to_dict())
+
+        restored = audit_proposal_from_dict(serialized)
+        self.assertEqual(restored.schema_version, 2)
+        self.assertEqual(restored.action_kind, "repair")
+        self.assertEqual(restored.target, target)
+
+    def test_action_kind_and_target_validation(self) -> None:
+        target = ProposalTarget(title="The Matrix", media_type="movie")
+
+        with self.assertRaises(ValueError):
+            self.make_proposal(action_kind="unknown")
+        with self.assertRaises(ValueError):
+            self.make_proposal(action_kind="repair")
+        with self.assertRaises(ValueError):
+            self.make_proposal(target=target)
+        with self.assertRaises(ValueError):
+            self.make_proposal(schema_version=1, action_kind="repair", target=target)
+
+    def test_legacy_proposal_is_review_only_without_target(self) -> None:
+        legacy_data = self.make_proposal().to_dict()
+        legacy_data.pop("schemaVersion")
+        legacy_data.pop("actionKind")
+        legacy_data["actionKind"] = "repair"
+        legacy_data["target"] = {"title": "Incomplete legacy target"}
+
+        restored = audit_proposal_from_dict(legacy_data)
+
+        self.assertEqual(restored.schema_version, 1)
+        self.assertEqual(restored.action_kind, "review_only")
+        self.assertIsNone(restored.target)
+        self.assertEqual(restored.proposed_metadata["title"], "The Matrix")
+
+        serialized = restored.to_dict()
+        self.assertEqual(serialized["schemaVersion"], 1)
+        self.assertEqual(serialized["actionKind"], "review_only")
+        self.assertNotIn("target", serialized)
+
+    def test_proposal_source_snapshot_round_trip(self) -> None:
+        snapshot = ProposalSourceSnapshot(
+            title="The Matrix",
+            year=1999,
+            imdb_id="TT0133093",
+            media_type="MOVIE",
+            source_type="MOVIE",
+            content_kind="DOCUMENTARY",
+            broadcast_range=BroadcastRange(start_year=1999, end_year=2000, raw="1999-2000"),
+        )
+
+        serialized = snapshot.to_dict()
+        self.assertEqual(serialized["mediaType"], "movie")
+        self.assertEqual(serialized["imdbId"], "tt0133093")
+        self.assertEqual(serialized["sourceType"], "movie")
+        self.assertEqual(serialized["contentKind"], "documentary")
+        self.assertEqual(serialized["broadcastRange"]["startYear"], 1999)
+
+        restored = ProposalSourceSnapshot.from_dict(serialized)
+        self.assertEqual(restored, snapshot)
+        with self.assertRaises(FrozenInstanceError):
+            snapshot.title = "Changed"
+
+    def test_proposal_target_round_trip_and_validation(self) -> None:
+        target = ProposalTarget(
+            title="The Matrix",
+            year=1999,
+            imdb_id="tt0133093",
+            media_type="movie",
+        )
+
+        serialized = target.to_dict()
+        self.assertEqual(serialized, {
+            "title": "The Matrix",
+            "year": 1999,
+            "mediaType": "movie",
+            "imdbId": "tt0133093",
+        })
+        restored = ProposalTarget.from_dict(serialized)
+        self.assertEqual(restored, target)
+
+        with self.assertRaises((TypeError, ValueError)):
+            ProposalTarget(title="The Matrix")
+        for kwargs in (
+            {"title": "", "media_type": "movie"},
+            {"title": "The Matrix", "media_type": "documentary"},
+            {"title": "The Matrix", "media_type": "movie", "imdb_id": "not-an-imdb-id"},
+            {"title": "The Matrix", "media_type": "movie", "year": 1879},
+            {"title": "The Matrix", "media_type": "movie", "year": 2101},
+        ):
+            with self.assertRaises(ValueError):
+                ProposalTarget(**kwargs)
 
     # 6. Status Transition State Machine Tests
     def test_status_transitions(self) -> None:
@@ -355,6 +539,54 @@ class AuditProposalTests(unittest.TestCase):
         self.assertIsNone(repo.get("p1"))
         self.assertEqual(len(repo.list_all()), 1)
 
+    def test_fake_audit_refresh_preserves_pending_and_decisions(self) -> None:
+        repo = FakeAuditProposalRepository()
+        pending = self.make_proposal(
+            proposal_id="refresh-pending",
+            created_at=self.earlier,
+            updated_at=self.earlier,
+            evidence={"version": 1},
+        )
+        repo.upsert(pending)
+
+        refreshed_pending = self.make_proposal(
+            proposal_id=pending.id,
+            created_at=self.later,
+            updated_at=self.later,
+            evidence={"version": 2},
+            confidence=0.8,
+        )
+        repo.refresh_from_audit(refreshed_pending)
+
+        stored_pending = repo.get(pending.id)
+        self.assertEqual(stored_pending.created_at, self.earlier)
+        self.assertEqual(stored_pending.updated_at, self.later)
+        self.assertEqual(stored_pending.evidence, {"version": 2})
+        self.assertEqual(stored_pending.confidence, 0.8)
+
+        for status in ("approved", "applying", "applied", "rejected"):
+            with self.subTest(status=status):
+                existing = self.make_proposal(
+                    proposal_id=f"refresh-{status}",
+                    status=status,
+                    created_at=self.earlier,
+                    updated_at=self.earlier,
+                    evidence={"operator": "keep"},
+                )
+                if status == "applying":
+                    existing.leased_until = self.later
+                repo.upsert(existing)
+
+                repo.refresh_from_audit(self.make_proposal(
+                    proposal_id=existing.id,
+                    status="pending",
+                    created_at=self.later,
+                    updated_at=self.later,
+                    evidence={"operator": "replace"},
+                ))
+
+                self.assertEqual(repo.get(existing.id), existing)
+
     # 8. FirestoreAuditProposalRepository Parity Tests
     @unittest.skipUnless(HAVE_FIRESTORE, "firebase_admin/firestore not installed")
     def test_firestore_audit_proposal_repository_parity(self) -> None:
@@ -402,7 +634,37 @@ class AuditProposalTests(unittest.TestCase):
         with self.assertRaises(InvalidStatusTransitionError):
             repo.upsert(p1_invalid)
 
+        pending_refresh = self.make_proposal(
+            proposal_id="fp-refresh-pending",
+            created_at=self.earlier,
+            updated_at=self.earlier,
+            evidence={"version": 1},
+        )
+        repo.upsert(pending_refresh)
+        repo.refresh_from_audit(self.make_proposal(
+            proposal_id=pending_refresh.id,
+            created_at=self.later,
+            updated_at=self.later,
+            evidence={"version": 2},
+        ))
+        refreshed_pending = repo.get(pending_refresh.id)
+        self.assertEqual(refreshed_pending.created_at, self.earlier)
+        self.assertEqual(refreshed_pending.updated_at, self.later)
+        self.assertEqual(refreshed_pending.evidence, {"version": 2})
+
+        preserved_approved = repo.get("fp2")
+        repo.refresh_from_audit(self.make_proposal(
+            proposal_id="fp2",
+            source_title_id="t2",
+            status="pending",
+            created_at=self.later,
+            updated_at=self.later,
+            evidence={"operator": "replace"},
+        ))
+        self.assertEqual(repo.get("fp2"), preserved_approved)
+
         # Delete
+        repo.delete(pending_refresh.id)
         repo.delete("fp1")
         self.assertIsNone(repo.get("fp1"))
         self.assertEqual(len(repo.list_all()), 1)

@@ -861,4 +861,69 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
         repo.delete(proposal_id)
         self.assertIsNone(repo.get(proposal_id))
 
+    def test_audit_proposal_refresh_preserves_pending_and_decisions(self) -> None:
+        repo = FirestoreAuditProposalRepository(self.db)
+        pending = AuditProposal(
+            id="prop-refresh-pending",
+            source_title_id="tt-refresh",
+            occurrence_ids=["occ-1"],
+            raw_title_cluster=["Refresh Film 2026"],
+            current_metadata={"title": "Refresh Film"},
+            proposed_metadata={},
+            evidence={"version": 1},
+            confidence=0.8,
+            policy_version="v1",
+            created_at=self.earlier_time,
+            updated_at=self.earlier_time,
+            status="pending",
+        )
+        repo.upsert(pending)
+        refreshed_pending = AuditProposal(
+            **{
+                **pending.__dict__,
+                "created_at": self.later_time,
+                "updated_at": self.later_time,
+                "evidence": {"version": 2},
+            }
+        )
+        repo.refresh_from_audit(refreshed_pending)
+
+        stored_pending = repo.get(pending.id)
+        self.assertEqual(stored_pending.created_at.replace(tzinfo=self.utc), self.earlier_time)
+        self.assertEqual(stored_pending.updated_at.replace(tzinfo=self.utc), self.later_time)
+        self.assertEqual(stored_pending.evidence, {"version": 2})
+
+        for status in ("approved", "applying", "applied", "rejected"):
+            with self.subTest(status=status):
+                existing = AuditProposal(
+                    **{
+                        **pending.__dict__,
+                        "id": f"prop-refresh-{status}",
+                        "status": status,
+                        "created_at": self.earlier_time,
+                        "updated_at": self.earlier_time,
+                        "evidence": {"operator": "keep"},
+                        "leased_until": self.later_time if status == "applying" else None,
+                    }
+                )
+                repo.upsert(existing)
+                incoming = AuditProposal(
+                    **{
+                        **existing.__dict__,
+                        "status": "pending",
+                        "created_at": self.later_time,
+                        "updated_at": self.later_time,
+                        "evidence": {"operator": "replace"},
+                        "leased_until": None,
+                    }
+                )
+                repo.refresh_from_audit(incoming)
+
+                stored = repo.get(existing.id)
+                self.assertEqual(stored.status, status)
+                self.assertEqual(stored.created_at.replace(tzinfo=self.utc), self.earlier_time)
+                self.assertEqual(stored.updated_at.replace(tzinfo=self.utc), self.earlier_time)
+                self.assertEqual(stored.evidence, {"operator": "keep"})
+                self.assertEqual(stored.leased_until, existing.leased_until)
+
 

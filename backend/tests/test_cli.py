@@ -14,6 +14,7 @@ from movies_feed.cli import (
     EXIT_PARTIAL,
     EXIT_SUCCESS,
     EXIT_CONFIGURATION_ERROR,
+    PROPOSAL_APPLICATION_ENABLE_ENV,
     _sanitize_diagnostic,
     exit_code_for_status,
     main,
@@ -193,6 +194,80 @@ class TestCliConfiguration(unittest.TestCase):
                 EXIT_CONFIGURATION_ERROR,
             )
 
+    def test_apply_proposals_requires_an_explicit_proposal_id(self) -> None:
+        with self.assertRaisesRegex(ConfigurationError, "--proposal-id"):
+            validate_runtime_configuration(
+                mode="apply-proposals",
+                force_days="0",
+                audit_days="0",
+                dry_run=True,
+                fake_repos=True,
+                environment={},
+            )
+
+    def test_reject_proposal_requires_an_explicit_proposal_id(self) -> None:
+        with self.assertRaisesRegex(ConfigurationError, "--proposal-id"):
+            validate_runtime_configuration(
+                mode="rss",
+                force_days="0",
+                audit_days="0",
+                reject_proposal=True,
+                fake_repos=True,
+                environment={"OMDB_API_KEY": "configured"},
+            )
+
+    def test_proposal_arguments_are_restricted_to_apply_mode(self) -> None:
+        for mode in ("rss", "recheck-existing", "reparse-unfound", "all"):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ConfigurationError, "supported only"):
+                validate_runtime_configuration(
+                    mode=mode,
+                    force_days="0",
+                    audit_days="0",
+                    proposal_id="prop-123",
+                    fake_repos=True,
+                    environment={"OMDB_API_KEY": "configured", "GEMINI_API_KEY": "configured"},
+                )
+
+    def test_non_dry_run_apply_requires_the_production_gate(self) -> None:
+        with self.assertRaisesRegex(ConfigurationError, "non-dry-run proposal application is disabled"):
+            validate_runtime_configuration(
+                mode="apply-proposals",
+                force_days="0",
+                audit_days="0",
+                proposal_id="prop-123",
+                fake_repos=True,
+                environment={},
+            )
+
+    def test_explicit_proposal_dry_run_does_not_require_the_production_gate(self) -> None:
+        self.assertEqual(
+            validate_runtime_configuration(
+                mode="apply-proposals",
+                force_days="0",
+                audit_days="0",
+                dry_run=True,
+                proposal_id="prop-123",
+                fake_repos=True,
+                environment={},
+            ),
+            (0, 0),
+        )
+
+    def test_main_blocks_disabled_apply_before_scanner_construction(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "movies_feed.cli.load_config", return_value={}
+        ), patch("movies_feed.cli.ScannerService") as scanner_type:
+            self.assertEqual(
+                main([
+                    "--fake-repos",
+                    "--mode", "apply-proposals",
+                    "--proposal-id", "prop-123",
+                ]),
+                EXIT_CONFIGURATION_ERROR,
+            )
+
+        scanner_type.assert_not_called()
+
     def test_main_accepts_apply_proposals(self) -> None:
         run = ScanRun(
             started_at=datetime.datetime.now(datetime.timezone.utc),
@@ -200,7 +275,11 @@ class TestCliConfiguration(unittest.TestCase):
             status="succeeded",
             trigger="local",
         )
-        with patch.dict(os.environ, {}, clear=True), patch(
+        with patch.dict(
+            os.environ,
+            {PROPOSAL_APPLICATION_ENABLE_ENV: "true"},
+            clear=True,
+        ), patch(
             "movies_feed.cli.load_config", return_value={}
         ), patch("movies_feed.cli.ScannerService") as scanner_type:
             scanner_type.return_value.run.return_value = run
@@ -218,6 +297,28 @@ class TestCliConfiguration(unittest.TestCase):
         self.assertEqual(scanner_config.mode, "apply-proposals")
         self.assertEqual(scanner_config.proposal_id, "prop-123")
         self.assertTrue(scanner_config.reject_proposal)
+
+    def test_all_mode_skips_proposal_application(self) -> None:
+        scanner = ScannerService(
+            config=ScannerConfig(mode="all", rss_feeds={}),
+            omdb_client=object(),
+            title_repo=FakeTitleRepository(),
+            occurrence_repo=FakeOccurrenceRepository(),
+            cache_repo=FakeOmdbCacheRepository(),
+            run_repo=FakeScanRunRepository(),
+            parse_log_repo=FakeParseLogRepository(),
+            ai_matcher=None,
+        )
+
+        with patch.object(
+            scanner,
+            "_apply_proposals",
+            side_effect=AssertionError("all mode must not apply proposals"),
+        ):
+            run = scanner.run("all-mode-non-destructive")
+
+        self.assertEqual(run.status, "succeeded")
+        self.assertEqual(run.phase_metrics["apply_proposals"]["status"], "skipped")
 
     def test_main_passes_fixture_as_separate_scanner_input(self) -> None:
         fixture_path = "backend/tests/fixtures/movies_feed.atom"

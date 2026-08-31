@@ -124,8 +124,9 @@ Do not wait for the first cron execution.
 5. Trigger `.github/workflows/scanner.yml` manually via `workflow_dispatch` with `dry_run: true` and a bounded input set.
 6. Inspect sanitized run counters and confirm no production Firestore write occurred by comparing the datastore before and after. Do not use `titles_created: 0` or `occurrences_created: 0` as the sole proof: the current dry-run counters are simulated and may not reflect existing records.
 7. Trigger `workflow_dispatch` without dry-run mode (`dry_run: false`) only after the job's exit-code and partial-run behavior is verified.
-8. In Firebase Console, verify one `scanRuns/{run_id}` record, title documents under `titles/{id}`, occurrence documents under `titles/{id}/occurrences/{occ_id}`, and cached OMDb entries in `omdbCache`.
-9. Rerun `workflow_dispatch` once more and verify no duplicate title or occurrence documents are created due to deterministic ID merging.
+8. `mode=all` is non-destructive: it never applies proposals. Production proposal application is temporarily disabled during remediation.
+9. In Firebase Console, verify one `scanRuns/{run_id}` record, title documents under `titles/{id}`, occurrence documents under `titles/{id}/occurrences/{occ_id}`, and cached OMDb entries in `omdbCache`.
+10. Rerun `workflow_dispatch` once more and verify no duplicate title or occurrence documents are created due to deterministic ID merging.
 
 If OMDb reports a daily limit, stop repeated manual runs and verify cache behavior.
 

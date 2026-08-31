@@ -41,18 +41,25 @@ def validate_ai_batch_structure(
     """Validates raw response structure against requested integer IDs.
     
     Requires:
-    - raw_response is a list of dicts
+    - raw_response is a list of dicts or an id-keyed dict of dicts
     - exactly one result for every requested ID
     - no duplicate, missing, or unknown IDs
     - ID field must be an integer
     """
-    if not isinstance(raw_response, list):
+    if isinstance(raw_response, dict):
+        if set(raw_response.keys()) != expected_ids:
+            return None
+        entries = list(raw_response.values())
+    elif isinstance(raw_response, list):
+        entries = raw_response
+    else:
         return None
-    if len(raw_response) != len(expected_ids):
+
+    if len(entries) != len(expected_ids):
         return None
 
     by_id: Dict[int, Dict[str, Any]] = {}
-    for entry in raw_response:
+    for entry in entries:
         if not isinstance(entry, dict):
             return None
         item_id = entry.get("id")

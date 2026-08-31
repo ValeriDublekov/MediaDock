@@ -27,13 +27,19 @@ from .match_policy import (
     normalize_source_type,
     parse_broadcast_range,
 )
-from .models import (
+from .audit_proposal import (
     ALLOWED_AUDIT_PROPOSAL_TRANSITIONS,
     MAX_AUDIT_PROPOSAL_EVIDENCE_BYTES,
     VALID_AUDIT_PROPOSAL_STATUSES,
     AuditProposal,
     AuditProposalStatus,
     InvalidStatusTransitionError,
+    audit_proposal_from_dict,
+    is_valid_proposal_status_transition,
+    measure_evidence_size_bytes,
+    redact_secrets,
+)
+from .models import (
     ManualMapping,
     OmdbCacheEntry,
     Occurrence,
@@ -44,10 +50,6 @@ from .models import (
     ScanRun,
     SourceContext,
     Title,
-    audit_proposal_from_dict,
-    is_valid_proposal_status_transition,
-    measure_evidence_size_bytes,
-    redact_secrets,
 )
 from .metadata_resolver import (
     MetadataOutcome,
@@ -94,3 +96,9 @@ from .proposal_application import (
     ProposalApplicationResult,
     ProposalApplicationService,
 )
+from .proposal_application_store import (
+    FakeProposalApplicationStore,
+    ProposalApplicationStore,
+    RepositoryProposalApplicationStore,
+)
+from .firestore_proposal_application_store import FirestoreProposalApplicationStore

@@ -20,6 +20,8 @@ from .firestore_repository import (
 from .omdb_client import OmdbClient
 from .ai_matcher import AiMatcher, GeminiModelCapabilityError
 from .scanner import ScannerConfig, ScannerService
+from .firestore_proposal_application_store import FirestoreProposalApplicationStore
+from .proposal_application_store import FakeProposalApplicationStore
 from .repository import (
     FakeOccurrenceRepository,
     FakeOmdbCacheRepository,
@@ -44,6 +46,7 @@ EXIT_SUCCESS = 0
 EXIT_FAILURE = 1
 EXIT_PARTIAL = 2
 EXIT_CONFIGURATION_ERROR = EXIT_FAILURE
+PROPOSAL_APPLICATION_ENABLE_ENV = "MEDIADOCK_ENABLE_PROPOSAL_APPLICATION"
 
 
 class ConfigurationError(ValueError):
@@ -52,6 +55,10 @@ class ConfigurationError(ValueError):
 
 def _has_value(environment: Mapping[str, str], name: str) -> bool:
     return bool(environment.get(name, "").strip())
+
+
+def _proposal_application_is_enabled(environment: Mapping[str, str]) -> bool:
+    return environment.get(PROPOSAL_APPLICATION_ENABLE_ENV, "").strip().lower() == "true"
 
 
 def _parse_bounded_days(value: Any, option_name: str) -> int:
@@ -79,8 +86,11 @@ def validate_runtime_configuration(
     force_days: Any,
     audit_days: Any,
     parse_only: bool = False,
+    dry_run: bool = False,
     fake_repos: bool = False,
     feed_file: Optional[str] = None,
+    proposal_id: Optional[str] = None,
+    reject_proposal: bool = False,
     environment: Optional[Mapping[str, str]] = None,
 ) -> tuple[int, int]:
     """Validate mode, bounded inputs, and secrets without exposing secret values."""
@@ -90,10 +100,24 @@ def validate_runtime_configuration(
         raise ConfigurationError("parse-only mode is supported only with --mode rss")
     if feed_file and mode != "rss":
         raise ConfigurationError("--feed-file is supported only with --mode rss")
+    proposal_id_was_provided = proposal_id is not None
+    has_proposal_id = bool(proposal_id and proposal_id.strip())
+    if mode == "apply-proposals" and not has_proposal_id:
+        raise ConfigurationError("--proposal-id is required with --mode apply-proposals")
+    if mode != "apply-proposals" and (proposal_id_was_provided or reject_proposal):
+        raise ConfigurationError(
+            "--proposal-id and --reject-proposal are supported only with --mode apply-proposals"
+        )
 
     parsed_force_days = _parse_bounded_days(force_days, "force_days")
     parsed_audit_days = _parse_bounded_days(audit_days, "audit_days")
     env = environment if environment is not None else os.environ
+
+    if mode == "apply-proposals" and not dry_run and not _proposal_application_is_enabled(env):
+        raise ConfigurationError(
+            "non-dry-run proposal application is disabled; set "
+            f"{PROPOSAL_APPLICATION_ENABLE_ENV}=true to enable it"
+        )
 
     missing: list[str] = []
     if not fake_repos and not parse_only and not (
@@ -220,7 +244,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--fake-repos", action="store_true", help="Use in-memory repositories instead of Firestore")
     parser.add_argument("--force-days", type=str, default="0", help="Force scan entries N days back")
     parser.add_argument("--audit-days", type=str, default="0", help="Audit existing records N days back (0 = unlimited)")
-    parser.add_argument("--mode", type=str, default="rss", choices=["rss", "recheck-existing", "reparse-unfound", "apply-proposals", "all"], help="Scan mode: 'rss' (feed scan), 'recheck-existing' (AI check stored titles), 'reparse-unfound' (AI reparse unmapped titles), 'apply-proposals' (Apply approved repairs), or 'all'")
+    parser.add_argument("--mode", type=str, default="rss", choices=["rss", "recheck-existing", "reparse-unfound", "apply-proposals", "all"], help="Scan mode: 'rss' (feed scan), 'recheck-existing' (AI check stored titles), 'reparse-unfound' (AI reparse unmapped titles), 'apply-proposals' (Apply one approved repair), or 'all'")
     parser.add_argument("--feed-file", type=str, default=None, help="Read one explicit local RSS/Atom fixture instead of configured network feeds")
     parser.add_argument("--proposal-id", type=str, default=None, help="Explicit proposal ID for apply-proposals mode")
     parser.add_argument("--reject-proposal", action="store_true", help="Reject instead of applying the explicit proposal")
@@ -236,8 +260,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             force_days=args.force_days,
             audit_days=args.audit_days,
             parse_only=args.parse_only,
+            dry_run=args.dry_run,
             fake_repos=args.fake_repos,
             feed_file=args.feed_file,
+            proposal_id=args.proposal_id,
+            reject_proposal=args.reject_proposal,
         )
     except ConfigurationError as exc:
         logger.error("Configuration error: %s", _sanitize_diagnostic(exc))
@@ -312,8 +339,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "rss": "Standard RSS feed scan: Reads feeds, parses titles, queries OMDb, updates catalog.",
         "recheck-existing": "AI Audit & Repair mode: Audits existing DB titles with AI and fixes/prunes mismatches.",
         "reparse-unfound": "AI Reparse mode: Uses AI to re-extract and match unmapped titles from parse logs.",
-        "apply-proposals": "Apply approved audit proposals to the database.",
-        "all": "Full run: Executes RSS scan -> AI Audit & Repair -> AI Reparse -> Apply Proposals sequentially.",
+        "apply-proposals": "Apply one approved audit proposal to the database.",
+        "all": "Non-destructive full run: Executes RSS scan -> AI Audit & Repair -> AI Reparse.",
     }
     logger.info(f" Mode Info     : {mode_descriptions.get(args.mode, 'Unknown mode')}")
     logger.info("--------------------------------------------------")
@@ -345,6 +372,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parse_log_repo = FakeParseLogRepository()
         manual_mapping_repo = FakeManualMappingRepository()
         audit_proposal_repo = FakeAuditProposalRepository()
+        application_store = FakeProposalApplicationStore(
+            proposal_repository=audit_proposal_repo,
+            title_repository=title_repo,
+            occurrence_repository=occ_repo,
+        )
     else:
         db = get_firestore_client()
         title_repo = FirestoreTitleRepository(db)
@@ -354,6 +386,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parse_log_repo = FirestoreParseLogRepository(db)
         manual_mapping_repo = FirestoreManualMappingRepository(db)
         audit_proposal_repo = FirestoreAuditProposalRepository(db)
+        application_store = FirestoreProposalApplicationStore(db)
 
     ai_matcher = AiMatcher()
     if args.mode in AI_MODES and ai_matcher.is_available:
@@ -376,6 +409,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         manual_mapping_repo=manual_mapping_repo,
         audit_proposal_repo=audit_proposal_repo,
         ai_matcher=ai_matcher,
+        application_store=application_store,
     )
 
     run_id = str(uuid.uuid4())

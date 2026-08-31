@@ -22,7 +22,7 @@ on:
         required: false
         default: "0"
       mode:
-        description: "Scan mode: rss (feed scan), recheck-existing (AI audit DB), reparse-unfound (AI reparse unmapped), apply-proposals, or all"
+        description: "Scan mode: rss (feed scan), recheck-existing (AI audit DB), reparse-unfound (AI reparse unmapped), or all"
         type: choice
         required: false
         default: "rss"
@@ -30,18 +30,7 @@ on:
           - "rss"
           - "recheck-existing"
           - "reparse-unfound"
-          - "apply-proposals"
           - "all"
-      proposal_id:
-        description: "ID of proposal to apply (requires mode: apply-proposals)"
-        type: string
-        required: false
-        default: ""
-      reject_proposal:
-        description: "Reject proposal instead of applying"
-        type: boolean
-        required: false
-        default: false
 
 permissions:
   contents: read
@@ -92,24 +81,16 @@ jobs:
           SCANNER_FORCE_DAYS: ${{ inputs.force_days }}
           SCANNER_AUDIT_DAYS: ${{ inputs.audit_days }}
           SCANNER_MODE: ${{ inputs.mode }}
-          SCANNER_PROPOSAL_ID: ${{ inputs.proposal_id }}
-          SCANNER_REJECT_PROPOSAL: ${{ inputs.reject_proposal }}
         run: |
           set -euo pipefail
           dry_run="${SCANNER_DRY_RUN:-false}"
           force_days="${SCANNER_FORCE_DAYS:-0}"
           audit_days="${SCANNER_AUDIT_DAYS:-0}"
           mode="${SCANNER_MODE:-rss}"
-          proposal_id="${SCANNER_PROPOSAL_ID:-}"
-          reject_proposal="${SCANNER_REJECT_PROPOSAL:-false}"
 
           case "$dry_run" in
             true|false) ;;
             *) printf '%s\n' 'dry_run must be true or false' >&2; exit 1 ;;
-          esac
-          case "$reject_proposal" in
-            true|false) ;;
-            *) printf '%s\n' 'reject_proposal must be true or false' >&2; exit 1 ;;
           esac
           if ! [[ "$force_days" =~ ^[0-9]+$ ]] || (( force_days > 30 )); then
             printf '%s\n' 'force_days must be a decimal integer from 0 to 30' >&2
@@ -119,23 +100,13 @@ jobs:
             printf '%s\n' 'audit_days must be a decimal integer from 0 to 30' >&2
             exit 1
           fi
-          if [[ -n "$proposal_id" ]] && ! [[ "$proposal_id" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-            printf '%s\n' 'proposal_id must contain only alphanumeric characters, hyphens, and underscores' >&2
-            exit 1
-          fi
           case "$mode" in
-            rss|recheck-existing|reparse-unfound|apply-proposals|all) ;;
+            rss|recheck-existing|reparse-unfound|all) ;;
             *) printf '%s\n' 'mode is not supported' >&2; exit 1 ;;
           esac
 
           scanner_args=(--config legacy/config.json --mode "$mode" --force-days "$force_days" --audit-days "$audit_days")
           if [[ "$dry_run" == "true" ]]; then
             scanner_args+=(--dry-run)
-          fi
-          if [[ -n "$proposal_id" ]]; then
-            scanner_args+=(--proposal-id "$proposal_id")
-          fi
-          if [[ "$reject_proposal" == "true" ]]; then
-            scanner_args+=(--reject-proposal)
           fi
           python -m movies_feed.cli "${scanner_args[@]}"

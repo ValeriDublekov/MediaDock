@@ -3,9 +3,12 @@ import copy
 import datetime
 from typing import Any, Dict, List, Optional
 
-from .models import (
+from .audit_proposal import (
     AuditProposal,
     InvalidStatusTransitionError,
+    is_valid_proposal_status_transition,
+)
+from .models import (
     ManualMapping,
     OmdbCacheEntry,
     Occurrence,
@@ -16,7 +19,6 @@ from .models import (
     ScanRun,
     SourceContext,
     Title,
-    is_valid_proposal_status_transition,
 )
 
 
@@ -518,6 +520,11 @@ class AuditProposalRepository(ABC):
         pass
 
     @abstractmethod
+    def refresh_from_audit(self, proposal: AuditProposal) -> None:
+        """Refreshes an audit proposal only when its existing status is pending."""
+        pass
+
+    @abstractmethod
     def list_by_status(self, status: str, limit: int = 100) -> List[AuditProposal]:
         """Lists AuditProposals filtered by status."""
         pass
@@ -560,6 +567,19 @@ class FakeAuditProposalRepository(AuditProposalRepository):
                     f"Cannot transition proposal '{incoming.id}' from '{existing.status}' to '{incoming.status}'"
                 )
             incoming.created_at = min(existing.created_at, incoming.created_at)
+        self._store[incoming.id] = incoming
+
+    def refresh_from_audit(self, proposal: AuditProposal) -> None:
+        incoming = copy.deepcopy(proposal)
+        existing = self._store.get(incoming.id)
+        if existing is None:
+            self._store[incoming.id] = incoming
+            return
+        if existing.status != "pending":
+            return
+        incoming.created_at = existing.created_at
+        incoming.status = existing.status
+        incoming.leased_until = existing.leased_until
         self._store[incoming.id] = incoming
 
     def list_by_status(self, status: str, limit: int = 100) -> List[AuditProposal]:
