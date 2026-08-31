@@ -203,6 +203,80 @@ class RepositoryAndIdTests(unittest.TestCase):
         self.assertEqual(merged.source_context.source_published_at, published_at)
         self.assertEqual(merged.source_context.observed_at, self.later_time)
 
+    def _validated_occurrence(self) -> Occurrence:
+        return Occurrence(
+            source_feed_id="feed1",
+            source_feed_name="Feed One",
+            feed_entry_id="entry1",
+            torrent_url="https://torrent1.com",
+            raw_title="Movie 2020 1080p",
+            quality="1080p",
+            rip_type="WEB-DL",
+            first_seen_at=self.base_time,
+            last_seen_at=self.base_time,
+            source_context=SourceContext(
+                source_feed_id="feed1",
+                source_feed_name="Feed One",
+                feed_type="movie",
+                feed_entry_id="entry1",
+                torrent_url="https://torrent1.com",
+                raw_title="Movie 2020 1080p",
+                source_published_at=self.earlier_time,
+                observed_at=self.base_time,
+            ),
+            validation_status="valid",
+            validation_policy_version="v1",
+            validated_at=self.base_time,
+            validation_reason="Stored match is valid",
+        )
+
+    def test_merge_occurrences_observation_only_preserves_validation(self) -> None:
+        existing = self._validated_occurrence()
+        incoming = self._validated_occurrence()
+        incoming.last_seen_at = self.later_time
+        incoming.source_context.observed_at = self.later_time
+        incoming.validation_status = None
+        incoming.validation_policy_version = None
+        incoming.validated_at = None
+        incoming.validation_reason = None
+
+        merged = merge_occurrences(existing, incoming)
+
+        self.assertEqual(merged.last_seen_at, self.later_time)
+        self.assertEqual(merged.validation_status, "valid")
+        self.assertEqual(merged.validation_policy_version, "v1")
+        self.assertEqual(merged.validated_at, self.base_time)
+        self.assertEqual(merged.validation_reason, "Stored match is valid")
+
+    def test_merge_occurrences_match_relevant_changes_clear_validation(self) -> None:
+        changes = {
+            "raw title": lambda occurrence: setattr(occurrence, "raw_title", "Different Movie 2021 1080p"),
+            "source feed id": lambda occurrence: setattr(occurrence, "source_feed_id", "feed2"),
+            "source feed type": lambda occurrence: setattr(occurrence.source_context, "feed_type", "series"),
+            "source year context": lambda occurrence: setattr(
+                occurrence.source_context, "raw_title", "Movie 2021 1080p"
+            ),
+        }
+
+        for label, change in changes.items():
+            with self.subTest(change=label):
+                existing = self._validated_occurrence()
+                incoming = self._validated_occurrence()
+                incoming.last_seen_at = self.later_time
+                incoming.source_context.observed_at = self.later_time
+                incoming.validation_status = None
+                incoming.validation_policy_version = None
+                incoming.validated_at = None
+                incoming.validation_reason = None
+                change(incoming)
+
+                merged = merge_occurrences(existing, incoming)
+
+                self.assertIsNone(merged.validation_status)
+                self.assertIsNone(merged.validation_policy_version)
+                self.assertIsNone(merged.validated_at)
+                self.assertIsNone(merged.validation_reason)
+
     # --- 3. Cache Freshness Tests ---
 
     def test_cache_entry_freshness(self) -> None:

@@ -150,10 +150,38 @@ def merge_titles(existing: Title, incoming: Title) -> Title:
     )
 
 
+def occurrence_validation_fingerprint(
+    occurrence: Occurrence,
+    target: Optional[Title] = None,
+) -> tuple[Any, ...]:
+    source_context = occurrence.source_context
+    broadcast_range = target.broadcast_range if target is not None else None
+    return (
+        occurrence.source_feed_id,
+        occurrence.raw_title,
+        source_context.source_feed_id if source_context is not None else None,
+        source_context.feed_type if source_context is not None else None,
+        source_context.raw_title if source_context is not None else None,
+        target.title if target is not None else None,
+        target.normalized_title if target is not None else None,
+        target.year if target is not None else None,
+        target.media_type if target is not None else None,
+        target.imdb_id if target is not None else None,
+        target.source_type if target is not None else None,
+        target.content_kind if target is not None else None,
+        broadcast_range.start_year if broadcast_range is not None else None,
+        broadcast_range.end_year if broadcast_range is not None else None,
+    )
+
+
 def merge_occurrences(existing: Occurrence, incoming: Occurrence) -> Occurrence:
     """Merges duplicate occurrences by preserving earliest first_seen_at and latest last_seen_at."""
     first_seen_at = min(existing.first_seen_at, incoming.first_seen_at)
     last_seen_at = max(existing.last_seen_at, incoming.last_seen_at)
+    validation_changed = (
+        occurrence_validation_fingerprint(existing)
+        != occurrence_validation_fingerprint(incoming)
+    )
     return Occurrence(
         source_feed_id=incoming.source_feed_id,
         source_feed_name=incoming.source_feed_name,
@@ -165,10 +193,14 @@ def merge_occurrences(existing: Occurrence, incoming: Occurrence) -> Occurrence:
         first_seen_at=first_seen_at,
         last_seen_at=last_seen_at,
         source_context=merge_source_context(existing.source_context, incoming.source_context),
-        validation_status=incoming.validation_status or existing.validation_status,
-        validation_policy_version=incoming.validation_policy_version or existing.validation_policy_version,
-        validation_reason=incoming.validation_reason or existing.validation_reason,
-        validated_at=incoming.validated_at or existing.validated_at,
+        validation_status=None if validation_changed else incoming.validation_status or existing.validation_status,
+        validation_policy_version=(
+            None
+            if validation_changed
+            else incoming.validation_policy_version or existing.validation_policy_version
+        ),
+        validation_reason=None if validation_changed else incoming.validation_reason or existing.validation_reason,
+        validated_at=None if validation_changed else incoming.validated_at or existing.validated_at,
     )
 
 

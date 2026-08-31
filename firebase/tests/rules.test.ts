@@ -154,9 +154,9 @@ describe("MoviesFeed Firestore Rules", () => {
       await assertFails(db.collection("titles").doc("tt123").collection("occurrences").doc("occ1").set({ rawTitle: "Hack" }));
     });
 
-    it("allows an admin to write valid settings", async () => {
+    it("denies browser settings writes for an admin", async () => {
       const db = await setupAdminUser("admin-456", "admin@example.com");
-      await assertSucceeds(db.collection("titles").doc("settings_config").set({
+      await assertFails(db.collection("titles").doc("settings_config").set({
         rssFeeds: {
           movies: { url: "https://feed.example.test/movies.atom", type: "movie" },
         },
@@ -166,6 +166,137 @@ describe("MoviesFeed Firestore Rules", () => {
         minSeriesRating: 7,
         minImdbVotes: 0,
         updatedBy: "admin-456",
+      }));
+    });
+
+    const validAdminSettings = () => ({
+      rssFeeds: {
+        movies: { url: "https://feed.example.test/movies.atom", type: "movie" },
+      },
+      excludedGenres: ["Horror"],
+      excludedCountries: ["India"],
+      minMovieRating: 6.5,
+      minSeriesRating: 7,
+      minImdbVotes: 0,
+      updatedBy: "admin-456",
+    });
+
+    it("rejects feeds missing a URL or type", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const valid = validAdminSettings();
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        rssFeeds: { movies: { type: "movie" } },
+      }));
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        rssFeeds: { movies: { url: "https://feed.example.test/movies.atom" } },
+      }));
+    });
+
+    it("rejects a feed with an extra nested field", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const valid = validAdminSettings();
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        rssFeeds: {
+          movies: {
+            url: "https://feed.example.test/movies.atom",
+            type: "movie",
+            enabled: true,
+          },
+        },
+      }));
+    });
+
+    it("rejects a non-string feed URL", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const valid = validAdminSettings();
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        rssFeeds: { movies: { url: 123, type: "movie" } },
+      }));
+    });
+
+    it("rejects a non-HTTPS feed URL", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const valid = validAdminSettings();
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        rssFeeds: { movies: { url: "http://feed.example.test/movies.atom", type: "movie" } },
+      }));
+    });
+
+    it("rejects an empty or overlong feed name", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const valid = validAdminSettings();
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        rssFeeds: { "": { url: "https://feed.example.test/movies.atom", type: "movie" } },
+      }));
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        rssFeeds: {
+          ["n".repeat(501)]: { url: "https://feed.example.test/movies.atom", type: "movie" },
+        },
+      }));
+    });
+
+    it("rejects an overlong feed URL", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const valid = validAdminSettings();
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        rssFeeds: { movies: { url: `https://${"a".repeat(2041)}`, type: "movie" } },
+      }));
+    });
+
+    it("rejects an unsupported feed type", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const valid = validAdminSettings();
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        rssFeeds: { movies: { url: "https://feed.example.test/movies.atom", type: "documentary" } },
+      }));
+    });
+
+    it("rejects a non-string exclusion item", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const valid = validAdminSettings();
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        excludedGenres: [123],
+      }));
+    });
+
+    it("rejects an empty exclusion item", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const valid = validAdminSettings();
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        excludedCountries: [""],
+      }));
+    });
+
+    it("rejects an overlong exclusion item", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const valid = validAdminSettings();
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        excludedGenres: ["g".repeat(501)],
+      }));
+    });
+
+    it("denies boundary-valid settings from the browser", async () => {
+      const db = await setupAdminUser("admin-456", "admin@example.com");
+      const valid = validAdminSettings();
+      await assertFails(db.collection("titles").doc("settings_config").set({
+        ...valid,
+        rssFeeds: {
+          ["n".repeat(500)]: { url: `https://${"a".repeat(2040)}`, type: "series" },
+        },
+        excludedGenres: ["g".repeat(500)],
+        excludedCountries: ["c".repeat(500)],
       }));
     });
 

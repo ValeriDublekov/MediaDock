@@ -4,6 +4,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW_PATHS = (
+    Path(".github/workflows/ci.yml"),
+    Path(".github/workflows/pages.yml"),
+    Path(".github/workflows/scanner.yml"),
+)
 
 
 def _shell_run_blocks(workflow: str) -> list[str]:
@@ -27,15 +32,23 @@ def _shell_run_blocks(workflow: str) -> list[str]:
     return blocks
 
 
+def _active_action_references(workflow: str) -> list[str]:
+    return [
+        match.group(1).strip("'\"")
+        for line in workflow.splitlines()
+        if (match := re.match(r"^\s*(?:-\s*)?uses:\s*(\S+)\s*$", line))
+    ]
+
+
 class TestWorkflowSecurity(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.scanner_workflow = (ROOT / ".github" / "workflows" / "scanner.yml").read_text(
-            encoding="utf-8"
-        )
-        cls.ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
-            encoding="utf-8"
-        )
+        cls.workflows = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for path in WORKFLOW_PATHS
+        }
+        cls.scanner_workflow = cls.workflows[Path(".github/workflows/scanner.yml")]
+        cls.ci_workflow = cls.workflows[Path(".github/workflows/ci.yml")]
 
     def test_scanner_inputs_are_environment_values_not_shell_source(self) -> None:
         self.assertNotIn("github.event.inputs.", self.scanner_workflow)
@@ -60,15 +73,13 @@ class TestWorkflowSecurity(unittest.TestCase):
         self.assertNotIn("--proposal-id", self.scanner_workflow)
         self.assertNotIn("--reject-proposal", self.scanner_workflow)
 
-    def test_scanner_actions_are_pinned_to_commits(self) -> None:
-        self.assertRegex(
-            self.scanner_workflow,
-            r"uses: actions/checkout@[0-9a-f]{40}",
-        )
-        self.assertRegex(
-            self.scanner_workflow,
-            r"uses: actions/setup-python@[0-9a-f]{40}",
-        )
+    def test_external_actions_are_pinned_to_commits(self) -> None:
+        for path, workflow in self.workflows.items():
+            for reference in _active_action_references(workflow):
+                if reference.startswith("./"):
+                    continue
+                with self.subTest(workflow=str(path), action=reference):
+                    self.assertRegex(reference, r"^[^@\s]+@[0-9a-fA-F]{40}$")
 
     def test_ci_emulators_use_the_demo_project(self) -> None:
         self.assertIn(

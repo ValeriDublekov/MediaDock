@@ -24,25 +24,6 @@ service cloud.firestore {
              get(/databases/$(database)/documents/allowlist/$(request.auth.uid)).data.role == 'admin';
     }
 
-    function validSettings(data) {
-      return data.keys().hasOnly([
-               'rssFeeds',
-               'excludedGenres',
-               'excludedCountries',
-               'minMovieRating',
-               'minSeriesRating',
-               'minImdbVotes',
-               'updatedBy'
-             ]) &&
-             data.rssFeeds is map && data.rssFeeds.keys().size() <= 20 &&
-             data.excludedGenres is list && data.excludedGenres.size() <= 100 &&
-             data.excludedCountries is list && data.excludedCountries.size() <= 100 &&
-             data.minMovieRating is number && data.minMovieRating >= 0 && data.minMovieRating <= 10 &&
-             data.minSeriesRating is number && data.minSeriesRating >= 0 && data.minSeriesRating <= 10 &&
-             data.minImdbVotes is number && data.minImdbVotes >= 0 && data.minImdbVotes <= 1000000000 &&
-             data.updatedBy is string && data.updatedBy.size() > 0 && data.updatedBy.size() <= 128;
-    }
-
     function validManualMapping(data) {
       return data.keys().hasOnly([
                'rawTitle',
@@ -64,10 +45,9 @@ service cloud.firestore {
 
     match /titles/{titleId} {
       allow read: if isAllowlisted();
-      allow create, update: if titleId == 'settings_config' &&
-                              isAdmin() &&
-                              validSettings(request.resource.data) &&
-                              request.resource.data.updatedBy == request.auth.uid;
+      // Dynamic feed maps and exclusion lists cannot be fully iterated in Rules.
+      // Settings writes must go through a server-side control plane.
+      allow create, update: if false;
       allow delete: if false;
       
       match /occurrences/{occurrenceId} {

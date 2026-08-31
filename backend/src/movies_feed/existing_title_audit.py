@@ -13,8 +13,15 @@ from .match_policy import MatchDecision, effective_source_type, evaluate_match
 from .metadata_resolver import MetadataOutcome, MetadataOutcomeStatus, MetadataResolver
 from .models import Occurrence, ScanRun, Title
 from .omdb_client import OmdbMovieResult
+from .proposal_application import (
+    ApplicationOccurrenceFingerprint,
+    ApplicationSourceTitleFingerprint,
+)
 from .repository import AuditProposalRepository, OccurrenceRepository, TitleRepository
 from .rutracker_parser import parse_rutracker_title
+
+
+MAX_PROPOSAL_OCCURRENCES = 200
 
 if TYPE_CHECKING:
     from .scanner import ScannerConfig
@@ -304,16 +311,13 @@ class ExistingTitleAuditService:
 
         if audit_days and audit_days > 0:
             cutoff = self.clock() - datetime.timedelta(days=audit_days)
-            unvalidated_titles = [
-                (tid, trec) for (tid, trec) in unvalidated_titles
-                if (trec.last_seen_at or trec.updated_at or trec.first_seen_at or datetime.datetime.min) >= cutoff
-            ]
             logger.info(
                 f"AI recheck status: {len(all_titles)} total in DB, "
-                f"filtered to last {audit_days} days (cutoff {cutoff.isoformat()}). "
-                f"{len(unvalidated_titles)} remaining unvalidated titles to audit."
+                f"filtering clusters to last {audit_days} days (cutoff {cutoff.isoformat()}). "
+                f"{len(unvalidated_titles)} unvalidated titles to inspect."
             )
         else:
+            cutoff = None
             logger.info(
                 f"AI recheck status: {len(all_titles)} total in DB (unlimited date range), "
                 f"{len(all_titles) - len(unvalidated_titles)} already AI-validated. "
@@ -342,6 +346,7 @@ class ExistingTitleAuditService:
             chunk = unvalidated_titles[i : i + batch_size]
             items_to_audit = []
             chunk_context = []
+            checked_title_ids = set()
 
             logger.info(
                 f"[AI Recheck] Batch {batch_idx}/{total_batches}: auditing {len(chunk)} titles "
@@ -351,6 +356,7 @@ class ExistingTitleAuditService:
             for idx, (title_id, title_record) in enumerate(chunk):
                 occs = self.occurrence_repo.list_by_title(title_id)
                 if not occs:
+                    checked_title_ids.add(title_id)
                     stats["orphans"] += 1
                     stats["needs_review"] += 1
                     self._record_recheck_needs_review(
@@ -373,6 +379,20 @@ class ExistingTitleAuditService:
                     clusters[cluster_id].append(occ)
 
                 for cluster_id, cluster_occs in clusters.items():
+                    cluster_last_seen_at = max(
+                        (
+                            occurrence.last_seen_at
+                            for occurrence in cluster_occs
+                            if occurrence.last_seen_at is not None
+                        ),
+                        default=None,
+                    )
+                    if cutoff is not None and (
+                        cluster_last_seen_at is None or cluster_last_seen_at < cutoff
+                    ):
+                        continue
+
+                    checked_title_ids.add(title_id)
                     is_valid = all(
                         o.validation_status == "valid"
                         and o.validation_policy_version == CURRENT_POLICY_VERSION
@@ -405,11 +425,12 @@ class ExistingTitleAuditService:
                     })
                     chunk_context.append((ai_id, title_id, title_record, cluster_occs, raw_title, feed_name))
 
-            stats["titles_checked"] += len(chunk)
+            checked_chunk = [item for item in chunk if item[0] in checked_title_ids]
+            stats["titles_checked"] += len(checked_chunk)
 
             if not items_to_audit:
                 self._flush_parse_logs(section_timings)
-                self._check_aggregate_validity(chunk, CURRENT_POLICY_VERSION)
+                self._check_aggregate_validity(checked_chunk, CURRENT_POLICY_VERSION)
                 continue
 
             audit_results: Any = {}
@@ -472,7 +493,6 @@ class ExistingTitleAuditService:
                 else:
                     stats["mismatches_found"] += 1
                     stats["needs_review"] += 1
-                    stats["proposals"] += 1
                     corr_title = ai_res.get("corrected_title")
                     corr_year = ai_res.get("corrected_year")
                     corr_media_type = ai_res.get("corrected_media_type")
@@ -530,16 +550,12 @@ class ExistingTitleAuditService:
                         section_timings=section_timings,
                     )
 
-                    occ_ids = sorted(
-                        get_source_item_id(o.source_feed_id, o.feed_entry_id, o.torrent_url)
+                    sorted_occurrences = sorted(
+                        (
+                            get_source_item_id(o.source_feed_id, o.feed_entry_id, o.torrent_url),
+                            o,
+                        )
                         for o in cluster_occs
-                    )
-                    proposal_id = get_audit_proposal_id_v3(
-                        source_title_id=title_id,
-                        source_feed_id=cluster_occs[0].source_feed_id,
-                        raw_title=raw_title,
-                        occurrence_ids=occ_ids,
-                        policy_version=CURRENT_POLICY_VERSION,
                     )
                     source_snapshot = ProposalSourceSnapshot(
                         title=title_record.title,
@@ -565,35 +581,55 @@ class ExistingTitleAuditService:
                                 content_kind=suggestion.candidate.content_kind,
                                 broadcast_range=suggestion.candidate.broadcast_range,
                             )
-                    prop = AuditProposal(
-                        id=proposal_id,
-                        source_title_id=title_id,
-                        occurrence_ids=occ_ids,
-                        raw_title_cluster=[raw_title],
-                        current_metadata=source_snapshot.to_dict(),
-                        proposed_metadata=target.to_dict() if target is not None else {},
-                        evidence={
-                            "reason": reason,
-                            "policy_reason_code": deterministic_decision.reason_code,
-                            "ai_confidence": confidence,
-                            "source_feed_name": feed_name,
-                            "omdb_outcome": suggestion.omdb_outcome,
-                        },
-                        confidence=confidence,
-                        policy_version=CURRENT_POLICY_VERSION,
-                        created_at=self.clock(),
-                        updated_at=self.clock(),
-                        status="pending",
-                        action_kind="repair" if target is not None else "review_only",
-                        target=target,
-                    )
-                    if self._on_proposal_created:
-                        self._on_proposal_created(proposal_id)
-                    if not self.config.is_dry_run and self.audit_proposal_repo:
-                        self.audit_proposal_repo.refresh_from_audit(prop)
+                    for chunk_start in range(0, len(sorted_occurrences), MAX_PROPOSAL_OCCURRENCES):
+                        occurrence_chunk = sorted_occurrences[
+                            chunk_start : chunk_start + MAX_PROPOSAL_OCCURRENCES
+                        ]
+                        occ_ids = [occ_id for occ_id, _ in occurrence_chunk]
+                        proposal_id = get_audit_proposal_id_v3(
+                            source_title_id=title_id,
+                            source_feed_id=occurrence_chunk[0][1].source_feed_id,
+                            raw_title=raw_title,
+                            occurrence_ids=occ_ids,
+                            policy_version=CURRENT_POLICY_VERSION,
+                        )
+                        prop = AuditProposal(
+                            id=proposal_id,
+                            source_title_id=title_id,
+                            occurrence_ids=occ_ids,
+                            raw_title_cluster=[raw_title],
+                            current_metadata=source_snapshot.to_dict(),
+                            proposed_metadata=target.to_dict() if target is not None else {},
+                            evidence={
+                                "reason": reason,
+                                "policy_reason_code": deterministic_decision.reason_code,
+                                "ai_confidence": confidence,
+                                "source_feed_name": feed_name,
+                                "omdb_outcome": suggestion.omdb_outcome,
+                            },
+                            confidence=confidence,
+                            policy_version=CURRENT_POLICY_VERSION,
+                            created_at=self.clock(),
+                            updated_at=self.clock(),
+                            status="pending",
+                            action_kind="repair" if target is not None else "review_only",
+                            target=target,
+                        )
+                        prop.source_title_fingerprint = ApplicationSourceTitleFingerprint.from_title(
+                            title_record
+                        )
+                        prop.occurrence_fingerprints = {
+                            occ_id: ApplicationOccurrenceFingerprint.from_occurrence(occurrence)
+                            for occ_id, occurrence in occurrence_chunk
+                        }
+                        stats["proposals"] += 1
+                        if self._on_proposal_created:
+                            self._on_proposal_created(proposal_id)
+                        if not self.config.is_dry_run and self.audit_proposal_repo:
+                            self.audit_proposal_repo.refresh_from_audit(prop)
 
             self._flush_parse_logs(section_timings)
-            self._check_aggregate_validity(chunk, CURRENT_POLICY_VERSION)
+            self._check_aggregate_validity(checked_chunk, CURRENT_POLICY_VERSION)
 
             # Brief rate-limit pause between AI batches if more remain
             ai_matcher = self._get_ai_matcher()

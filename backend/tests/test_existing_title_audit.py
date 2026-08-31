@@ -328,54 +328,150 @@ class TestExistingTitleAudit(unittest.TestCase):
         # On batch 1 failure, it should stop immediately
         self.assertEqual(mock_ai.batch_recheck_matches.call_count, 1)
 
-    def test_recheck_audit_days_filtering(self):
-        old_date = self.now - datetime.timedelta(days=10)
-        recent_date = self.now - datetime.timedelta(days=1)
-
-        t_old = Title(
-            title="Old Film", normalized_title="old film", year=2020, media_type="movie",
-            first_seen_at=old_date, last_seen_at=old_date, updated_at=old_date, ai_validated=False
+    def seed_recency_title(self, title_id, title_seen_at, occurrences):
+        self.title_repo.upsert(
+            title_id,
+            Title(
+                title=f"Film {title_id}",
+                normalized_title=f"film {title_id}",
+                year=2020,
+                media_type="movie",
+                first_seen_at=title_seen_at,
+                last_seen_at=title_seen_at,
+                updated_at=title_seen_at,
+                ai_validated=False,
+            ),
         )
-        t_recent = Title(
-            title="Recent Film", normalized_title="recent film", year=2023, media_type="movie",
-            first_seen_at=recent_date, last_seen_at=recent_date, updated_at=recent_date, ai_validated=False
+        for index, (raw_title, last_seen_at) in enumerate(occurrences):
+            feed_entry_id = f"{title_id}-entry-{index}"
+            torrent_url = f"https://example.test/{title_id}/{index}"
+            self.occurrence_repo.upsert(
+                title_id,
+                get_source_item_id("test-feed", feed_entry_id, torrent_url),
+                Occurrence(
+                    source_feed_id="test-feed",
+                    source_feed_name="Test Feed",
+                    feed_entry_id=feed_entry_id,
+                    torrent_url=torrent_url,
+                    raw_title=raw_title,
+                    quality="1080p",
+                    rip_type="WEB-DL",
+                    first_seen_at=last_seen_at,
+                    last_seen_at=last_seen_at,
+                ),
+            )
+
+    def make_recency_scanner(self):
+        scanner = self.create_scanner(
+            ScannerConfig(trigger="manual", mode="recheck-existing"),
+            MockOmdbClient({}),
         )
-        self.title_repo.upsert("t_old", t_old)
-        self.title_repo.upsert("t_recent", t_recent)
-        self.add_recheck_occurrence("t_old", "Old Film 2020 1080p")
-        self.add_recheck_occurrence("t_recent", "Recent Film 2023 1080p")
-
-        config = ScannerConfig(trigger="manual", mode="recheck-existing")
-        omdb = MockOmdbClient({})
-        scanner = self.create_scanner(config, omdb)
-
-        from unittest.mock import MagicMock
         mock_ai = MagicMock()
         mock_ai.is_available = True
-        mock_ai.batch_recheck_matches.return_value = {
-            0: {
-                "id": 0,
-                "is_valid_match": True,
-                "confidence": 0.9,
-                "reason": "Stored match is valid",
-                "corrected_title": None,
-                "corrected_year": None,
-                "corrected_media_type": None,
+
+        def valid_results(items):
+            return {
+                item["id"]: {
+                    "id": item["id"],
+                    "is_valid_match": True,
+                    "confidence": 0.9,
+                    "reason": "Stored match is valid",
+                    "corrected_title": None,
+                    "corrected_year": None,
+                    "corrected_media_type": None,
+                }
+                for item in items
             }
-        }
+
+        mock_ai.batch_recheck_matches.side_effect = valid_results
         scanner.ai_matcher = mock_ai
+        return scanner, mock_ai
 
-        # With audit_days=3, only t_recent (1 day old) should be audited
-        res_filtered = scanner.recheck_existing_titles(audit_days=3)
-        self.assertEqual(res_filtered["titles_checked"], 1)
+    def test_recheck_filters_clusters_by_occurrence_recency_within_one_title(self):
+        old_date = self.now - datetime.timedelta(days=10)
+        recent_date = self.now - datetime.timedelta(days=1)
+        self.seed_recency_title(
+            "mixed",
+            recent_date,
+            [("Old Cluster 2020", old_date), ("Recent Cluster 2020", recent_date)],
+        )
+        scanner, mock_ai = self.make_recency_scanner()
 
-        # Reset ai_validated flag on t_recent for unlimited test
-        t_recent.ai_validated = False
-        self.title_repo.upsert("t_recent", t_recent)
+        stats = scanner.recheck_existing_titles(audit_days=3)
 
-        # With audit_days=0 (unlimited), both t_recent and t_old should be audited
-        res_unlimited = scanner.recheck_existing_titles(audit_days=0)
-        self.assertEqual(res_unlimited["titles_checked"], 2)
+        mock_ai.batch_recheck_matches.assert_called_once()
+        items = mock_ai.batch_recheck_matches.call_args.args[0]
+        self.assertEqual([item["id"] for item in items], [0])
+        self.assertEqual([item["raw_title"] for item in items], ["Recent Cluster 2020"])
+        self.assertEqual(stats["titles_checked"], 1)
+        self.assertEqual(stats["clusters_checked"], 1)
+        self.assertEqual(stats["validated"], 1)
+
+    def test_recheck_includes_recent_occurrence_under_stale_title(self):
+        old_date = self.now - datetime.timedelta(days=10)
+        recent_date = self.now - datetime.timedelta(days=1)
+        self.seed_recency_title("stale-title", old_date, [("Recent Cluster 2020", recent_date)])
+        scanner, mock_ai = self.make_recency_scanner()
+
+        stats = scanner.recheck_existing_titles(audit_days=3)
+
+        mock_ai.batch_recheck_matches.assert_called_once()
+        items = mock_ai.batch_recheck_matches.call_args.args[0]
+        self.assertEqual([item["id"] for item in items], [0])
+        self.assertEqual([item["raw_title"] for item in items], ["Recent Cluster 2020"])
+        self.assertEqual(stats["titles_checked"], 1)
+        self.assertEqual(stats["clusters_checked"], 1)
+        self.assertEqual(stats["validated"], 1)
+
+    def test_recheck_excludes_old_occurrence_under_recent_title(self):
+        old_date = self.now - datetime.timedelta(days=10)
+        recent_date = self.now - datetime.timedelta(days=1)
+        self.seed_recency_title("recent-title", recent_date, [("Old Cluster 2020", old_date)])
+        scanner, mock_ai = self.make_recency_scanner()
+
+        stats = scanner.recheck_existing_titles(audit_days=3)
+
+        mock_ai.batch_recheck_matches.assert_not_called()
+        self.assertEqual(stats["titles_checked"], 0)
+        self.assertEqual(stats["clusters_checked"], 0)
+        self.assertEqual(stats["validated"], 0)
+
+    def test_recheck_audit_days_zero_includes_all_clusters(self):
+        old_date = self.now - datetime.timedelta(days=10)
+        recent_date = self.now - datetime.timedelta(days=1)
+        self.seed_recency_title(
+            "unlimited",
+            old_date,
+            [("Old Cluster 2020", old_date), ("Recent Cluster 2020", recent_date)],
+        )
+        scanner, mock_ai = self.make_recency_scanner()
+
+        stats = scanner.recheck_existing_titles(audit_days=0)
+
+        items = mock_ai.batch_recheck_matches.call_args.args[0]
+        self.assertEqual([item["id"] for item in items], [0, 1])
+        self.assertEqual(
+            [item["raw_title"] for item in items],
+            ["Old Cluster 2020", "Recent Cluster 2020"],
+        )
+        self.assertEqual(stats["titles_checked"], 1)
+        self.assertEqual(stats["clusters_checked"], 2)
+        self.assertEqual(stats["validated"], 2)
+
+    def test_recheck_stale_orphan_is_reviewed_independently_of_cluster_recency(self):
+        old_date = self.now - datetime.timedelta(days=10)
+        self.seed_recency_title("orphan", old_date, [])
+        scanner, mock_ai = self.make_recency_scanner()
+
+        stats = scanner.recheck_existing_titles(audit_days=3)
+
+        mock_ai.batch_recheck_matches.assert_not_called()
+        self.assertEqual(stats["titles_checked"], 1)
+        self.assertEqual(stats["clusters_checked"], 0)
+        self.assertEqual(stats["orphans"], 1)
+        self.assertEqual(stats["needs_review"], 1)
+        log = self.parse_log_repo.get_all()[0]
+        self.assertEqual(log.trace_details["auditOutcome"], "orphan")
 
     def test_recheck_missing_ai_item_id_is_non_destructive_and_partial(self):
         self.seed_recheck_title("t1", "Stored Film 1", 2020)
@@ -637,6 +733,81 @@ class TestExistingTitleAudit(unittest.TestCase):
         self.assertEqual(before_title, self.title_repo.get("dry-run"))
         self.assertEqual(before_occurrences, self.occurrence_repo.list_by_title("dry-run"))
 
+    def test_changed_target_identity_clears_occurrence_and_title_validation(self):
+        title_id = "target-change"
+        occurrence_id = "target-change-occurrence"
+        validated_at = self.now - datetime.timedelta(days=1)
+        self.title_repo.upsert(
+            title_id,
+            Title(
+                title="Stored Film",
+                normalized_title="stored film",
+                year=2020,
+                media_type="movie",
+                first_seen_at=self.now,
+                last_seen_at=self.now,
+                updated_at=self.now,
+                imdb_id="tt0000001",
+                ai_validated=True,
+                ai_checked_at=validated_at,
+            ),
+        )
+        validated_occurrence = Occurrence(
+            source_feed_id="test-feed",
+            source_feed_name="Test Feed",
+            feed_entry_id="target-change-entry",
+            torrent_url="https://example.test/target-change",
+            raw_title="Stored Film 2020 1080p",
+            quality="1080p",
+            rip_type="WEB-DL",
+            first_seen_at=self.now,
+            last_seen_at=self.now,
+            validation_status="valid",
+            validation_policy_version="v1",
+            validated_at=validated_at,
+            validation_reason="Stored match is valid",
+        )
+        self.occurrence_repo.upsert(title_id, occurrence_id, validated_occurrence)
+        scanner = self.create_scanner(ScannerConfig(), MockOmdbClient({}))
+        changed_target = Title(
+            title="Replacement Film",
+            normalized_title="replacement film",
+            year=1999,
+            media_type="movie",
+            first_seen_at=self.now,
+            last_seen_at=self.now,
+            updated_at=self.now,
+            imdb_id="tt1234567",
+        )
+        incoming_occurrence = Occurrence(
+            source_feed_id="test-feed",
+            source_feed_name="Test Feed",
+            feed_entry_id="target-change-entry",
+            torrent_url="https://example.test/target-change",
+            raw_title="Stored Film 2020 1080p",
+            quality="1080p",
+            rip_type="WEB-DL",
+            first_seen_at=self.now,
+            last_seen_at=self.now + datetime.timedelta(hours=1),
+        )
+
+        scanner._stage_title_and_occurrence(
+            title_id,
+            changed_target,
+            occurrence_id,
+            incoming_occurrence,
+            ScanRun(started_at=self.now, finished_at=None, status="running", trigger="test"),
+        )
+
+        staged_title = scanner._pending_titles[title_id]
+        staged_occurrence = scanner._pending_occurrences[(title_id, occurrence_id)]
+        self.assertFalse(staged_title.ai_validated)
+        self.assertIsNone(staged_title.ai_checked_at)
+        self.assertIsNone(staged_occurrence.validation_status)
+        self.assertIsNone(staged_occurrence.validation_policy_version)
+        self.assertIsNone(staged_occurrence.validated_at)
+        self.assertIsNone(staged_occurrence.validation_reason)
+
     def _seed_source(self) -> None:
         self.title_repo.upsert(
             "source-title",
@@ -666,6 +837,43 @@ class TestExistingTitleAudit(unittest.TestCase):
                 last_seen_at=self.now,
             ),
         )
+
+    def _seed_source_cluster(self, occurrence_count: int):
+        self.title_repo.upsert(
+            "source-title",
+            Title(
+                title="Stored Film",
+                normalized_title="stored film",
+                year=2020,
+                media_type="movie",
+                first_seen_at=self.now,
+                last_seen_at=self.now,
+                updated_at=self.now,
+                ai_validated=False,
+            ),
+        )
+        occurrence_ids = []
+        for index in reversed(range(occurrence_count)):
+            feed_entry_id = f"source-entry-{index:03d}"
+            torrent_url = f"https://example.test/source-{index:03d}"
+            occurrence_id = get_source_item_id("test-feed", feed_entry_id, torrent_url)
+            occurrence_ids.append(occurrence_id)
+            self.occurrence_repo.upsert(
+                "source-title",
+                occurrence_id,
+                Occurrence(
+                    source_feed_id="test-feed",
+                    source_feed_name="Test Feed",
+                    feed_entry_id=feed_entry_id,
+                    torrent_url=torrent_url,
+                    raw_title="Replacement Film 1999 1080p",
+                    quality="1080p",
+                    rip_type="WEB-DL",
+                    first_seen_at=self.now,
+                    last_seen_at=self.now,
+                ),
+            )
+        return sorted(occurrence_ids)
 
     def _make_scanner(self) -> ScannerService:
         metadata_resolver = MagicMock()
@@ -821,6 +1029,44 @@ class TestExistingTitleAudit(unittest.TestCase):
         self.assertEqual(len(first_proposal.occurrence_ids), 1)
         self.assertEqual(len(proposals[1].occurrence_ids), 2)
         self.assertEqual(proposals[1].occurrence_ids, sorted(proposals[1].occurrence_ids))
+
+    def test_200_occurrences_create_one_bounded_proposal(self) -> None:
+        expected_occurrence_ids = self._seed_source_cluster(200)
+        scanner = self._make_scanner()
+
+        stats = scanner.recheck_existing_titles()
+
+        proposals = self.proposal_repo.list_all()
+        self.assertEqual(stats["proposals"], 1)
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(proposals[0].occurrence_ids, expected_occurrence_ids)
+        self.assertLessEqual(len(proposals[0].occurrence_ids), 200)
+
+    def test_201_occurrences_create_stable_exhaustive_chunks(self) -> None:
+        expected_occurrence_ids = self._seed_source_cluster(201)
+        scanner = self._make_scanner()
+
+        first_stats = scanner.recheck_existing_titles()
+        first_proposals = sorted(
+            self.proposal_repo.list_all(),
+            key=lambda proposal: proposal.occurrence_ids[0],
+        )
+        first_chunks = [proposal.occurrence_ids for proposal in first_proposals]
+        first_ids = [proposal.id for proposal in first_proposals]
+
+        self.assertEqual(first_stats["proposals"], 2)
+        self.assertEqual([len(chunk) for chunk in first_chunks], [200, 1])
+        self.assertEqual([item for chunk in first_chunks for item in chunk], expected_occurrence_ids)
+        self.assertEqual(len(set(first_chunks[0]).intersection(first_chunks[1])), 0)
+        self.assertTrue(all(len(chunk) <= 200 for chunk in first_chunks))
+
+        scanner.recheck_existing_titles()
+        rerun_proposals = sorted(
+            self.proposal_repo.list_all(),
+            key=lambda proposal: proposal.occurrence_ids[0],
+        )
+        self.assertEqual([proposal.occurrence_ids for proposal in rerun_proposals], first_chunks)
+        self.assertEqual([proposal.id for proposal in rerun_proposals], first_ids)
 
     def test_mismatch_generation_does_not_mutate_title_or_occurrence(self) -> None:
         self._seed_source()

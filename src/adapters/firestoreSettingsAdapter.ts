@@ -5,7 +5,7 @@
 
 import { doc, getDoc, setDoc, Firestore } from 'firebase/firestore';
 import { getAuth, getDb } from './firebaseApp';
-import { GlobalSettings, SettingsRepository, DEFAULT_SETTINGS } from '../domain/settings';
+import { GlobalSettings, SettingsRepository, DEFAULT_SETTINGS, isValidSettings } from '../domain/settings';
 
 export class FirestoreSettingsAdapter implements SettingsRepository {
   constructor(private getDbInstance: () => Firestore = getDb) {}
@@ -36,6 +36,10 @@ export class FirestoreSettingsAdapter implements SettingsRepository {
   }
 
   async saveSettings(settings: GlobalSettings): Promise<void> {
+    if (!isValidSettings(settings)) {
+      throw new Error('Scanner settings are invalid. Review the settings and try again.');
+    }
+
     const db = this.getDbInstance();
     const userId = getAuth().currentUser?.uid;
     if (!userId) {

@@ -39,6 +39,20 @@ python -m pip install --requirement backend/requirements.lock
 python -m pip install --no-deps --editable ./backend
 ```
 
+`backend/requirements.lock` is the exact dependency lock used by CI and
+deployment. Compatible dependency ranges remain in `backend/pyproject.toml` as
+package metadata; do not copy the lock's exact versions into that manifest.
+
+To refresh the lock after intentionally changing those ranges, create and
+activate a clean virtual environment, then run this single process and review
+the generated diff before committing it:
+```bash
+python -m pip install pip-tools
+python -m piptools compile backend/pyproject.toml --output-file backend/requirements.lock
+python -m pip install --requirement backend/requirements.lock
+python -m pip check
+```
+
 ## Running the Application Locally
 
 ### Frontend Development Server

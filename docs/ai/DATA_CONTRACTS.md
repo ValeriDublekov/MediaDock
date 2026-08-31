@@ -361,9 +361,18 @@ Idempotent review proposals generated during existing-title audits before moving
 | `evidence` | map | Deterministic and AI evidence dictionary (bounded to 32 KiB, secrets redacted) |
 | `confidence` | number | Numeric confidence score in range `0.0..1.0` |
 | `policyVersion` | string | Policy version string (e.g. `v1`) |
+| `schemaVersion` | integer | `2` for the current typed proposal schema; missing means legacy version `1` |
+| `actionKind` | string | `repair` for an actionable proposal or `review_only` for a non-actionable proposal |
+| `target` | map or null | Complete `ProposalTarget` for `actionKind=repair`; absent for `review_only` |
+| `sourceTitleFingerprint` | map | Exact source-title snapshot required by an actionable repair |
+| `occurrenceFingerprints` | map | Map keyed by occurrence ID containing the exact source snapshot for every `occurrenceIds` entry |
 | `createdAt` | Timestamp | Initial creation timestamp (preserved across updates) |
 | `updatedAt` | Timestamp | Last update timestamp |
 | `status` | string | One of `pending`, `approved`, `rejected`, `applying`, `applied`, `failed` |
+| `leaseOwner` | string or null | Random owner token for the active application attempt; cleared when the lease ends |
+| `leasedUntil` | Timestamp or null | Expiry of the active application lease; cleared with `leaseOwner` |
+| `failureCode` | string or null | Bounded, stable code for a failed or stale application outcome |
+| `failureReason` | string or null | Sanitized bounded reason for the failure; never proposal evidence or an exception dump |
 
 ### Status Transitions
 
@@ -377,6 +386,88 @@ Allowed status transitions are strictly enforced at the repository boundary:
 - `s -> s` (same status update)
 
 Applied and rejected proposals are terminal unless a documented new policy version generates a new deterministic proposal.
+
+### Application Eligibility and Persistence
+
+Only a schema-v2 repair proposal may mutate catalog data. The application
+planner and the commit transaction enforce all of these preconditions:
+
+1. `schemaVersion` is exactly `2` and `actionKind` is exactly `repair`.
+   Missing `schemaVersion` is legacy version `1`; legacy proposals and
+   schema-v2 `review_only` proposals remain readable but are ineligible. They
+   produce the typed planner outcome `ineligible` with a stable reason code,
+   acquire no lease, and cause no repository or catalog mutation. The planner
+   never reconstructs an actionable target or fingerprint from legacy maps.
+2. `policyVersion` exactly equals the current application policy version,
+   currently `v1`. A mismatch produces `ineligible` with reason code
+   `policy_version_mismatch`; it is not silently upgraded or downgraded.
+3. `target` is a complete typed target. Its title, year, IMDb ID, media type,
+   content kind, and broadcast range are validated by the proposal contract,
+   and the target title ID is recomputed from this canonical target. The
+   application path never guesses missing target fields from
+   `proposedMetadata`.
+4. `sourceTitleFingerprint` is present and has exactly these fields from the
+   stored source title: `title`, `normalizedTitle`, `year`, `imdbId`,
+   `mediaType`, `sourceType`, `contentKind`, and `broadcastRange`. The
+   fingerprint compares both values and field presence; mutable timestamps,
+   aggregate validation fields, and `updatedAt` are not fingerprint inputs.
+5. `occurrenceIds` is a unique, non-empty list of at most 200 IDs, and
+   `occurrenceFingerprints` has exactly the same key set. Each fingerprint
+   contains `sourceFeedId`, `feedEntryId`, `torrentUrl`, `rawTitle`, `quality`,
+   `ripType`, `feedType`, and `sourcePublishedAt`. `sourceFeedName` is a
+   mutable display label and is not an identity input. `firstSeenAt`,
+   `lastSeenAt`, and `observedAt` are observation metadata and are not
+   fingerprint inputs. Missing values and explicit nulls are compared using
+   the documented occurrence defaults; they are never inferred from another
+   timestamp or field.
+6. The exact occurrence membership is the set named by `occurrenceIds`: every
+   named occurrence must still exist below
+   `titles/{sourceTitleId}/occurrences/{occurrenceId}` and match its named
+   fingerprint. The planner and transaction do not discover occurrences by
+   raw-title cluster, move unnamed occurrences, or treat an occurrence found
+   only at the target as proof that a prior partial move succeeded. Unnamed
+   source occurrences remain in place and prevent source-title deletion.
+
+The planner returns named outcomes without side effects:
+
+| Outcome | Meaning and persistence behavior |
+| --- | --- |
+| `ready` | All eligibility and current-snapshot checks pass; dry-run returns the immutable plan without acquiring a lease. |
+| `ineligible` | Schema/action, policy, incomplete-target, missing-fingerprint, or 200-occurrence-limit precondition failed; the proposal document is unchanged, no lease is acquired, and catalog data is unchanged. |
+| `stale` | A source title, exact membership set, or named occurrence no longer matches the proposal snapshot; planning performs no write. If discovered by a live commit after leasing, the atomic store clears the lease, records `failureCode=stale` and a sanitized `failureReason`, sets `status=failed`, and writes no catalog data. |
+| `same_source_target` | The canonical target ID equals `sourceTitleId`; the operation is an explicit `skipped` no-op. Dry-run leaves the proposal unchanged. A live leased proposal may be finalized as `applied` with its lease cleared, while the service reports `skipped`; no title or occurrence is written. |
+| `failed` | Lease recovery, lease-owner validation, transaction, or other application failure; catalog movement is not considered successful. A live failure may set `status=failed`, clear the lease, and persist only a stable `failureCode` plus sanitized bounded `failureReason`. It must never be marked `applied`. |
+
+`leaseOwner` and `leasedUntil` are persisted together. A live attempt may
+acquire a lease only by changing `approved` to `applying` in a transaction;
+the owner is a fresh random token and the expiry is a Firestore `Timestamp`.
+An active lease owned by another token returns `lease_unavailable` without
+catalog mutation. An expired lease returns `lease_expired`, clears both lease
+fields, records a sanitized failure reason, and places the proposal in
+`failed`/review-required state. Lease expiry never infers whether catalog
+writes happened and never performs manual reconstruction as transaction
+recovery. The owner must match again immediately before commit.
+
+An actionable proposal may contain no more than 200 occurrences. An oversized
+legacy proposal is not split during application and cannot be made actionable
+by reconstructing missing fields. The audit pipeline must regenerate it as
+one or more new schema-v2 repair proposals with complete fingerprints and
+deterministic IDs, each containing at most 200 occurrences; the original
+legacy document remains readable and no catalog data moves as part of
+regeneration.
+
+For a live `ready` plan, all catalog mutation is one bounded Firestore
+transaction. The transaction reads the proposal, source and target titles,
+every named source occurrence, and the source membership needed for deletion;
+rechecks every precondition; then writes the target title and named target
+occurrences, deletes only the named source occurrences, conditionally deletes
+or invalidates the source title, invalidates or recomputes target validation,
+and marks the proposal `applied` while clearing its lease. With 200
+occurrences this remains below 500 transaction writes. A transaction retry is
+one unit, and any failure before commit leaves catalog data and the applied
+status unchanged. Direct title or occurrence writes outside this transaction,
+multi-batch movement, and partial recovery by manually reconstructing a move
+are forbidden. Dry-run acquires no lease and performs no repository write.
 
 ### Application Semantics
 

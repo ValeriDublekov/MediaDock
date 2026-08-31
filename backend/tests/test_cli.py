@@ -23,6 +23,8 @@ from movies_feed.cli import (
 )
 from movies_feed.ai_matcher import GeminiModelCapabilityError
 from movies_feed.models import ScanRun
+from movies_feed.proposal_application import ProposalApplicationResult
+from movies_feed.proposal_application_store import FakeProposalApplicationStore
 from movies_feed.repository import (
     FakeOccurrenceRepository,
     FakeOmdbCacheRepository,
@@ -319,6 +321,63 @@ class TestCliConfiguration(unittest.TestCase):
 
         self.assertEqual(run.status, "succeeded")
         self.assertEqual(run.phase_metrics["apply_proposals"]["status"], "skipped")
+
+    def test_apply_proposals_requires_explicit_id_and_counts_failures_truthfully(self) -> None:
+        run = ScanRun(
+            started_at=datetime.datetime.now(datetime.timezone.utc),
+            finished_at=None,
+            status="running",
+            trigger="local",
+        )
+        scanner = ScannerService(
+            config=ScannerConfig(mode="apply-proposals"),
+            omdb_client=object(),
+            title_repo=FakeTitleRepository(),
+            occurrence_repo=FakeOccurrenceRepository(),
+            cache_repo=FakeOmdbCacheRepository(),
+            run_repo=FakeScanRunRepository(),
+            application_store=FakeProposalApplicationStore(),
+        )
+
+        stats = scanner._apply_proposals(run=run)
+
+        self.assertEqual(stats["proposals_failed"], 1)
+        self.assertEqual(stats["proposals_seen"], 0)
+        self.assertEqual(run.proposals_failed, 1)
+        self.assertEqual(run.error_count, 1)
+
+    def test_stale_application_counts_as_failed_without_exposing_reason(self) -> None:
+        run = ScanRun(
+            started_at=datetime.datetime.now(datetime.timezone.utc),
+            finished_at=None,
+            status="running",
+            trigger="local",
+        )
+        scanner = ScannerService(
+            config=ScannerConfig(mode="apply-proposals", proposal_id="proposal-1"),
+            omdb_client=object(),
+            title_repo=FakeTitleRepository(),
+            occurrence_repo=FakeOccurrenceRepository(),
+            cache_repo=FakeOmdbCacheRepository(),
+            run_repo=FakeScanRunRepository(),
+            application_store=FakeProposalApplicationStore(),
+        )
+        result = ProposalApplicationResult(
+            "proposal-1",
+            "stale",
+            "sensitive occurrence details",
+            reason_code="occurrence_changed",
+        )
+
+        with patch(
+            "movies_feed.scanner.ProposalApplicationService.apply_proposal",
+            return_value=result,
+        ):
+            stats = scanner._apply_proposals(run=run)
+
+        self.assertEqual(stats["proposals_failed"], 1)
+        self.assertEqual(run.proposals_failed, 1)
+        self.assertEqual(run.error_summary, ["Proposal proposal-1 failed (occurrence_changed)"])
 
     def test_main_passes_fixture_as_separate_scanner_input(self) -> None:
         fixture_path = "backend/tests/fixtures/movies_feed.atom"

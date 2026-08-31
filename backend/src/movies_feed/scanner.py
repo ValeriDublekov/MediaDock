@@ -41,6 +41,7 @@ from .repository import (
     AuditProposalRepository,
     merge_occurrences,
     merge_titles,
+    occurrence_validation_fingerprint,
 )
 from .rutracker_parser import ParsedTitle, iter_feed_definitions, parse_rutracker_title
 from .ai_matcher import AiMatcher
@@ -382,6 +383,17 @@ class ScannerService:
         else:
             run.occurrences_updated += 1
             merged_occ = merge_occurrences(existing_occ, occurrence_record)
+            if (
+                occurrence_validation_fingerprint(existing_occ, existing_title)
+                != occurrence_validation_fingerprint(occurrence_record, merged_title)
+            ):
+                merged_occ.validation_status = None
+                merged_occ.validation_policy_version = None
+                merged_occ.validation_reason = None
+                merged_occ.validated_at = None
+            if existing_occ.validation_status is not None and merged_occ.validation_status is None:
+                merged_title.ai_validated = False
+                merged_title.ai_checked_at = None
         occ_key = (title_id, occurrence_id)
         self._session_occurrences[occ_key] = merged_occ
         self._pending_occurrences[occ_key] = merged_occ
@@ -970,56 +982,39 @@ class ScannerService:
             now=self.now,
         )
 
-        if self.config.proposal_id:
-            logger.info(f"Applying explicit proposal {self.config.proposal_id}")
-            stats["proposals_seen"] += 1
-            if excluded_proposal_ids and self.config.proposal_id in excluded_proposal_ids:
-                stats["proposals_skipped"] += 1
-                return stats
-            res = app_service.apply_proposal(
-                self.config.proposal_id, 
-                dry_run=self.config.is_dry_run, 
-                reject=self.config.reject_proposal
-            )
-            logger.info(f"Proposal {self.config.proposal_id} outcome: {res.outcome} ({res.reason})")
-            if res.outcome == "applied":
-                stats["proposals_applied"] += 1
-                if run:
-                    run.proposals_applied += 1
-            elif res.outcome == "rejected":
-                stats["proposals_rejected"] += 1
-            elif res.outcome == "failed":
-                stats["proposals_failed"] += 1
-                if run:
-                    run.proposals_failed += 1
-                    run.error_count += 1
-                    run.error_summary.append(f"Proposal {self.config.proposal_id} failed: {res.reason}")
-            else:
-                stats["proposals_skipped"] += 1
+        proposal_id = self.config.proposal_id
+        if not proposal_id:
+            self._record_phase_error(run, "Proposal application requires an explicit proposal ID")
+            stats["proposals_failed"] += 1
+            if run:
+                run.proposals_failed += 1
+            return stats
+
+        logger.info(f"Applying explicit proposal {proposal_id}")
+        stats["proposals_seen"] += 1
+        if excluded_proposal_ids and proposal_id in excluded_proposal_ids:
+            stats["proposals_skipped"] += 1
+            return stats
+        res = app_service.apply_proposal(
+            proposal_id,
+            dry_run=self.config.is_dry_run,
+            reject=self.config.reject_proposal,
+        )
+        logger.info(f"Proposal {proposal_id} outcome: {res.outcome} ({res.reason})")
+        if res.outcome == "applied":
+            stats["proposals_applied"] += 1
+            if run:
+                run.proposals_applied += 1
+        elif res.outcome in ("failed", "ineligible", "stale"):
+            stats["proposals_failed"] += 1
+            if run:
+                run.proposals_failed += 1
+                self._record_phase_error(
+                    run,
+                    f"Proposal {proposal_id} failed ({res.reason_code or res.outcome})",
+                )
         else:
-            logger.info("Applying all approved proposals")
-            approved_proposals = self.application_store.list_approved_proposals(limit=1000)
-            for prop in approved_proposals:
-                stats["proposals_seen"] += 1
-                if excluded_proposal_ids and prop.id in excluded_proposal_ids:
-                    stats["proposals_skipped"] += 1
-                    continue
-                res = app_service.apply_proposal(prop.id, dry_run=self.config.is_dry_run)
-                logger.info(f"Proposal {prop.id} outcome: {res.outcome} ({res.reason})")
-                if res.outcome == "applied":
-                    stats["proposals_applied"] += 1
-                    if run:
-                        run.proposals_applied += 1
-                elif res.outcome == "rejected":
-                    stats["proposals_rejected"] += 1
-                elif res.outcome == "failed":
-                    stats["proposals_failed"] += 1
-                    if run:
-                        run.proposals_failed += 1
-                        run.error_count += 1
-                        run.error_summary.append(f"Proposal {prop.id} failed: {res.reason}")
-                else:
-                    stats["proposals_skipped"] += 1
+            stats["proposals_skipped"] += 1
         return stats
 
     def _source_context_for_entry(
