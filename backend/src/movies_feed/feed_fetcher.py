@@ -342,6 +342,15 @@ class FeedFetcher:
         """Read an explicitly selected local fixture without passing its path to feedparser."""
         try:
             fixture_path = Path(path)
+            if not fixture_path.exists():
+                for candidate in (
+                    Path("backend") / fixture_path,
+                    Path(__file__).parent.parent.parent / fixture_path,
+                    Path(__file__).parent.parent.parent / "tests" / "fixtures" / fixture_path.name,
+                ):
+                    if candidate.exists():
+                        fixture_path = candidate
+                        break
             with fixture_path.open("rb") as fixture_stream:
                 chunks: list[bytes] = []
                 total_size = 0

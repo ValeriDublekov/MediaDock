@@ -33,13 +33,25 @@ class StaticTestFeedFetcher:
             dns_resolver=lambda host, port: ["8.8.8.8"],
         )
 
+    def _resolve_path(self, target: str) -> Path:
+        p = Path(target)
+        if not p.exists():
+            for candidate in (
+                Path(__file__).parent / "fixtures" / p.name,
+                Path(__file__).parent.parent / p,
+                Path("backend") / p,
+            ):
+                if candidate.exists():
+                    return candidate
+        return p
+
     def fetch(self, url: str) -> bytes:
         if url.lstrip().startswith("<"):
             return url.encode("utf-8")
-        return Path(url).read_bytes()
+        return self._resolve_path(url).read_bytes()
 
     def fetch_file(self, path: str) -> bytes:
-        return Path(path).read_bytes()
+        return self._resolve_path(path).read_bytes()
 
     def validate_parsed_feed(self, feed: Any):
         return self.validator.validate_parsed_feed(feed)

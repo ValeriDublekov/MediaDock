@@ -146,7 +146,7 @@ class AuditProposal:
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the AuditProposal model to a camelCase Firestore dictionary."""
-        return {
+        res = {
             "id": self.id,
             "sourceTitleId": self.source_title_id,
             "occurrenceIds": list(self.occurrence_ids),
