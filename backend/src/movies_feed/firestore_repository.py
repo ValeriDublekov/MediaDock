@@ -21,6 +21,7 @@ from .models import (
     SourceContext,
     Title,
     VALID_AUDIT_PROPOSAL_STATUSES,
+    audit_proposal_from_dict,
     is_valid_proposal_status_transition,
 )
 from .repository import (
@@ -271,44 +272,6 @@ def manual_mapping_from_dict(d: dict, doc_id: Optional[str] = None) -> ManualMap
         parsed_year=d.get("parsedYear"),
         created_by=d.get("createdBy"),
     )
-
-
-def audit_proposal_from_dict(d: dict, doc_id: Optional[str] = None) -> AuditProposal:
-    """Reconstructs an AuditProposal model from a camelCase dictionary retrieved from Firestore."""
-    proposal_id = d.get("id") or doc_id or ""
-    created_at = d.get("createdAt")
-    if not isinstance(created_at, datetime.datetime):
-        created_at = datetime.datetime.now(datetime.timezone.utc)
-    updated_at = d.get("updatedAt")
-    if not isinstance(updated_at, datetime.datetime):
-        updated_at = datetime.datetime.now(datetime.timezone.utc)
-
-    status = d.get("status", "pending")
-    if status not in VALID_AUDIT_PROPOSAL_STATUSES:
-        status = "pending"
-
-    confidence = d.get("confidence", 0.0)
-    try:
-        confidence = float(confidence)
-    except (ValueError, TypeError):
-        confidence = 0.0
-
-    return AuditProposal(
-        id=proposal_id,
-        source_title_id=d.get("sourceTitleId", ""),
-        occurrence_ids=list(d.get("occurrenceIds") or []),
-        raw_title_cluster=list(d.get("rawTitleCluster") or []),
-        current_metadata=dict(d.get("currentMetadata") or {}),
-        proposed_metadata=dict(d.get("proposedMetadata") or {}),
-        evidence=dict(d.get("evidence") or {}),
-        confidence=confidence,
-        policy_version=d.get("policyVersion", "v1"),
-        created_at=created_at,
-        updated_at=updated_at,
-        status=status,
-    )
-
-
 
 
 class FirestoreTitleRepository(TitleRepository):
