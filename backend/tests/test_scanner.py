@@ -9,7 +9,17 @@ try:
 except ImportError:
     import _test_stubs
 
-from movies_feed.models import ManualMapping, OmdbCacheEntry, ParseLog, SourceContext, Title, Occurrence, ScanRun
+from movies_feed.models import (
+    ManualMapping,
+    OmdbCacheEntry,
+    ParseLog,
+    RssSnapshot,
+    RssSnapshotItem,
+    SourceContext,
+    Title,
+    Occurrence,
+    ScanRun,
+)
 from movies_feed.omdb_client import OmdbMovieResult, OmdbLimitReachedError, OmdbTransportError, OmdbNoMatchError, OmdbClient, HttpTransport
 from movies_feed.match_policy import parse_broadcast_range
 from movies_feed.repository import (
@@ -19,6 +29,7 @@ from movies_feed.repository import (
     FakeOmdbCacheRepository,
     FakeScanRunRepository,
     FakeParseLogRepository,
+    FakeRssSnapshotRepository,
     FakeManualMappingRepository,
 )
 from movies_feed.scanner import ScannerConfig, ScannerService
@@ -234,6 +245,137 @@ class TestScanner(unittest.TestCase):
                 </item>
             </channel>
         </rss>'''
+
+    @staticmethod
+    def make_multi_entry_feed(entries) -> str:
+        items = "".join(
+            f'''<item>
+                <title>{title}</title>
+                <link>https://example.com/torrent/{guid}</link>
+                <guid>{guid}</guid>
+            </item>'''
+            for guid, title in entries
+        )
+        return f'''<?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0"><channel>{items}</channel></rss>'''
+
+    def test_successful_rss_run_publishes_movie_first_snapshot_order(self):
+        snapshot_repo = FakeRssSnapshotRepository()
+        config = ScannerConfig(
+            rss_feeds={
+                "series-feed": {
+                    "name": "Series Feed",
+                    "url": self.make_multi_entry_feed([
+                        ("series-1", "Seasoned Show / Сезон 5 [2012]"),
+                    ]),
+                    "type": "series",
+                },
+                "movie-feed-1": {
+                    "name": "Movie Feed 1",
+                    "url": self.make_multi_entry_feed([
+                        ("movie-1", "The Matrix (1999) [1080p]"),
+                        ("movie-1-duplicate", "The Matrix (1999) [2160p]"),
+                    ]),
+                    "type": "movie",
+                },
+                "movie-feed-2": {
+                    "name": "Movie Feed 2",
+                    "url": self.make_multi_entry_feed([
+                        ("movie-2", "Filtered Movie (2000) [720p]"),
+                    ]),
+                    "type": "movie",
+                },
+            },
+            omdb_limit=10,
+        )
+        scanner = ScannerService(
+            config=config,
+            omdb_client=MockOmdbClient({
+                "the matrix": self.valid_movie,
+                "filtered movie": self.filtered_movie,
+                "seasoned show": self.make_series_result(),
+            }),
+            title_repo=self.title_repo,
+            occurrence_repo=self.occ_repo,
+            cache_repo=self.cache_repo,
+            run_repo=self.run_repo,
+            parse_log_repo=self.parse_log_repo,
+            manual_mapping_repo=self.manual_mapping_repo,
+            audit_proposal_repo=self.audit_proposal_repo,
+            now=self.now,
+            feed_fetcher=StaticTestFeedFetcher(),
+            rss_snapshot_repo=snapshot_repo,
+        )
+
+        run = scanner.run("snapshot-order")
+
+        self.assertEqual(run.status, "succeeded")
+        latest = snapshot_repo.get_latest()
+        self.assertIsNotNone(latest)
+        snapshot, items = latest
+        self.assertEqual(snapshot.run_id, "snapshot-order")
+        self.assertEqual([item.title_id for item in items], [
+            self.valid_movie.imdb_id,
+            self.filtered_movie.imdb_id,
+            self.make_series_result().imdb_id,
+        ])
+        self.assertEqual([item.source_type for item in items], ["movie", "movie", "series"])
+        self.assertEqual([item.rss_position for item in items], [0, 1, 2])
+        self.assertEqual(len(self.title_repo.list_all()), 3)
+
+    def test_partial_rss_run_keeps_previous_snapshot_published(self):
+        snapshot_repo = FakeRssSnapshotRepository()
+        previous_snapshot = RssSnapshot(
+            id="previous-snapshot",
+            run_id="previous-run",
+            created_at=self.now,
+            item_count=1,
+        )
+        previous_item = RssSnapshotItem(
+            title_id=self.valid_movie.imdb_id,
+            source_type="movie",
+            group_order=0,
+            feed_order=0,
+            entry_order=0,
+            rss_position=0,
+        )
+        snapshot_repo.publish("previous-snapshot", previous_snapshot, [previous_item])
+        config = ScannerConfig(
+            rss_feeds={
+                "working-feed": {
+                    "name": "Working Feed",
+                    "url": self.make_inline_feed("The Matrix (1999) [1080p]"),
+                    "type": "movie",
+                },
+                "broken-feed": {
+                    "name": "Broken Feed",
+                    "url": "tests/fixtures/missing-feed.xml",
+                    "type": "movie",
+                },
+            },
+            omdb_limit=10,
+        )
+        scanner = ScannerService(
+            config=config,
+            omdb_client=MockOmdbClient({"the matrix": self.valid_movie}),
+            title_repo=self.title_repo,
+            occurrence_repo=self.occ_repo,
+            cache_repo=self.cache_repo,
+            run_repo=self.run_repo,
+            parse_log_repo=self.parse_log_repo,
+            manual_mapping_repo=self.manual_mapping_repo,
+            audit_proposal_repo=self.audit_proposal_repo,
+            now=self.now,
+            feed_fetcher=StaticTestFeedFetcher(),
+            rss_snapshot_repo=snapshot_repo,
+        )
+
+        run = scanner.run("partial-snapshot-run")
+
+        self.assertEqual(run.status, "partial")
+        latest = snapshot_repo.get_latest()
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest[0].id, "previous-snapshot")
 
     def test_parse_logs_creation_and_pruning(self):
         rss_feeds = {

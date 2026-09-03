@@ -22,6 +22,8 @@ from .models import (
     ParseLogResolution,
     RetryCursor,
     RetryPage,
+    RssSnapshot,
+    RssSnapshotItem,
     ScanRun,
     SourceContext,
     Title,
@@ -32,6 +34,7 @@ from .repository import (
     OmdbCacheRepository,
     OccurrenceRepository,
     ParseLogRepository,
+    RssSnapshotRepository,
     ScanRunRepository,
     TitleRepository,
     effective_retry_state,
@@ -494,6 +497,92 @@ class FirestoreScanRunRepository(ScanRunRepository):
     def list_all(self) -> List[ScanRun]:
         docs = self.collection_ref.stream()
         return [scan_run_from_dict(doc.to_dict()) for doc in docs]
+
+
+class FirestoreRssSnapshotRepository(RssSnapshotRepository):
+    """Stores immutable RSS generations behind an atomic current pointer."""
+
+    _MAX_BATCH_WRITES = 450
+
+    def __init__(self, db: Optional[firestore.firestore.Client] = None) -> None:
+        self.db = db if db is not None else get_firestore_client()
+        self.collection_ref = self.db.collection("rssSnapshots")
+        self.state_ref = self.db.collection("rssSnapshotState").document("current")
+
+    def _delete_staged_items(self, items_ref: Any) -> None:
+        existing_docs = list(items_ref.stream())
+        for offset in range(0, len(existing_docs), self._MAX_BATCH_WRITES):
+            batch = self.db.batch()
+            for item_doc in existing_docs[offset : offset + self._MAX_BATCH_WRITES]:
+                batch.delete(item_doc.reference)
+            batch.commit()
+
+    def publish(
+        self,
+        snapshot_id: str,
+        snapshot: RssSnapshot,
+        items: List[RssSnapshotItem],
+    ) -> None:
+        if snapshot.id != snapshot_id:
+            raise ValueError("snapshot_id must match snapshot.id")
+        if snapshot.item_count != len(items):
+            raise ValueError("snapshot item_count must match the number of items")
+        if len({item.title_id for item in items}) != len(items):
+            raise ValueError("RSS snapshot items must have unique title IDs")
+        if {item.rss_position for item in items} != set(range(len(items))):
+            raise ValueError("RSS snapshot positions must be contiguous")
+
+        snapshot_ref = self.collection_ref.document(snapshot_id)
+        items_ref = snapshot_ref.collection("items")
+        current_state = self.state_ref.get()
+        current_state_data = current_state.to_dict() if current_state.exists else {}
+        existing_snapshot = snapshot_ref.get()
+        existing_snapshot_data = existing_snapshot.to_dict() if existing_snapshot.exists else {}
+
+        if (
+            current_state_data.get("snapshotId") == snapshot_id
+            and existing_snapshot_data.get("status") == "ready"
+        ):
+            return
+
+        if current_state_data.get("snapshotId") == snapshot_id:
+            raise RuntimeError("cannot replace the snapshot currently exposed by the pointer")
+
+        if existing_snapshot.exists:
+            self._delete_staged_items(items_ref)
+
+        staged_data = {
+            **snapshot.to_dict(),
+            "status": "staging",
+            "schemaVersion": 1,
+        }
+        snapshot_ref.set(staged_data)
+
+        for offset in range(0, len(items), self._MAX_BATCH_WRITES):
+            batch = self.db.batch()
+            for item in items[offset : offset + self._MAX_BATCH_WRITES]:
+                batch.set(items_ref.document(item.title_id), item.to_dict())
+            batch.commit()
+
+        ready_data = {
+            **snapshot.to_dict(),
+            "status": "ready",
+            "schemaVersion": 1,
+        }
+        pointer_data = {
+            "snapshotId": snapshot_id,
+            "runId": snapshot.run_id,
+            "createdAt": snapshot.created_at,
+            "itemCount": snapshot.item_count,
+        }
+
+        @firestore.transactional
+        def _promote(transaction):
+            transaction.set(snapshot_ref, ready_data)
+            transaction.set(self.state_ref, pointer_data)
+
+        transaction = self.db.transaction()
+        _promote(transaction)
 
 
 class FirestoreParseLogRepository(ParseLogRepository):

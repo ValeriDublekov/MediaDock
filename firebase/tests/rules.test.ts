@@ -136,6 +136,15 @@ describe("MoviesFeed Firestore Rules", () => {
       const db = await setupAllowlistedUser("user-456", "admin@example.com");
       await assertFails(db.collection("allowlist").doc("user-other").get());
     });
+
+    it("allows reading RSS snapshot generations and the current pointer", async () => {
+      const db = await setupAllowlistedUser("user-456", "admin@example.com");
+      await assertSucceeds(db.collection("rssSnapshots").doc("snapshot-1").get());
+      await assertSucceeds(
+        db.collection("rssSnapshots").doc("snapshot-1").collection("items").doc("tt123").get()
+      );
+      await assertSucceeds(db.collection("rssSnapshotState").doc("current").get());
+    });
   });
 
   describe("Client writes denied (catalog/cache/scan)", () => {
@@ -152,6 +161,18 @@ describe("MoviesFeed Firestore Rules", () => {
         updatedBy: "user-456",
       }));
       await assertFails(db.collection("titles").doc("tt123").collection("occurrences").doc("occ1").set({ rawTitle: "Hack" }));
+    });
+
+    it("denies RSS snapshot writes for an allowlisted reader", async () => {
+      const db = await setupAllowlistedUser("user-456", "admin@example.com");
+      await assertFails(db.collection("rssSnapshots").doc("snapshot-1").set({ status: "ready" }));
+      await assertFails(
+        db.collection("rssSnapshots").doc("snapshot-1").collection("items").doc("tt123").set({
+          titleId: "tt123",
+          rssPosition: 0,
+        })
+      );
+      await assertFails(db.collection("rssSnapshotState").doc("current").set({ snapshotId: "snapshot-1" }));
     });
 
     it("denies browser settings writes for an admin", async () => {

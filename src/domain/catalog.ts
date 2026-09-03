@@ -49,6 +49,19 @@ export interface CatalogCursor {
   id: string;
 }
 
+export interface LatestRssSnapshotCursor {
+  snapshotId: string;
+  rssPosition: number;
+  titleId: string;
+}
+
+export interface LatestRssSnapshotPage {
+  items: Title[];
+  nextCursor: LatestRssSnapshotCursor | null;
+  hasMore: boolean;
+  snapshotId: string | null;
+}
+
 export interface CatalogPageOptions {
   pageSize: number;
   cursor?: CatalogCursor | null;
@@ -62,6 +75,10 @@ export interface CatalogPage {
 
 export interface CatalogRepository {
   getCatalogPage(options: CatalogPageOptions): Promise<CatalogPage>;
+  getLatestRssSnapshotPage?(options: {
+    pageSize: number;
+    cursor?: LatestRssSnapshotCursor | null;
+  }): Promise<LatestRssSnapshotPage>;
   getTitleById(id: string): Promise<Title | null>;
   getTitlesByIds?(ids: string[]): Promise<Title[]>;
   getOccurrences(titleId: string): Promise<Occurrence[]>;

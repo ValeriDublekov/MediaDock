@@ -81,6 +81,86 @@ describe('Catalog Query and Pagination', () => {
     expect(screen.getByTestId('catalog-load-more-button')).toBeInTheDocument();
   });
 
+  it('uses the latest RSS snapshot as the initial source and preserves its order', async () => {
+    const latestRepository: CatalogRepository = {
+      ...mockRepository,
+      getLatestRssSnapshotPage: vi.fn().mockResolvedValueOnce({
+        items: [item2, item1],
+        nextCursor: null,
+        hasMore: false,
+        snapshotId: 'snapshot-1',
+      }),
+    };
+
+    render(<CatalogView repository={latestRepository} pageSize={2} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Series Two')).toBeInTheDocument();
+      expect(screen.getByText('Movie One')).toBeInTheDocument();
+    });
+
+    expect(latestRepository.getLatestRssSnapshotPage).toHaveBeenCalledWith({
+      pageSize: 2,
+      cursor: null,
+    });
+    expect(latestRepository.getCatalogPage).not.toHaveBeenCalled();
+    const titleCards = screen.getAllByTestId('title-card');
+    expect(titleCards[0]).toHaveTextContent('Series Two');
+    expect(titleCards[1]).toHaveTextContent('Movie One');
+  });
+
+  it('shows an explicit state when no successful RSS snapshot exists', async () => {
+    const latestRepository: CatalogRepository = {
+      ...mockRepository,
+      getLatestRssSnapshotPage: vi.fn().mockResolvedValueOnce({
+        items: [],
+        nextCursor: null,
+        hasMore: false,
+        snapshotId: null,
+      }),
+    };
+
+    render(<CatalogView repository={latestRepository} pageSize={2} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-no-latest-snapshot')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Няма успешно RSS сканиране')).toBeInTheDocument();
+  });
+
+  it('switches from Latest to the historical Catalog source', async () => {
+    const user = userEvent.setup();
+    const latestRepository: CatalogRepository = {
+      ...mockRepository,
+      getLatestRssSnapshotPage: vi.fn().mockResolvedValueOnce({
+        items: [item1],
+        nextCursor: null,
+        hasMore: false,
+        snapshotId: 'snapshot-1',
+      }),
+    };
+    vi.mocked(latestRepository.getCatalogPage).mockResolvedValueOnce({
+      items: [item3],
+      nextCursor: null,
+      hasMore: false,
+    });
+
+    render(<CatalogView repository={latestRepository} pageSize={2} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Movie One')).toBeInTheDocument();
+    });
+    await user.click(screen.getByTestId('view-mode-catalog'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Movie Three')).toBeInTheDocument();
+    });
+    expect(latestRepository.getCatalogPage).toHaveBeenCalledWith({
+      pageSize: 2,
+      cursor: null,
+    });
+  });
+
   it('passes next cursor when load more is clicked', async () => {
     const user = userEvent.setup();
 

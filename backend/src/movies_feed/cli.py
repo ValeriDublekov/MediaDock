@@ -12,6 +12,7 @@ from .firestore_repository import (
     FirestoreOccurrenceRepository,
     FirestoreOmdbCacheRepository,
     FirestoreParseLogRepository,
+    FirestoreRssSnapshotRepository,
     FirestoreScanRunRepository,
     FirestoreTitleRepository,
     FirestoreManualMappingRepository,
@@ -27,6 +28,7 @@ from .repository import (
     FakeOccurrenceRepository,
     FakeOmdbCacheRepository,
     FakeParseLogRepository,
+    FakeRssSnapshotRepository,
     FakeScanRunRepository,
     FakeTitleRepository,
     FakeManualMappingRepository,
@@ -369,6 +371,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cache_repo = FakeOmdbCacheRepository()
         run_repo = FakeScanRunRepository()
         parse_log_repo = FakeParseLogRepository()
+        rss_snapshot_repo = FakeRssSnapshotRepository()
         manual_mapping_repo = FakeManualMappingRepository()
         audit_proposal_repo = FakeAuditProposalRepository()
         application_store = FakeProposalApplicationStore(
@@ -383,6 +386,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cache_repo = FirestoreOmdbCacheRepository(db)
         run_repo = FirestoreScanRunRepository(db)
         parse_log_repo = FirestoreParseLogRepository(db)
+        rss_snapshot_repo = FirestoreRssSnapshotRepository(db)
         manual_mapping_repo = FirestoreManualMappingRepository(db)
         audit_proposal_repo = FirestoreAuditProposalRepository(db)
         application_store = FirestoreProposalApplicationStore(db)
@@ -409,6 +413,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         audit_proposal_repo=audit_proposal_repo,
         ai_matcher=ai_matcher,
         application_store=application_store,
+        rss_snapshot_repo=rss_snapshot_repo,
     )
 
     run_id = str(uuid.uuid4())

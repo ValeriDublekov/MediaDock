@@ -559,6 +559,56 @@ Rules contract:
 - Creates/updates validate explicit field allowlist (`status`, `updatedAt`, `userId`), status enum values (`'favorite'`, `'ignored'`), and immutable `userId`.
 - Users cannot list or read another user's root or descendants.
 
+## `rssSnapshots/{snapshotId}` and `rssSnapshotState/current`
+
+An RSS snapshot is an immutable, backend-published read model for the latest
+fully successful RSS phase. It is separate from the aggregated `titles` and
+`occurrences` records, so a title that already exists in the catalog can appear
+again whenever it is accepted from the current RSS feed.
+
+The snapshot metadata document contains:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `runId` | string | Scanner run that produced the snapshot |
+| `createdAt` | Timestamp | Run completion time |
+| `itemCount` | number | Number of unique accepted title IDs |
+| `status` | string | `staging` or `ready`; only ready snapshots are published |
+| `schemaVersion` | number | Snapshot read-model version |
+
+Each `rssSnapshots/{snapshotId}/items/{titleId}` document contains:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `titleId` | string | Existing catalog document ID |
+| `sourceType` | string | Canonical `movie` or `series` |
+| `groupOrder` | number | `0` for movies, `1` for series |
+| `feedOrder` | number | Position of the configured feed in the scan |
+| `entryOrder` | number | Original zero-based position inside that RSS feed |
+| `rssPosition` | number | Dense final position after grouping and deduplication |
+
+The `rssSnapshotState/current` document contains the currently published
+`snapshotId`, `runId`, `createdAt`, and `itemCount`. The backend stages metadata
+and all item documents first, then atomically writes the snapshot as `ready` and
+updates this pointer. A staging failure therefore leaves the previous pointer
+untouched. The same run ID produces a stable snapshot ID and is safe to publish
+again.
+
+Latest ordering is authoritative and deterministic:
+
+1. Movies (`groupOrder=0`) precede series (`groupOrder=1`).
+2. Within a group, configured feed order precedes RSS entry order.
+3. Duplicate catalog title IDs are emitted once at their first position.
+4. Only entries accepted into the catalog participate. Parse, OMDb, policy, and
+   unmatched failures remain in diagnostics and are not rendered as cards.
+5. The browser hydrates title documents by `titleId` and preserves snapshot
+   order; missing title documents are skipped.
+
+Only a fully successful RSS phase for all configured feeds may replace the
+pointer. Partial, failed, dry-run, parse-only, and non-RSS runs do not replace
+it. There is no historical backfill. Existing title and occurrence documents,
+including all historical torrent links, remain unchanged.
+
 ## Catalog Query Contract
 
 Initial catalog query:
@@ -577,10 +627,11 @@ with matching documented queries, indexes, repository tests, and UI semantics.
 
 ## Expected Indexes
 
-Create only indexes demanded by implemented Firestore errors/queries. The base
-newest-first query may rely on built-in indexes. Any compound media type, country,
-rating, votes, or date query must be reflected in `firestore.indexes.json` and in
-this contract when introduced.
+Create only indexes demanded by implemented Firestore errors/queries. The
+historical newest-first query and the single-field snapshot `rssPosition` query
+may rely on built-in indexes. Any compound media type, country, rating, votes,
+or date query must be reflected in `firestore.indexes.json` and in this contract
+when introduced.
 
 Retry selection uses the `parseLogs` collection index ordered by `processedAt`
 descending and document ID descending. It intentionally does not filter on
@@ -610,6 +661,8 @@ Bounded inputs and outputs:
 | `titles/**` | Allowlisted | Denied | Allowed |
 | `omdbCache/**` | Denied | Denied | Allowed |
 | `scanRuns/**` | Denied by default | Denied | Allowed |
+| `rssSnapshots/**` | Allowlisted | Denied | Allowed |
+| `rssSnapshotState/current` | Allowlisted | Denied | Allowed |
 | `parseLogs/**` | Allowlisted | Denied | Allowed |
 | `auditProposals/**` | Allowlisted | Denied | Allowed |
 | `manualMappings/**` | Allowlisted | Admin only | Allowed |

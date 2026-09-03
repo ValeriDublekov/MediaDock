@@ -301,6 +301,47 @@ class ScanRun:
         return res
 
 
+@dataclass(frozen=True)
+class RssSnapshotItem:
+    """An accepted catalog title in its position from one RSS snapshot."""
+
+    title_id: str
+    source_type: str
+    group_order: int
+    feed_order: int
+    entry_order: int
+    rss_position: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "titleId": self.title_id,
+            "sourceType": self.source_type,
+            "groupOrder": self.group_order,
+            "feedOrder": self.feed_order,
+            "entryOrder": self.entry_order,
+            "rssPosition": self.rss_position,
+        }
+
+
+@dataclass(frozen=True)
+class RssSnapshot:
+    """Metadata for one immutable, successfully built RSS snapshot."""
+
+    id: str
+    run_id: str
+    created_at: datetime.datetime
+    item_count: int
+    status: str = "ready"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "runId": self.run_id,
+            "createdAt": self.created_at,
+            "itemCount": self.item_count,
+            "status": self.status,
+        }
+
+
 RetryState = Literal["retryable", "terminal", "resolved"]
 ResolutionOutcome = Literal["matched", "terminal"]
 

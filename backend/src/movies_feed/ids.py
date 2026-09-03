@@ -131,6 +131,14 @@ def get_audit_event_id(event_identity: str) -> str:
     return _sha256_id(f"v2:audit:{normalized_event_identity}")
 
 
+def get_rss_snapshot_id(run_id: str) -> str:
+    """Computes a stable snapshot ID for one scanner run."""
+    normalized_run_id = run_id.strip() if isinstance(run_id, str) else ""
+    if not normalized_run_id:
+        raise ValueError("run_id is required for an RSS snapshot ID")
+    return _sha256_id(f"v1:rss-snapshot:{normalized_run_id}")
+
+
 def get_cache_key(
     lookup_title: str,
     lookup_year: Optional[int],

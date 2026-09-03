@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   CatalogFilterState,
   DEFAULT_FILTER_STATE,
+  DEFAULT_LATEST_FILTER_STATE,
   SortOption,
   extractAvailableCountries,
   extractAvailableQualities,
@@ -23,7 +24,7 @@ import {
   EyeOff,
 } from 'lucide-react';
 
-export type CatalogViewMode = 'all' | 'favorites' | 'ignored';
+export type CatalogViewMode = 'latest' | 'catalog' | 'favorites' | 'ignored';
 
 interface CatalogFilterBarProps {
   filterState: CatalogFilterState;
@@ -35,6 +36,7 @@ interface CatalogFilterBarProps {
   onViewModeChange?: (mode: CatalogViewMode) => void;
   favoritesCount?: number;
   ignoredCount?: number;
+  isLatestMode?: boolean;
 }
 
 export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
@@ -47,6 +49,7 @@ export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
   onViewModeChange,
   favoritesCount = 0,
   ignoredCount = 0,
+  isLatestMode = false,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -62,7 +65,7 @@ export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
     filterState.minSeriesRating > 0 ||
     filterState.minVotes > 0 ||
     !filterState.showWithoutRating ||
-    filterState.sortBy !== 'lastSeenDesc';
+    filterState.sortBy !== (isLatestMode ? 'rssOrder' : 'lastSeenDesc');
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     onFilterChange({ ...filterState, searchQuery: e.target.value });
@@ -131,7 +134,7 @@ export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
   };
 
   const handleReset = () => {
-    onFilterChange(DEFAULT_FILTER_STATE);
+    onFilterChange(isLatestMode ? DEFAULT_LATEST_FILTER_STATE : DEFAULT_FILTER_STATE);
   };
 
   // Format vote counts for slider label (e.g., 500 -> 500, 5000 -> 5k)
@@ -145,7 +148,7 @@ export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
       data-testid="catalog-filter-bar"
       className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 sm:p-5 shadow-sm space-y-4"
     >
-      {/* View Mode Navigation Tabs (All, Favorites, Ignored) */}
+      {/* View Mode Navigation Tabs */}
       {onViewModeChange && (
         <div
           data-testid="view-mode-tabs"
@@ -153,16 +156,30 @@ export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
         >
           <button
             type="button"
-            onClick={() => onViewModeChange('all')}
-            data-testid="view-mode-all"
+            onClick={() => onViewModeChange('latest')}
+            data-testid="view-mode-latest"
             className={`min-h-[38px] px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
-              viewMode === 'all'
+              viewMode === 'latest'
                 ? 'bg-neutral-800 text-amber-400 border border-amber-500/40 shadow-sm'
                 : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900'
             }`}
           >
             <Film className="w-4 h-4" />
-            <span>Всички филми</span>
+            <span>Последни</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onViewModeChange('catalog')}
+            data-testid="view-mode-catalog"
+            className={`min-h-[38px] px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+              viewMode === 'catalog'
+                ? 'bg-neutral-800 text-amber-400 border border-amber-500/40 shadow-sm'
+                : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900'
+            }`}
+          >
+            <Video className="w-4 h-4" />
+            <span>Каталог</span>
           </button>
 
           <button
@@ -262,6 +279,7 @@ export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
               aria-label="Sort catalog items"
               className="min-h-[44px] px-3 py-2 text-xs font-semibold bg-neutral-950 border border-neutral-800 text-neutral-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
             >
+              <option value="rssOrder">RSS order</option>
               <option value="lastSeenDesc">Newest First</option>
               <option value="lastSeenAsc">Oldest First</option>
               <option value="ratingDesc">Highest IMDb Rating</option>

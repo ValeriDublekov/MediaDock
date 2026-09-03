@@ -64,6 +64,21 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    match /rssSnapshots/{snapshotId} {
+      allow read: if isAllowlisted();
+      allow write: if false;
+
+      match /items/{itemId} {
+        allow read: if isAllowlisted();
+        allow write: if false;
+      }
+    }
+
+    match /rssSnapshotState/{stateId} {
+      allow read: if isAllowlisted();
+      allow write: if false;
+    }
+
     match /parseLogs/{logId} {
       allow read: if isAllowlisted();
       allow write: if false;

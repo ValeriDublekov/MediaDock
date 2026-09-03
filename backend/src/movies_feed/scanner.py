@@ -13,6 +13,7 @@ except ImportError:
 from .ids import (
     get_audit_event_id,
     get_occurrence_id_v1,
+    get_rss_snapshot_id,
     get_source_item_id,
     get_title_id_v2,
     normalize_title,
@@ -24,7 +25,16 @@ from .match_policy import (
     get_exclusion_reason as policy_get_exclusion_reason,
     normalize_source_type,
 )
-from .models import ManualMapping, Occurrence, ParseLog, ScanRun, SourceContext, Title
+from .models import (
+    ManualMapping,
+    Occurrence,
+    ParseLog,
+    RssSnapshot,
+    RssSnapshotItem,
+    ScanRun,
+    SourceContext,
+    Title,
+)
 from .metadata_resolver import MetadataOutcome, MetadataOutcomeStatus, MetadataResolver, OmdbResolver
 from .omdb_client import (
     OmdbClient,
@@ -36,6 +46,7 @@ from .repository import (
     OccurrenceRepository,
     OmdbCacheRepository,
     ParseLogRepository,
+    RssSnapshotRepository,
     ScanRunRepository,
     TitleRepository,
     AuditProposalRepository,
@@ -97,6 +108,8 @@ class ParsedEntryContext:
     lookup_year: Optional[int] = None
     expected_source_type: Optional[str] = None
     parse_error: Optional[str] = None
+    feed_order: int = 0
+    entry_order: int = 0
 
 class ScannerService:
     def __init__(
@@ -115,6 +128,7 @@ class ScannerService:
         feed_fetcher: Optional[FeedFetcher] = None,
         metadata_resolver: Optional[MetadataResolver] = None,
         application_store: Optional[ProposalApplicationStore] = None,
+        rss_snapshot_repo: Optional[RssSnapshotRepository] = None,
     ):
         self.config = config
         self.omdb_client = omdb_client
@@ -126,6 +140,7 @@ class ScannerService:
         self.manual_mapping_repo = manual_mapping_repo
         self.audit_proposal_repo = audit_proposal_repo
         self.application_store = application_store
+        self.rss_snapshot_repo = rss_snapshot_repo
         if self.application_store is None and self.audit_proposal_repo is not None:
             self.application_store = RepositoryProposalApplicationStore(
                 self.audit_proposal_repo,
@@ -191,6 +206,7 @@ class ScannerService:
         self._run_written_occurrence_keys: Set[Tuple[str, str]] = set()
         self._run_written_parse_log_ids: Set[str] = set()
         self._run_created_proposal_ids: Set[str] = set()
+        self._rss_snapshot_candidates: Dict[str, RssSnapshotItem] = {}
 
     @staticmethod
     def _record_phase_error(run: Optional[ScanRun], message: str) -> None:
@@ -205,6 +221,82 @@ class ScannerService:
             return
         resolver_attempts = getattr(self.metadata_resolver, "http_attempts", 0)
         run.omdb_requests = max(run.omdb_requests, resolver_attempts)
+
+    def _record_rss_snapshot_candidate(
+        self,
+        title_id: str,
+        source_type: str,
+        feed_order: int,
+        entry_order: int,
+    ) -> None:
+        if source_type not in ("movie", "series"):
+            return
+        candidate = RssSnapshotItem(
+            title_id=title_id,
+            source_type=source_type,
+            group_order=0 if source_type == "movie" else 1,
+            feed_order=feed_order,
+            entry_order=entry_order,
+            rss_position=-1,
+        )
+        existing = self._rss_snapshot_candidates.get(title_id)
+        if existing is None or (
+            candidate.group_order,
+            candidate.feed_order,
+            candidate.entry_order,
+        ) < (
+            existing.group_order,
+            existing.feed_order,
+            existing.entry_order,
+        ):
+            self._rss_snapshot_candidates[title_id] = candidate
+
+    def _build_rss_snapshot_items(self) -> List[RssSnapshotItem]:
+        ordered_candidates = sorted(
+            self._rss_snapshot_candidates.values(),
+            key=lambda item: (
+                item.group_order,
+                item.feed_order,
+                item.entry_order,
+                item.title_id,
+            ),
+        )
+        return [
+            RssSnapshotItem(
+                title_id=item.title_id,
+                source_type=item.source_type,
+                group_order=item.group_order,
+                feed_order=item.feed_order,
+                entry_order=item.entry_order,
+                rss_position=position,
+            )
+            for position, item in enumerate(ordered_candidates)
+        ]
+
+    def _publish_rss_snapshot(self, run_id: str, run: ScanRun) -> None:
+        if self.rss_snapshot_repo is None or self.config.is_dry_run or self.config.is_parse_only:
+            return
+        if self.config.mode not in ("rss", "all"):
+            return
+
+        rss_metrics = run.phase_metrics.get("rss", {})
+        expected_feed_count = len(self._iter_scan_feed_definitions())
+        if (
+            expected_feed_count == 0
+            or run.feeds_processed != expected_feed_count
+            or rss_metrics.get("status") != "succeeded"
+        ):
+            return
+
+        items = self._build_rss_snapshot_items()
+        snapshot = RssSnapshot(
+            id=get_rss_snapshot_id(run_id),
+            run_id=run_id,
+            created_at=run.finished_at or self.now,
+            item_count=len(items),
+        )
+        self.rss_snapshot_repo.publish(snapshot.id, snapshot, items)
+        rss_metrics["snapshotStatus"] = "published"
 
     def _record_metadata_outcome_failure(
         self,
@@ -578,7 +670,7 @@ class ScannerService:
                 phase_1_metrics["started_at"] = p1_start.isoformat()
                 p1_initial_errors = run.error_count
                 p1_t0 = time.perf_counter()
-                for feed_def in self._iter_scan_feed_definitions():
+                for feed_order, feed_def in enumerate(self._iter_scan_feed_definitions()):
                     run.feeds_processed += 1
                     try:
                         t0_feed = time.perf_counter()
@@ -606,7 +698,7 @@ class ScannerService:
                         if self.config.force_days > 0:
                             cutoff = self.now - datetime.timedelta(days=self.config.force_days)
 
-                        for entry in entries:
+                        for entry_order, entry in enumerate(entries):
                             source_context = self._source_context_for_entry(entry, feed_def)
                             raw_title = getattr(entry, "title", "") or ""
                             
@@ -620,6 +712,8 @@ class ScannerService:
                                 source_context=source_context,
                                 is_ignored_by_date=is_ignored,
                                 raw_title=raw_title,
+                                feed_order=feed_order,
+                                entry_order=entry_order,
                             )
                             
                             if not is_ignored and raw_title:
@@ -867,9 +961,18 @@ class ScannerService:
             run.error_count += 1
             run.error_summary.append(fatal_msg)
         finally:
+            run.finished_at = datetime.datetime.now(datetime.timezone.utc)
             self._flush_parse_logs(section_timings)
             self._flush_pending_db_upserts(section_timings)
-            run.finished_at = datetime.datetime.now(datetime.timezone.utc)
+            try:
+                self._publish_rss_snapshot(run_id, run)
+            except Exception as e:
+                snapshot_error = f"RSS snapshot publication failed ({type(e).__name__})"
+                logger.error(snapshot_error, exc_info=True)
+                run.error_count += 1
+                run.error_summary.append(snapshot_error)
+                if run.status == "succeeded":
+                    run.status = "partial"
             self._sync_omdb_attempts(run)
             if self.ai_matcher and self.ai_matcher.is_available:
                 ai_stats = self.ai_matcher.get_stats()
@@ -1356,11 +1459,12 @@ class ScannerService:
         # Prepare records
         media_type = omdb_result.media_type
         imdb_id = omdb_result.imdb_id
+        source_type = effective_source_type(omdb_result.media_type, omdb_result.source_type)
         title_id = get_title_id_v2(
             imdb_id,
             omdb_result.title,
             omdb_result.year,
-            effective_source_type(omdb_result.media_type, omdb_result.source_type),
+            source_type,
         )
 
         title_record = Title(
@@ -1384,7 +1488,7 @@ class ScannerService:
             awards=omdb_result.awards,
             box_office=omdb_result.box_office,
             ratings=omdb_result.ratings,
-            source_type=effective_source_type(omdb_result.media_type, omdb_result.source_type),
+            source_type=source_type,
             content_kind=omdb_result.content_kind,
             broadcast_range=omdb_result.broadcast_range,
         )
@@ -1411,6 +1515,13 @@ class ScannerService:
             # Simulate creation tracking for dry run without storing
             run.titles_created += 1
             run.occurrences_created += 1
+
+        self._record_rss_snapshot_candidate(
+            title_id=title_id,
+            source_type=source_type,
+            feed_order=ctx.feed_order,
+            entry_order=ctx.entry_order,
+        )
 
         if used_manual_mapping and manual_mapping is not None and not self.config.is_dry_run:
             self._pending_manual_mappings[manual_mapping.id] = manual_mapping

@@ -1,6 +1,7 @@
 import { Title } from './catalog';
 
 export type SortOption =
+  | 'rssOrder'
   | 'lastSeenDesc'
   | 'lastSeenAsc'
   | 'ratingDesc'
@@ -30,6 +31,11 @@ export const DEFAULT_FILTER_STATE: CatalogFilterState = {
   minVotes: 0,
   showWithoutRating: true,
   sortBy: 'lastSeenDesc',
+};
+
+export const DEFAULT_LATEST_FILTER_STATE: CatalogFilterState = {
+  ...DEFAULT_FILTER_STATE,
+  sortBy: 'rssOrder',
 };
 
 export function normalizeMediaType(type: string): string {
@@ -78,6 +84,8 @@ export function extractAvailableQualities(items: Title[]): string[] {
 export function sortTitles(titles: Title[], sortBy: SortOption): Title[] {
   return [...titles].sort((a, b) => {
     switch (sortBy) {
+      case 'rssOrder':
+        return 0;
       case 'lastSeenDesc': {
         const timeA = new Date(a.lastSeenAt).getTime();
         const timeB = new Date(b.lastSeenAt).getTime();

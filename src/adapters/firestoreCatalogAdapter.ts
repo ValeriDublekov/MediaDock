@@ -12,6 +12,7 @@ import {
   Firestore,
   DocumentData,
   QueryDocumentSnapshot,
+  QueryConstraint,
   where,
 } from 'firebase/firestore';
 import { getDb } from './firebaseApp';
@@ -20,6 +21,8 @@ import {
   CatalogPageOptions,
   CatalogPage,
   CatalogCursor,
+  LatestRssSnapshotCursor,
+  LatestRssSnapshotPage,
   Title,
   Occurrence,
 } from '../domain/catalog';
@@ -80,78 +83,105 @@ function mapDocToOccurrence(docSnap: QueryDocumentSnapshot<DocumentData>): Occur
 export class FirestoreCatalogAdapter implements CatalogRepository {
   constructor(private getDbInstance: () => Firestore = getDb) {}
 
+  async getLatestRssSnapshotPage(options: {
+    pageSize: number;
+    cursor?: LatestRssSnapshotCursor | null;
+  }): Promise<LatestRssSnapshotPage> {
+    const db = this.getDbInstance();
+    const cursor = options.cursor ?? null;
+    const snapshotId = cursor?.snapshotId ?? await this.getCurrentSnapshotId(db);
+
+    if (!snapshotId) {
+      return {
+        items: [],
+        nextCursor: null,
+        hasMore: false,
+        snapshotId: null,
+      };
+    }
+
+    const itemsRef = collection(db, 'rssSnapshots', snapshotId, 'items');
+    const constraints: QueryConstraint[] = [orderBy('rssPosition', 'asc')];
+    if (cursor) {
+      constraints.push(startAfter(cursor.rssPosition));
+    }
+    constraints.push(limit(options.pageSize + 1));
+
+    const snapshot = await getDocs(query(itemsRef, ...constraints));
+    const hasMore = snapshot.docs.length > options.pageSize;
+    const pageDocs = hasMore ? snapshot.docs.slice(0, options.pageSize) : snapshot.docs;
+    const titleIds = pageDocs.map((itemDoc) => {
+      const data = itemDoc.data() as DocumentData;
+      return typeof data.titleId === 'string' && data.titleId ? data.titleId : itemDoc.id;
+    });
+    const hydratedTitles = titleIds.length > 0 ? await this.getTitlesByIds(titleIds) : [];
+    const titlesById = new Map(hydratedTitles.map((title) => [title.id, title]));
+    const items = titleIds
+      .map((titleId) => titlesById.get(titleId))
+      .filter((title): title is Title => title !== undefined);
+
+    let nextCursor: LatestRssSnapshotCursor | null = null;
+    const lastDoc = pageDocs[pageDocs.length - 1];
+    if (lastDoc && hasMore) {
+      const lastData = lastDoc.data() as DocumentData;
+      const rssPosition = lastData.rssPosition;
+      if (typeof rssPosition !== 'number') {
+        throw new Error('RSS snapshot item is missing a numeric rssPosition');
+      }
+      nextCursor = {
+        snapshotId,
+        rssPosition,
+        titleId: typeof lastData.titleId === 'string' ? lastData.titleId : lastDoc.id,
+      };
+    }
+
+    return {
+      items,
+      nextCursor,
+      hasMore,
+      snapshotId,
+    };
+  }
+
+  private async getCurrentSnapshotId(db: Firestore): Promise<string | null> {
+    const stateSnapshot = await getDoc(doc(db, 'rssSnapshotState', 'current'));
+    if (!stateSnapshot.exists()) return null;
+    const snapshotId = stateSnapshot.data().snapshotId;
+    return typeof snapshotId === 'string' && snapshotId ? snapshotId : null;
+  }
+
   async getCatalogPage(options: CatalogPageOptions): Promise<CatalogPage> {
     const db = this.getDbInstance();
     const titlesRef = collection(db, 'titles');
 
-    let items: Title[] = [];
-    let hasMore = false;
-    let nextCursor: CatalogCursor | null = null;
-
-    if (!options.cursor) {
-      // Load all titles with lastSeenAt in the last 5 days
-      const fiveDaysAgo = new Date();
-      fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
-      const fiveDaysAgoTimestamp = Timestamp.fromDate(fiveDaysAgo);
-
-      const q5Days = query(
-        titlesRef,
-        where('lastSeenAt', '>=', fiveDaysAgoTimestamp),
-        orderBy('lastSeenAt', 'desc'),
-        orderBy(documentId(), 'desc')
-      );
-
-      const snapshot = await getDocs(q5Days);
-      items = snapshot.docs.map(mapDocToTitle);
-
-      if (items.length > 0) {
-        hasMore = true;
-        const lastDoc = snapshot.docs[snapshot.docs.length - 1];
-        const lastData = lastDoc.data() as DocumentData;
-        nextCursor = {
-          lastSeenAt: toDate(lastData['lastSeenAt']),
-          id: lastDoc.id,
-        };
-      } else {
-        // Fallback to normal pagination if there are no titles in the last 5 days
-        const qNormal = query(
+    const q = options.cursor
+      ? query(
+          titlesRef,
+          orderBy('lastSeenAt', 'desc'),
+          orderBy(documentId(), 'desc'),
+          startAfter(
+            Timestamp.fromDate(options.cursor.lastSeenAt),
+            options.cursor.id
+          ),
+          limit(options.pageSize)
+        )
+      : query(
           titlesRef,
           orderBy('lastSeenAt', 'desc'),
           orderBy(documentId(), 'desc'),
           limit(options.pageSize)
         );
-        const normalSnapshot = await getDocs(qNormal);
-        items = normalSnapshot.docs.map(mapDocToTitle);
-        hasMore = normalSnapshot.docs.length === options.pageSize;
-        const lastDoc = normalSnapshot.docs[normalSnapshot.docs.length - 1];
-        if (lastDoc && hasMore) {
-          const lastData = lastDoc.data() as DocumentData;
-          nextCursor = {
-            lastSeenAt: toDate(lastData['lastSeenAt']),
-            id: lastDoc.id,
-          };
-        }
-      }
-    } else {
-      const cursorTimestamp = Timestamp.fromDate(options.cursor.lastSeenAt);
-      const q = query(
-        titlesRef,
-        orderBy('lastSeenAt', 'desc'),
-        orderBy(documentId(), 'desc'),
-        startAfter(cursorTimestamp, options.cursor.id),
-        limit(options.pageSize)
-      );
-      const snapshot = await getDocs(q);
-      items = snapshot.docs.map(mapDocToTitle);
-      hasMore = snapshot.docs.length === options.pageSize;
-      const lastDoc = snapshot.docs[snapshot.docs.length - 1];
-      if (lastDoc && hasMore) {
-        const lastData = lastDoc.data() as DocumentData;
-        nextCursor = {
-          lastSeenAt: toDate(lastData['lastSeenAt']),
-          id: lastDoc.id,
-        };
-      }
+    const snapshot = await getDocs(q);
+    const items = snapshot.docs.map(mapDocToTitle);
+    const hasMore = snapshot.docs.length === options.pageSize;
+    const lastDoc = snapshot.docs[snapshot.docs.length - 1];
+    let nextCursor: CatalogCursor | null = null;
+    if (lastDoc && hasMore) {
+      const lastData = lastDoc.data() as DocumentData;
+      nextCursor = {
+        lastSeenAt: toDate(lastData['lastSeenAt']),
+        id: lastDoc.id,
+      };
     }
 
     return {

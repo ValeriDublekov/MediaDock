@@ -20,6 +20,7 @@ from movies_feed import (
     FirestoreOmdbCacheRepository,
     FirestoreScanRunRepository,
     FirestoreParseLogRepository,
+    FirestoreRssSnapshotRepository,
     FirestoreManualMappingRepository,
     InvalidStatusTransitionError,
     get_firestore_client,
@@ -31,6 +32,8 @@ from movies_feed import (
     ParseLog,
     ParseLogResolution,
     ManualMapping,
+    RssSnapshot,
+    RssSnapshotItem,
     get_title_id,
     get_occurrence_id,
     get_cache_key,
@@ -381,6 +384,8 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
         self._clear_collection("parseLogs")
         self._clear_collection("manualMappings")
         self._clear_collection("auditProposals")
+        self._clear_collection("rssSnapshots")
+        self._clear_collection("rssSnapshotState")
 
         self.base_time = datetime.datetime(2026, 8, 7, 10, 0, 0, tzinfo=self.utc)
         self.earlier_time = datetime.datetime(2026, 8, 7, 9, 0, 0, tzinfo=self.utc)
@@ -395,7 +400,68 @@ class FirestoreRepositoryIntegrationTests(unittest.TestCase):
                 sub_docs = doc.reference.collection("occurrences").stream()
                 for sub_doc in sub_docs:
                     sub_doc.reference.delete()
+            elif collection_name == "rssSnapshots":
+                sub_docs = doc.reference.collection("items").stream()
+                for sub_doc in sub_docs:
+                    sub_doc.reference.delete()
             doc.reference.delete()
+
+    def test_rss_snapshot_repository_publishes_and_is_idempotent(self) -> None:
+        repo = FirestoreRssSnapshotRepository(self.db)
+        snapshot = RssSnapshot(
+            id="snapshot-1",
+            run_id="run-1",
+            created_at=self.base_time,
+            item_count=2,
+        )
+        items = [
+            RssSnapshotItem(
+                title_id="tt-movie",
+                source_type="movie",
+                group_order=0,
+                feed_order=0,
+                entry_order=1,
+                rss_position=0,
+            ),
+            RssSnapshotItem(
+                title_id="tt-series",
+                source_type="series",
+                group_order=1,
+                feed_order=0,
+                entry_order=0,
+                rss_position=1,
+            ),
+        ]
+
+        repo.publish(snapshot.id, snapshot, items)
+
+        snapshot_doc = self.db.collection("rssSnapshots").document("snapshot-1").get()
+        pointer_doc = self.db.collection("rssSnapshotState").document("current").get()
+        item_docs = list(
+            self.db.collection("rssSnapshots")
+            .document("snapshot-1")
+            .collection("items")
+            .stream()
+        )
+        item_docs.sort(key=lambda item_doc: item_doc.to_dict()["rssPosition"])
+        self.assertEqual(snapshot_doc.to_dict()["status"], "ready")
+        self.assertEqual(pointer_doc.to_dict()["snapshotId"], "snapshot-1")
+        self.assertEqual(len(item_docs), 2)
+        self.assertEqual(
+            item_docs[0].to_dict()["rssPosition"],
+            0,
+        )
+
+        repo.publish(snapshot.id, snapshot, items)
+        self.assertEqual(
+            len(list(
+                self.db.collection("rssSnapshots")
+                .document("snapshot-1")
+                .collection("items")
+                .stream()
+            )),
+            2,
+        )
 
     def test_title_repository_persistence_and_idempotence(self) -> None:
         repo = FirestoreTitleRepository(self.db)

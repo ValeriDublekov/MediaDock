@@ -16,6 +16,8 @@ from .models import (
     RetryCursor,
     RetryPage,
     RetryState,
+    RssSnapshot,
+    RssSnapshotItem,
     ScanRun,
     SourceContext,
     Title,
@@ -339,6 +341,18 @@ class ScanRunRepository(ABC):
         pass
 
 
+class RssSnapshotRepository(ABC):
+    @abstractmethod
+    def publish(
+        self,
+        snapshot_id: str,
+        snapshot: RssSnapshot,
+        items: List[RssSnapshotItem],
+    ) -> None:
+        """Stages a complete snapshot and atomically publishes its pointer."""
+        pass
+
+
 class ParseLogRepository(ABC):
     @abstractmethod
     def add(self, log: ParseLog) -> None:
@@ -452,6 +466,30 @@ class FakeScanRunRepository(ScanRunRepository):
 
     def list_all(self) -> List[ScanRun]:
         return copy.deepcopy(list(self._store.values()))
+
+
+class FakeRssSnapshotRepository(RssSnapshotRepository):
+    def __init__(self) -> None:
+        self._snapshots: Dict[str, tuple[RssSnapshot, List[RssSnapshotItem]]] = {}
+        self._current_snapshot_id: Optional[str] = None
+
+    def publish(
+        self,
+        snapshot_id: str,
+        snapshot: RssSnapshot,
+        items: List[RssSnapshotItem],
+    ) -> None:
+        self._snapshots[snapshot_id] = (
+            copy.deepcopy(snapshot),
+            copy.deepcopy(items),
+        )
+        self._current_snapshot_id = snapshot_id
+
+    def get_latest(self) -> Optional[tuple[RssSnapshot, List[RssSnapshotItem]]]:
+        if self._current_snapshot_id is None:
+            return None
+        snapshot = self._snapshots.get(self._current_snapshot_id)
+        return copy.deepcopy(snapshot) if snapshot is not None else None
 
 
 class FakeParseLogRepository(ParseLogRepository):

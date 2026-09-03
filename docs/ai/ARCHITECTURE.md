@@ -45,6 +45,16 @@ not move occurrences, delete titles, approve proposals, or apply proposals.
 `recheck-existing`; proposal application is a separate
 `ProposalApplicationService` path.
 
+RSS catalog ordering uses a separate read model. During a feed scan,
+`ScannerService` records accepted title IDs with their configured feed and
+original entry positions. After the RSS phase completes successfully for every
+feed, `FirestoreRssSnapshotRepository` stages an immutable generation under
+`rssSnapshots/{snapshotId}/items` and atomically updates
+`rssSnapshotState/current`. Partial or failed runs leave the previous generation
+visible. The snapshot groups movies before series and deduplicates a title at
+its first RSS position; it does not change `firstSeenAt`, `lastSeenAt`, or
+historical occurrences.
+
 Current audit producers write proposal schema v2 with deterministic v3 IDs.
 A v3 ID covers the source title, source feed, normalized raw title, sorted
 occurrence IDs, and policy version. `review_only` proposals preserve evidence
@@ -68,10 +78,18 @@ Firebase client adapters
 Components do not import Firestore query functions. This keeps queries testable
 and permits later user-data write adapters without coupling presentation code.
 
+The initial `Latest` mode reads the current RSS snapshot pointer, pages its
+ordered title references, hydrates `titles/{titleId}` documents in chunks, and
+keeps the reference order after hydration. The historical `Catalog` mode keeps
+the date-ordered title query. Favorites and hidden titles remain keyed by title
+ID, and title cards continue to load all historical occurrences.
+
 ### Firebase
 
 - Firebase Authentication provides Google Sign-In.
 - Firestore stores catalog, occurrences, cache, scan runs, and access documents.
+- Firestore stores immutable RSS snapshot generations and a backend-only current
+        snapshot pointer for the Latest catalog mode.
 - Security rules authorize browser operations.
 - Firebase Admin SDK bypasses client rules and is restricted to GitHub Actions.
 - Emulator Suite provides local integration and rules testing.
@@ -102,6 +120,10 @@ RSS feeds ----> GitHub Actions daily scanner ----> Firestore
                                                        |
 User browser <---- GitHub Pages React app ---- Firebase Auth/rules
 ```
+
+The scanner writes a new snapshot generation before promoting the pointer. The
+browser never reads a generation by time or `lastSeenAt`; it follows the
+pointer, so an incomplete run cannot reorder the Latest view.
 
 The frontend is a GitHub Pages project site, so Vite asset paths must use the
 repository base path. Firebase Authorized Domains must include the Pages host.
@@ -165,6 +187,8 @@ still depends on Authentication and Firestore rules.
         RSS, audit, and reparse phases only; it never applies proposals.
 - Scan runs record bounded error summaries without secrets.
 - Repository writes are idempotent so a workflow rerun is safe.
+- Snapshot generations are staged before pointer promotion. A partial or failed
+        RSS phase cannot replace the last complete Latest view.
 - Frontend exposes loading, empty, denied, retryable error, and end states.
 
 ## Deferred Architecture
@@ -179,3 +203,5 @@ still depends on Authentication and Firestore rules.
 - Automatic migration of legacy audit proposals.
 - Automatic or bulk proposal application.
 - Firestore indexes for future multi-field combinations beyond current query demands.
+- Historical backfill of RSS snapshot generations; the first successful RSS run
+        after deployment establishes the initial Latest snapshot.

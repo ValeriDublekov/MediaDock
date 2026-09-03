@@ -10,9 +10,10 @@ import { CatalogSkeleton } from './CatalogSkeleton';
 import {
   CatalogFilterState,
   DEFAULT_FILTER_STATE,
+  DEFAULT_LATEST_FILTER_STATE,
   filterAndSortTitles,
 } from '../domain/catalogFilter';
-import { AlertCircle, RefreshCw, Film, Loader2, FilterX, RotateCcw, Star, EyeOff } from 'lucide-react';
+import { AlertCircle, RefreshCw, Film, Loader2, FilterX, RotateCcw, Star, EyeOff, Video } from 'lucide-react';
 
 interface CatalogViewProps {
   repository?: CatalogRepository;
@@ -20,6 +21,10 @@ interface CatalogViewProps {
 }
 
 export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestoreCatalogAdapter, pageSize = 16 }) => {
+  const [viewMode, setViewMode] = useState<CatalogViewMode>('latest');
+  const [filterState, setFilterState] = useState<CatalogFilterState>(DEFAULT_LATEST_FILTER_STATE);
+  const isLatestMode = viewMode !== 'catalog';
+
   const {
     titles,
     isLoading,
@@ -29,7 +34,12 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
     isEmpty,
     loadNextPage,
     retry,
-  } = useCatalog({ repository, pageSize });
+    latestSnapshotAvailable,
+  } = useCatalog({
+    repository,
+    pageSize,
+    source: isLatestMode ? 'latest' : 'catalog',
+  });
 
   const {
     isFavorite,
@@ -40,9 +50,20 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
     ignoredTitleIds,
   } = useUserTitles();
 
-  const [filterState, setFilterState] = useState<CatalogFilterState>(DEFAULT_FILTER_STATE);
-  const [viewMode, setViewMode] = useState<CatalogViewMode>('all');
   const [extraTitles, setExtraTitles] = useState<Title[]>([]);
+
+  const handleViewModeChange = (mode: CatalogViewMode) => {
+    setViewMode(mode);
+    setFilterState((previous) => {
+      if (mode !== 'catalog' && previous.sortBy === 'lastSeenDesc') {
+        return { ...previous, sortBy: 'rssOrder' };
+      }
+      if (mode === 'catalog' && previous.sortBy === 'rssOrder') {
+        return { ...previous, sortBy: 'lastSeenDesc' };
+      }
+      return previous;
+    });
+  };
 
   useEffect(() => {
     async function applySavedSettings() {
@@ -87,14 +108,16 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
   const combinedTitles = useMemo(() => {
     const map = new Map<string, Title>();
     titles.forEach((t) => map.set(t.id, t));
-    extraTitles.forEach((t) => map.set(t.id, t));
+    if (viewMode === 'favorites' || viewMode === 'ignored') {
+      extraTitles.forEach((t) => map.set(t.id, t));
+    }
     return Array.from(map.values());
-  }, [titles, extraTitles]);
+  }, [titles, extraTitles, viewMode]);
 
   const filteredTitles = useMemo(() => {
     let baseList = combinedTitles;
 
-    if (viewMode === 'all') {
+    if (viewMode === 'latest' || viewMode === 'catalog') {
       // Ignored titles are strictly hidden in the main list
       baseList = baseList.filter((t) => !isIgnored(t.id));
     } else if (viewMode === 'favorites') {
@@ -105,6 +128,31 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
 
     return filterAndSortTitles(baseList, filterState);
   }, [combinedTitles, viewMode, filterState, isFavorite, isIgnored]);
+
+  if (viewMode === 'latest' && latestSnapshotAvailable === false && !isLoading && !error) {
+    return (
+      <div
+        data-testid="catalog-no-latest-snapshot"
+        className="flex flex-col items-center justify-center py-16 text-center px-4 bg-neutral-900 border border-neutral-800 rounded-xl"
+      >
+        <div className="w-12 h-12 rounded-full bg-neutral-800 text-amber-400 flex items-center justify-center mb-4">
+          <Film className="w-6 h-6" />
+        </div>
+        <h3 className="text-base font-semibold text-neutral-100 mb-1">Няма успешно RSS сканиране</h3>
+        <p className="text-sm text-neutral-400 max-w-md mb-6">
+          Последните заглавия ще се появят след успешно сканиране на RSS feed-овете.
+        </p>
+        <button
+          onClick={() => handleViewModeChange('catalog')}
+          data-testid="open-catalog-from-no-snapshot"
+          className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 text-sm font-semibold text-neutral-950 bg-amber-500 rounded-lg hover:bg-amber-400 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer"
+        >
+          <Video className="w-4 h-4" />
+          Отвори каталога
+        </button>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return <CatalogSkeleton count={pageSize} />;
@@ -158,9 +206,10 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
         filteredCount={filteredTitles.length}
         totalLoadedCount={combinedTitles.length}
         viewMode={viewMode}
-        onViewModeChange={setViewMode}
+        onViewModeChange={handleViewModeChange}
         favoritesCount={favoriteTitleIds.length}
         ignoredCount={ignoredTitleIds.length}
+        isLatestMode={isLatestMode}
       />
 
       {/* Main Content Area */}
@@ -213,9 +262,9 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
               : 'Няма заредени филми, отговарящи на текущите критерии. Опитайте с нови филтри.'}
           </p>
           <div className="flex flex-wrap gap-3 justify-center">
-            {viewMode !== 'all' ? (
+            {viewMode === 'favorites' || viewMode === 'ignored' ? (
               <button
-                onClick={() => setViewMode('all')}
+                onClick={() => handleViewModeChange('latest')}
                 data-testid="back-to-all-button"
                 className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 text-sm font-semibold text-neutral-950 bg-amber-500 rounded-lg hover:bg-amber-400 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer"
               >
@@ -225,7 +274,7 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
             ) : (
               <>
                 <button
-                  onClick={() => setFilterState(DEFAULT_FILTER_STATE)}
+                  onClick={() => setFilterState(isLatestMode ? DEFAULT_LATEST_FILTER_STATE : DEFAULT_FILTER_STATE)}
                   data-testid="clear-filters-button"
                   className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 text-sm font-medium text-neutral-200 bg-neutral-800 border border-neutral-700 rounded-lg hover:bg-neutral-700 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
                 >

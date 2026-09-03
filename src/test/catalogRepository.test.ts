@@ -53,9 +53,7 @@ describe('FirestoreCatalogAdapter', () => {
       },
     ];
 
-    vi.mocked(firestoreModule.getDocs)
-      .mockResolvedValueOnce({ docs: [] } as any)
-      .mockResolvedValueOnce({ docs: mockDocs } as any);
+    vi.mocked(firestoreModule.getDocs).mockResolvedValueOnce({ docs: mockDocs } as any);
 
     const result = await adapter.getCatalogPage({ pageSize: 10 });
 
@@ -91,7 +89,7 @@ describe('FirestoreCatalogAdapter', () => {
     expect(result.nextCursor).toBeNull();
   });
 
-  it('getCatalogPage queries titles in the last 5 days when no cursor is provided and items exist', async () => {
+  it('getCatalogPage uses a bounded historical query when no cursor is provided', async () => {
     const mockDate = new Date('2026-08-07T10:00:00Z');
     const mockDocs = [
       {
@@ -115,16 +113,13 @@ describe('FirestoreCatalogAdapter', () => {
     const result = await adapter.getCatalogPage({ pageSize: 10 });
 
     expect(firestoreModule.collection).toHaveBeenCalledWith(mockDb, 'titles');
-    expect(firestoreModule.where).toHaveBeenCalledWith('lastSeenAt', '>=', expect.any(Object));
     expect(firestoreModule.orderBy).toHaveBeenCalledWith('lastSeenAt', 'desc');
     expect(firestoreModule.orderBy).toHaveBeenCalledWith('__name__', 'desc');
+    expect(firestoreModule.limit).toHaveBeenCalledWith(10);
     expect(result.items).toHaveLength(1);
     expect(result.items[0].title).toBe('Recent Movie');
-    expect(result.hasMore).toBe(true);
-    expect(result.nextCursor).toEqual({
-      lastSeenAt: mockDate,
-      id: 'tt002',
-    });
+    expect(result.hasMore).toBe(false);
+    expect(result.nextCursor).toBeNull();
   });
 
   it('getCatalogPage passes cursor and computes nextCursor when page is full', async () => {
@@ -189,6 +184,77 @@ describe('FirestoreCatalogAdapter', () => {
     expect(title).not.toBeNull();
     expect(title?.id).toBe('tt123');
     expect(title?.title).toBe('Single Movie');
+  });
+
+  it('getLatestRssSnapshotPage hydrates titles in snapshot order', async () => {
+    const mockDate = new Date('2026-08-01T10:00:00Z');
+    const snapshotItems = [
+      {
+        id: 'tt001',
+        data: () => ({ titleId: 'tt001', rssPosition: 0 }),
+      },
+      {
+        id: 'tt002',
+        data: () => ({ titleId: 'tt002', rssPosition: 1 }),
+      },
+      {
+        id: 'tt003',
+        data: () => ({ titleId: 'tt003', rssPosition: 2 }),
+      },
+    ];
+    const titleDocs = [
+      {
+        id: 'tt002',
+        data: () => ({
+          title: 'Series Two',
+          normalizedTitle: 'series two',
+          year: 2023,
+          mediaType: 'series',
+          firstSeenAt: { toDate: () => mockDate },
+          lastSeenAt: { toDate: () => mockDate },
+          updatedAt: { toDate: () => mockDate },
+        }),
+      },
+      {
+        id: 'tt001',
+        data: () => ({
+          title: 'Movie One',
+          normalizedTitle: 'movie one',
+          year: 2024,
+          mediaType: 'movie',
+          firstSeenAt: { toDate: () => mockDate },
+          lastSeenAt: { toDate: () => mockDate },
+          updatedAt: { toDate: () => mockDate },
+        }),
+      },
+    ];
+
+    vi.mocked(firestoreModule.getDoc).mockResolvedValueOnce({
+      exists: () => true,
+      data: () => ({ snapshotId: 'snapshot-1' }),
+    } as any);
+    vi.mocked(firestoreModule.getDocs)
+      .mockResolvedValueOnce({ docs: snapshotItems } as any)
+      .mockResolvedValueOnce({ docs: titleDocs } as any);
+
+    const result = await adapter.getLatestRssSnapshotPage({ pageSize: 2 });
+
+    expect(firestoreModule.collection).toHaveBeenCalledWith(
+      mockDb,
+      'rssSnapshots',
+      'snapshot-1',
+      'items'
+    );
+    expect(firestoreModule.orderBy).toHaveBeenCalledWith('rssPosition', 'asc');
+    expect(firestoreModule.limit).toHaveBeenCalledWith(3);
+    expect(result.items.map((title) => title.id)).toEqual(['tt001', 'tt002']);
+    expect(result.snapshotId).toBe('snapshot-1');
+    expect(result.hasMore).toBe(true);
+    expect(result.nextCursor).toEqual({
+      snapshotId: 'snapshot-1',
+      rssPosition: 1,
+      titleId: 'tt002',
+    });
   });
 
   it('getTitleById returns null when document does not exist', async () => {
