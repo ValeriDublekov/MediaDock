@@ -57,10 +57,20 @@ them; the deployed rules and emulator tests enforce this boundary.
 
 ### 4. Deploy rules and indexes
 
-Use only the current Firebase CLI deployment command documented for this
-repository. Test against the Firebase Emulator before production deployment.
-Review the rules diff and selected Firebase project immediately before running
-the deploy command; never rely on an implicit project from a developer shell.
+After the snapshot rules are reviewed and tested, deploy both rules and indexes
+to the same project configured in the Pages build variables:
+
+```powershell
+npx firebase deploy --project <firebase-project-id> --only firestore:rules,firestore:indexes
+```
+
+Test against the Firebase Emulator before production deployment. Review the
+rules diff and selected Firebase project immediately before running the deploy
+command; never rely on an implicit project from a developer shell. The Latest
+catalog requires allowlisted read access to `rssSnapshotState/current`,
+`rssSnapshots/{snapshotId}`, and
+`rssSnapshots/{snapshotId}/items/{titleId}`. Deploying the frontend before
+these rules are active produces `Missing or insufficient permissions`.
 
 Catalog client writes must remain denied. A future owner-scoped feature requires a
 specific schema and rules tests before deployment.

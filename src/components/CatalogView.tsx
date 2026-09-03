@@ -129,6 +129,8 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
     return filterAndSortTitles(baseList, filterState);
   }, [combinedTitles, viewMode, filterState, isFavorite, isIgnored]);
 
+  const isPermissionError = error?.message.toLowerCase().includes('permission') || false;
+
   if (viewMode === 'latest' && latestSnapshotAvailable === false && !isLoading && !error) {
     return (
       <div
@@ -167,8 +169,15 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
         <div className="w-12 h-12 rounded-full bg-red-950/50 border border-red-800/60 text-red-400 flex items-center justify-center mb-4">
           <AlertCircle className="w-6 h-6" />
         </div>
-        <h3 className="text-base font-semibold text-neutral-100 mb-1">Failed to load catalog</h3>
-        <p className="text-sm text-neutral-400 max-w-md mb-6">{error.message}</p>
+        <h3 className="text-base font-semibold text-neutral-100 mb-1">
+          {isPermissionError ? 'Няма достъп до каталога' : 'Failed to load catalog'}
+        </h3>
+        <p className="text-sm text-neutral-400 max-w-md mb-6">
+          {isPermissionError
+            ? 'Проверете дали сте в allowlist-а и дали последните Firestore rules са deploy-нати. '
+              + 'Необходим е read достъп до rssSnapshotState и rssSnapshots.'
+            : error.message}
+        </p>
         <button
           onClick={retry}
           data-testid="catalog-retry-button"
