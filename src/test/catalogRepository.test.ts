@@ -258,7 +258,10 @@ describe('FirestoreCatalogAdapter', () => {
       .mockResolvedValueOnce({ docs: snapshotItems } as any)
       .mockResolvedValueOnce({ docs: titleDocs } as any);
 
-    const result = await adapter.getLatestRssSnapshotPage({ pageSize: 2 });
+    const result = await adapter.getLatestRssSnapshotPage({
+      pageSize: 2,
+      sourceType: 'movie',
+    });
 
     expect(firestoreModule.collection).toHaveBeenCalledWith(
       mockDb,
@@ -266,6 +269,7 @@ describe('FirestoreCatalogAdapter', () => {
       'snapshot-1',
       'items'
     );
+    expect(firestoreModule.where).toHaveBeenCalledWith('sourceType', '==', 'movie');
     expect(firestoreModule.orderBy).toHaveBeenCalledWith('rssPosition', 'asc');
     expect(firestoreModule.limit).toHaveBeenCalledWith(3);
     expect(result.items.map((title) => title.id)).toEqual(['tt001', 'tt002']);

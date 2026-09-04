@@ -126,11 +126,11 @@ describe('Catalog Filter & Search UI Component Interactions', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('catalog-empty-filtered')).toBeInTheDocument();
-      expect(screen.getByText('No matching titles found')).toBeInTheDocument();
+      expect(screen.getByText('Няма намерени заглавия')).toBeInTheDocument();
     });
 
     expect(screen.getByTestId('clear-filters-button')).toBeInTheDocument();
-    expect(screen.getByTestId('catalog-load-more-from-empty-button')).toBeInTheDocument();
+    expect(screen.queryByTestId('catalog-load-more-from-empty-button')).not.toBeInTheDocument();
 
     // Reset filters restores list
     const clearBtn = screen.getByTestId('clear-filters-button');

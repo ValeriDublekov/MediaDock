@@ -23,6 +23,7 @@ import {
   CatalogCursor,
   LatestRssSnapshotCursor,
   LatestRssSnapshotPage,
+  RssSourceType,
   Title,
   Occurrence,
 } from '../domain/catalog';
@@ -39,6 +40,7 @@ export class FirestoreCatalogAdapter implements CatalogRepository {
 
   async getLatestRssSnapshotPage(options: {
     pageSize: number;
+    sourceType: RssSourceType;
     cursor?: LatestRssSnapshotCursor | null;
   }): Promise<LatestRssSnapshotPage> {
     const db = this.getDbInstance();
@@ -55,7 +57,10 @@ export class FirestoreCatalogAdapter implements CatalogRepository {
     }
 
     const itemsRef = collection(db, 'rssSnapshots', snapshotId, 'items');
-    const constraints: QueryConstraint[] = [orderBy('rssPosition', 'asc')];
+    const constraints: QueryConstraint[] = [
+      where('sourceType', '==', options.sourceType),
+      orderBy('rssPosition', 'asc'),
+    ];
     if (cursor) {
       constraints.push(startAfter(cursor.rssPosition));
     }

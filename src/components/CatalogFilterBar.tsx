@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   CatalogFilterState,
-  DEFAULT_FILTER_STATE,
   DEFAULT_LATEST_FILTER_STATE,
   SortOption,
   extractAvailableCountries,
@@ -20,11 +19,9 @@ import {
   Info,
   ChevronDown,
   ChevronUp,
-  Star,
-  EyeOff,
 } from 'lucide-react';
 
-export type CatalogViewMode = 'latest' | 'catalog' | 'favorites' | 'ignored';
+export type CatalogViewMode = 'movies' | 'series';
 
 interface CatalogFilterBarProps {
   filterState: CatalogFilterState;
@@ -34,9 +31,6 @@ interface CatalogFilterBarProps {
   totalLoadedCount: number;
   viewMode?: CatalogViewMode;
   onViewModeChange?: (mode: CatalogViewMode) => void;
-  favoritesCount?: number;
-  ignoredCount?: number;
-  isLatestMode?: boolean;
 }
 
 export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
@@ -45,11 +39,8 @@ export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
   titles,
   filteredCount,
   totalLoadedCount,
-  viewMode = 'all',
+  viewMode = 'movies',
   onViewModeChange,
-  favoritesCount = 0,
-  ignoredCount = 0,
-  isLatestMode = false,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -65,7 +56,7 @@ export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
     filterState.minSeriesRating > 0 ||
     filterState.minVotes > 0 ||
     !filterState.showWithoutRating ||
-    filterState.sortBy !== (isLatestMode ? 'rssOrder' : 'lastSeenDesc');
+    filterState.sortBy !== 'rssOrder';
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     onFilterChange({ ...filterState, searchQuery: e.target.value });
@@ -134,7 +125,7 @@ export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
   };
 
   const handleReset = () => {
-    onFilterChange(isLatestMode ? DEFAULT_LATEST_FILTER_STATE : DEFAULT_FILTER_STATE);
+    onFilterChange(DEFAULT_LATEST_FILTER_STATE);
   };
 
   // Format vote counts for slider label (e.g., 500 -> 500, 5000 -> 5k)
@@ -156,78 +147,30 @@ export const CatalogFilterBar: React.FC<CatalogFilterBarProps> = ({
         >
           <button
             type="button"
-            onClick={() => onViewModeChange('latest')}
-            data-testid="view-mode-latest"
+            onClick={() => onViewModeChange('movies')}
+            data-testid="view-mode-movies"
             className={`min-h-[38px] px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
-              viewMode === 'latest'
+              viewMode === 'movies'
                 ? 'bg-neutral-800 text-amber-400 border border-amber-500/40 shadow-sm'
                 : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900'
             }`}
           >
             <Film className="w-4 h-4" />
-            <span>Последни</span>
+            <span>Филми</span>
           </button>
 
           <button
             type="button"
-            onClick={() => onViewModeChange('catalog')}
-            data-testid="view-mode-catalog"
+            onClick={() => onViewModeChange('series')}
+            data-testid="view-mode-series"
             className={`min-h-[38px] px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
-              viewMode === 'catalog'
+              viewMode === 'series'
                 ? 'bg-neutral-800 text-amber-400 border border-amber-500/40 shadow-sm'
                 : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900'
             }`}
           >
-            <Video className="w-4 h-4" />
-            <span>Каталог</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onViewModeChange('favorites')}
-            data-testid="view-mode-favorites"
-            className={`min-h-[38px] px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
-              viewMode === 'favorites'
-                ? 'bg-amber-500 text-neutral-950 shadow-md font-extrabold'
-                : 'text-neutral-400 hover:text-amber-400 hover:bg-neutral-900'
-            }`}
-          >
-            <Star className={`w-4 h-4 ${viewMode === 'favorites' ? 'fill-neutral-950' : 'text-amber-400'}`} />
-            <span>Любими</span>
-            <span
-              data-testid="favorites-count-badge"
-              className={`text-[11px] px-1.5 py-0.2 rounded-full ${
-                viewMode === 'favorites'
-                  ? 'bg-neutral-950 text-amber-400'
-                  : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-              }`}
-            >
-              {favoritesCount}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onViewModeChange('ignored')}
-            data-testid="view-mode-ignored"
-            className={`min-h-[38px] px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
-              viewMode === 'ignored'
-                ? 'bg-red-950 text-red-200 border border-red-700 shadow-sm'
-                : 'text-neutral-400 hover:text-red-400 hover:bg-neutral-900'
-            }`}
-          >
-            <EyeOff className="w-4 h-4" />
-            <span>Скрити</span>
-            <span
-              data-testid="ignored-count-badge"
-              className={`text-[11px] px-1.5 py-0.2 rounded-full ${
-                viewMode === 'ignored'
-                  ? 'bg-red-900 text-red-100'
-                  : 'bg-red-950/60 text-red-400 border border-red-900'
-              }`}
-            >
-              {ignoredCount}
-            </span>
+            <Tv className="w-4 h-4" />
+            <span>Сериали</span>
           </button>
         </div>
       )}

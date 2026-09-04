@@ -55,6 +55,8 @@ export interface LatestRssSnapshotCursor {
   titleId: string;
 }
 
+export type RssSourceType = 'movie' | 'series';
+
 export interface LatestRssSnapshotPage {
   items: Title[];
   nextCursor: LatestRssSnapshotCursor | null;
@@ -77,6 +79,7 @@ export interface CatalogRepository {
   getCatalogPage(options: CatalogPageOptions): Promise<CatalogPage>;
   getLatestRssSnapshotPage?(options: {
     pageSize: number;
+    sourceType: RssSourceType;
     cursor?: LatestRssSnapshotCursor | null;
   }): Promise<LatestRssSnapshotPage>;
   getTitleById(id: string): Promise<Title | null>;

@@ -4,6 +4,7 @@ import {
   CatalogCursor,
   CatalogRepository,
   LatestRssSnapshotCursor,
+  RssSourceType,
 } from '../domain/catalog';
 
 export type CatalogDataSource = 'catalog' | 'latest';
@@ -14,6 +15,7 @@ export interface UseCatalogOptions {
   pageSize?: number;
   autoFetch?: boolean;
   source?: CatalogDataSource;
+  rssSourceType?: RssSourceType;
 }
 
 export interface UseCatalogReturn {
@@ -36,6 +38,7 @@ export function useCatalog(options: UseCatalogOptions = {}): UseCatalogReturn {
     pageSize = 16,
     autoFetch = true,
     source = 'catalog',
+    rssSourceType = 'movie',
   } = options;
 
   const [titles, setTitles] = useState<Title[]>([]);
@@ -50,34 +53,70 @@ export function useCatalog(options: UseCatalogOptions = {}): UseCatalogReturn {
   repoRef.current = repository;
 
   const lastFailedActionRef = useRef<'initial' | 'next' | null>(null);
+  const requestIdRef = useRef(0);
 
   const loadInitialPage = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setIsLoading(true);
     setError(null);
+    setTitles([]);
+    setHasMore(false);
+    setNextCursor(null);
     lastFailedActionRef.current = null;
     setLatestSnapshotAvailable(null);
 
     try {
       const repository = repoRef.current;
-      const page =
-        source === 'latest' && repository.getLatestRssSnapshotPage
-          ? await repository.getLatestRssSnapshotPage({ pageSize, cursor: null })
-          : await repository.getCatalogPage({ pageSize, cursor: null });
-
-      setTitles(page.items);
-      setHasMore(page.hasMore);
-      setNextCursor(page.nextCursor);
       if (source === 'latest' && repository.getLatestRssSnapshotPage) {
-        setLatestSnapshotAvailable(page.snapshotId !== null);
+        const loadedTitles: Title[] = [];
+        const loadedIds = new Set<string>();
+        let cursor: LatestRssSnapshotCursor | null = null;
+        let snapshotAvailable = false;
+
+        do {
+          const page = await repository.getLatestRssSnapshotPage({
+            pageSize,
+            sourceType: rssSourceType,
+            cursor,
+          });
+          if (requestId !== requestIdRef.current) return;
+
+          snapshotAvailable = page.snapshotId !== null;
+          page.items.forEach((item) => {
+            if (!loadedIds.has(item.id)) {
+              loadedIds.add(item.id);
+              loadedTitles.push(item);
+            }
+          });
+
+          if (!page.hasMore || !page.nextCursor) break;
+          if (
+            cursor?.snapshotId === page.nextCursor.snapshotId &&
+            cursor.rssPosition === page.nextCursor.rssPosition
+          ) {
+            throw new Error('RSS snapshot pagination did not advance');
+          }
+          cursor = page.nextCursor;
+        } while (true);
+
+        setTitles(loadedTitles);
+        setLatestSnapshotAvailable(snapshotAvailable);
+      } else {
+        const page = await repository.getCatalogPage({ pageSize, cursor: null });
+        if (requestId !== requestIdRef.current) return;
+        setTitles(page.items);
+        setHasMore(page.hasMore);
+        setNextCursor(page.nextCursor);
       }
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
       const errorObj = err instanceof Error ? err : new Error(String(err));
       setError(errorObj);
       lastFailedActionRef.current = 'initial';
     } finally {
-      setIsLoading(false);
+      if (requestId === requestIdRef.current) setIsLoading(false);
     }
-  }, [pageSize, source]);
+  }, [pageSize, rssSourceType, source]);
 
   const loadNextPage = useCallback(async () => {
     if (isLoading || isLoadingMore || !hasMore || !nextCursor) {
@@ -94,6 +133,7 @@ export function useCatalog(options: UseCatalogOptions = {}): UseCatalogReturn {
         source === 'latest' && repository.getLatestRssSnapshotPage
           ? await repository.getLatestRssSnapshotPage({
               pageSize,
+              sourceType: rssSourceType,
               cursor: nextCursor as LatestRssSnapshotCursor,
             })
           : await repository.getCatalogPage({
@@ -117,7 +157,7 @@ export function useCatalog(options: UseCatalogOptions = {}): UseCatalogReturn {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [isLoading, isLoadingMore, hasMore, nextCursor, pageSize, source]);
+  }, [isLoading, isLoadingMore, hasMore, nextCursor, pageSize, rssSourceType, source]);
 
   const retry = useCallback(async () => {
     if (lastFailedActionRef.current === 'next' && nextCursor) {
