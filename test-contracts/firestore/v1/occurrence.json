@@ -1,0 +1,11 @@
+{
+  "sourceFeedId": "feed-movies",
+  "sourceFeedName": "Movies Feed",
+  "feedEntryId": "entry-2026-08-07",
+  "torrentUrl": "https://example.test/torrents/example-film",
+  "rawTitle": "Example Film 2026 1080p",
+  "quality": "1080p",
+  "ripType": "WEB-DL",
+  "firstSeenAt": "2026-08-07T10:00:00.000Z",
+  "lastSeenAt": "2026-08-08T10:00:00.000Z"
+}

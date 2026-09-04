@@ -19,6 +19,7 @@ from .firestore_codecs import (
     occurrence_from_dict,
     parse_log_from_dict,
     scan_run_from_dict,
+    rss_snapshot_state_to_dict,
     title_from_dict,
 )
 from .models import (
@@ -387,12 +388,7 @@ class FirestoreRssSnapshotRepository(RssSnapshotRepository):
             "status": "ready",
             "schemaVersion": 1,
         }
-        pointer_data = {
-            "snapshotId": snapshot_id,
-            "runId": snapshot.run_id,
-            "createdAt": snapshot.created_at,
-            "itemCount": snapshot.item_count,
-        }
+        pointer_data = rss_snapshot_state_to_dict(snapshot)
 
         @firestore.transactional
         def _promote(transaction):

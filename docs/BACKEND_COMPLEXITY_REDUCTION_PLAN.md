@@ -371,7 +371,7 @@ python -m unittest backend.tests.test_firestore_codecs backend.tests.test_firest
 
 ### STEP 13 - Add Executable Cross-Language Contract Fixtures
 
-Status: not started
+Status: complete
 
 Add versioned JSON fixtures under `test-contracts/firestore/` for documents read by both backend and frontend, at minimum:
 

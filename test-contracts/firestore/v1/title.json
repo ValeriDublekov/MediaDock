@@ -1,0 +1,29 @@
+{
+  "title": "Example Film",
+  "normalizedTitle": "example film",
+  "year": 2026,
+  "mediaType": "movie",
+  "firstSeenAt": "2026-08-07T10:00:00.000Z",
+  "lastSeenAt": "2026-08-08T10:00:00.000Z",
+  "updatedAt": "2026-08-08T11:00:00.000Z",
+  "sourceType": "movie",
+  "contentKind": "standard",
+  "imdbId": "tt1234567",
+  "imdbRating": 8.2,
+  "imdbVotes": 1200,
+  "metascore": 74,
+  "genres": ["Drama", "Mystery"],
+  "countries": ["US"],
+  "director": "Example Director",
+  "plot": "A researcher follows a difficult lead.",
+  "posterUrl": "https://example.test/posters/example-film.jpg",
+  "runtime": "110 min",
+  "awards": "Festival selection",
+  "boxOffice": "$1,000,000",
+  "ratings": [
+    {
+      "Source": "Internet Movie Database",
+      "Value": "8.2/10"
+    }
+  ]
+}

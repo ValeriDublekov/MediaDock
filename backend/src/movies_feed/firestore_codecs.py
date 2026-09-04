@@ -231,3 +231,13 @@ def rss_snapshot_from_dict(d: dict, doc_id: Optional[str] = None) -> RssSnapshot
         item_count=d.get("itemCount", 0),
         status=d.get("status", "ready"),
     )
+
+
+def rss_snapshot_state_to_dict(snapshot: RssSnapshot) -> Dict[str, Any]:
+    """Convert the published current-pointer state to its Firestore fields."""
+    return {
+        "snapshotId": snapshot.id,
+        "runId": snapshot.run_id,
+        "createdAt": snapshot.created_at,
+        "itemCount": snapshot.item_count,
+    }

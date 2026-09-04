@@ -17,6 +17,12 @@ changes any of these contracts must update this file, add emulator/fake
 compatibility tests, and document backward-read and migration behavior in the
 same change.
 
+Executable document examples live in `test-contracts/firestore/v1/`. The
+versioned `title.json`, `occurrence.json`, `rss-snapshot-state.json`, and
+`rss-snapshot-item.json` fixtures are consumed by the Python codec tests and
+TypeScript mapper tests; this document describes the contract but is not the
+executable source of those examples.
+
 ## `titles/{titleId}`
 
 One normalized movie or series record.

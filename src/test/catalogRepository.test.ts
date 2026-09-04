@@ -191,15 +191,36 @@ describe('FirestoreCatalogAdapter', () => {
     const snapshotItems = [
       {
         id: 'tt001',
-        data: () => ({ titleId: 'tt001', rssPosition: 0 }),
+        data: () => ({
+          titleId: 'tt001',
+          sourceType: 'movie',
+          groupOrder: 0,
+          feedOrder: 0,
+          entryOrder: 0,
+          rssPosition: 0,
+        }),
       },
       {
         id: 'tt002',
-        data: () => ({ titleId: 'tt002', rssPosition: 1 }),
+        data: () => ({
+          titleId: 'tt002',
+          sourceType: 'series',
+          groupOrder: 1,
+          feedOrder: 0,
+          entryOrder: 1,
+          rssPosition: 1,
+        }),
       },
       {
         id: 'tt003',
-        data: () => ({ titleId: 'tt003', rssPosition: 2 }),
+        data: () => ({
+          titleId: 'tt003',
+          sourceType: 'movie',
+          groupOrder: 0,
+          feedOrder: 1,
+          entryOrder: 0,
+          rssPosition: 2,
+        }),
       },
     ];
     const titleDocs = [
