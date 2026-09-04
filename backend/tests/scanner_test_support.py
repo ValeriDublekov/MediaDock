@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from movies_feed.feed_fetcher import FeedFetcher
 from movies_feed.match_policy import parse_broadcast_range
-from movies_feed.metadata_resolver import MetadataResolver
+from movies_feed.metadata_resolver import MetadataResolver, OmdbResolver
 from movies_feed.omdb_client import (
     OmdbClient,
     OmdbLimitReachedError,
@@ -12,7 +12,10 @@ from movies_feed.omdb_client import (
     OmdbNoMatchError,
 )
 from movies_feed.models import ParseLog, SourceContext
-from movies_feed.proposal_application_store import ProposalApplicationStore
+from movies_feed.proposal_application_store import (
+    ProposalApplicationStore,
+    RepositoryProposalApplicationStore,
+)
 from movies_feed.repository import (
     AuditProposalRepository,
     FakeAuditProposalRepository,
@@ -30,7 +33,12 @@ from movies_feed.repository import (
     ScanRunRepository,
     TitleRepository,
 )
-from movies_feed.scanner import ScannerConfig, ScannerService
+from movies_feed.scanner import (
+    ScannerConfig,
+    ScannerRepositories,
+    ScannerService,
+    ScannerServices,
+)
 
 
 class StaticTestFeedFetcher:
@@ -162,53 +170,87 @@ class ScannerTestBuilder:
         application_store: Optional[ProposalApplicationStore] = None,
         rss_snapshot_repo: Optional[RssSnapshotRepository] = None,
     ) -> ScannerService:
+        resolved_config = config or self.config or ScannerConfig()
+        resolved_omdb_client = omdb_client or self.omdb_client or MockOmdbClient({})
+        resolved_title_repo = title_repo or self.title_repo or FakeTitleRepository()
+        resolved_occurrence_repo = (
+            occurrence_repo
+            or self.occurrence_repo
+            or FakeOccurrenceRepository()
+        )
+        resolved_cache_repo = cache_repo or self.cache_repo or FakeOmdbCacheRepository()
+        resolved_run_repo = run_repo or self.run_repo or FakeScanRunRepository()
+        resolved_parse_log_repo = (
+            parse_log_repo
+            or self.parse_log_repo
+            or FakeParseLogRepository()
+        )
+        resolved_manual_mapping_repo = (
+            manual_mapping_repo
+            or self.manual_mapping_repo
+            or FakeManualMappingRepository()
+        )
+        resolved_audit_proposal_repo = (
+            audit_proposal_repo
+            or self.audit_proposal_repo
+            or FakeAuditProposalRepository()
+        )
+        resolved_now = now if now is not None else self.now
+        if resolved_now is None:
+            resolved_now = datetime.datetime.now(datetime.timezone.utc)
+        resolved_feed_fetcher = feed_fetcher or self.feed_fetcher or StaticTestFeedFetcher()
+        resolved_metadata_resolver = (
+            metadata_resolver
+            if metadata_resolver is not None
+            else self.metadata_resolver
+        )
+        if resolved_metadata_resolver is None:
+            resolved_metadata_resolver = OmdbResolver(
+                resolved_omdb_client,
+                resolved_cache_repo,
+                cache_ttl_days=resolved_config.cache_ttl_days,
+                request_limit=resolved_config.omdb_limit,
+                is_dry_run=resolved_config.is_dry_run,
+                now=resolved_now,
+            )
+        resolved_ai_matcher = (
+            ai_matcher if ai_matcher is not None else self.ai_matcher
+        )
+        resolved_application_store = (
+            application_store
+            if application_store is not None
+            else self.application_store
+        )
+        if resolved_application_store is None and resolved_audit_proposal_repo is not None:
+            resolved_application_store = RepositoryProposalApplicationStore(
+                resolved_audit_proposal_repo,
+                resolved_title_repo,
+                resolved_occurrence_repo,
+            )
+        resolved_rss_snapshot_repo = (
+            rss_snapshot_repo
+            if rss_snapshot_repo is not None
+            else self.rss_snapshot_repo
+        )
         return ScannerService(
-            config=config or self.config or ScannerConfig(),
-            omdb_client=omdb_client or self.omdb_client or MockOmdbClient({}),
-            title_repo=title_repo or self.title_repo or FakeTitleRepository(),
-            occurrence_repo=(
-                occurrence_repo
-                or self.occurrence_repo
-                or FakeOccurrenceRepository()
+            config=resolved_config,
+            repositories=ScannerRepositories(
+                title_repo=resolved_title_repo,
+                occurrence_repo=resolved_occurrence_repo,
+                cache_repo=resolved_cache_repo,
+                run_repo=resolved_run_repo,
+                parse_log_repo=resolved_parse_log_repo,
+                manual_mapping_repo=resolved_manual_mapping_repo,
+                audit_proposal_repo=resolved_audit_proposal_repo,
+                rss_snapshot_repo=resolved_rss_snapshot_repo,
             ),
-            cache_repo=cache_repo or self.cache_repo or FakeOmdbCacheRepository(),
-            run_repo=run_repo or self.run_repo or FakeScanRunRepository(),
-            parse_log_repo=(
-                parse_log_repo
-                or self.parse_log_repo
-                or FakeParseLogRepository()
-            ),
-            manual_mapping_repo=(
-                manual_mapping_repo
-                or self.manual_mapping_repo
-                or FakeManualMappingRepository()
-            ),
-            audit_proposal_repo=(
-                audit_proposal_repo
-                or self.audit_proposal_repo
-                or FakeAuditProposalRepository()
-            ),
-            ai_matcher=ai_matcher if ai_matcher is not None else self.ai_matcher,
-            now=now if now is not None else self.now,
-            feed_fetcher=(
-                feed_fetcher
-                or self.feed_fetcher
-                or StaticTestFeedFetcher()
-            ),
-            metadata_resolver=(
-                metadata_resolver
-                if metadata_resolver is not None
-                else self.metadata_resolver
-            ),
-            application_store=(
-                application_store
-                if application_store is not None
-                else self.application_store
-            ),
-            rss_snapshot_repo=(
-                rss_snapshot_repo
-                if rss_snapshot_repo is not None
-                else self.rss_snapshot_repo
+            services=ScannerServices(
+                omdb_client=resolved_omdb_client,
+                now=resolved_now,
+                feed_fetcher=resolved_feed_fetcher,
+                metadata_resolver=resolved_metadata_resolver,
+                ai_matcher=resolved_ai_matcher,
+                application_store=resolved_application_store,
             ),
         )
 

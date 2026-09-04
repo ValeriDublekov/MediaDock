@@ -26,7 +26,7 @@ from movies_feed.ai_matcher import GeminiModelCapabilityError
 from movies_feed.models import ScanRun
 from movies_feed.proposal_application import ProposalApplicationResult
 from movies_feed.proposal_application_store import FakeProposalApplicationStore
-from movies_feed.scanner import ScannerConfig
+from movies_feed.scanner import ScannerConfig, ScannerRepositories, ScannerServices
 
 
 class TestCliConfiguration(unittest.TestCase):
@@ -163,6 +163,32 @@ class TestCliConfiguration(unittest.TestCase):
                         main(["--fake-repos", "--mode", "rss"]),
                         expected_code,
                     )
+
+    def test_main_composes_grouped_scanner_dependencies(self) -> None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        run = ScanRun(
+            started_at=now,
+            finished_at=now,
+            status="succeeded",
+            trigger="local",
+        )
+        with patch.dict(os.environ, {"OMDB_API_KEY": "configured"}, clear=True), patch(
+            "movies_feed.cli.load_config", return_value={}
+        ), patch("movies_feed.cli.ScannerService") as scanner_type:
+            scanner_type.return_value.run.return_value = run
+            self.assertEqual(
+                main(["--fake-repos", "--mode", "rss"]),
+                EXIT_SUCCESS,
+            )
+
+        scanner_kwargs = scanner_type.call_args.kwargs
+        repositories = scanner_kwargs["repositories"]
+        services = scanner_kwargs["services"]
+        self.assertIsInstance(repositories, ScannerRepositories)
+        self.assertIsInstance(services, ScannerServices)
+        self.assertNotIn("title_repo", scanner_kwargs)
+        self.assertIs(services.metadata_resolver.omdb_client, services.omdb_client)
+        self.assertIs(services.metadata_resolver.cache_repo, repositories.cache_repo)
 
     def test_main_rejects_model_without_generate_content_capability(self) -> None:
         from unittest.mock import MagicMock

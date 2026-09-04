@@ -48,10 +48,7 @@ from .rss_ingestion import RssIngestionService
 from .existing_title_audit import ExistingTitleAuditService
 from .reparse_service import ReparseService
 from .proposal_application import ProposalApplicationService, ProposalApplicationResult
-from .proposal_application_store import (
-    ProposalApplicationStore,
-    RepositoryProposalApplicationStore,
-)
+from .proposal_application_store import ProposalApplicationStore
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +75,28 @@ class ScannerConfig:
 
 
 @dataclass(frozen=True)
+class ScannerRepositories:
+    title_repo: TitleRepository
+    occurrence_repo: OccurrenceRepository
+    cache_repo: OmdbCacheRepository
+    run_repo: ScanRunRepository
+    parse_log_repo: Optional[ParseLogRepository] = None
+    manual_mapping_repo: Optional[ManualMappingRepository] = None
+    audit_proposal_repo: Optional[AuditProposalRepository] = None
+    rss_snapshot_repo: Optional[RssSnapshotRepository] = None
+
+
+@dataclass(frozen=True)
+class ScannerServices:
+    omdb_client: OmdbClient
+    now: datetime.datetime
+    feed_fetcher: FeedFetcher
+    metadata_resolver: MetadataResolver
+    ai_matcher: Optional[AiMatcher] = None
+    application_store: Optional[ProposalApplicationStore] = None
+
+
+@dataclass(frozen=True)
 class _PhaseSelection:
     mode: str
     rss: bool
@@ -92,49 +111,24 @@ class ScannerService:
     def __init__(
         self,
         config: ScannerConfig,
-        omdb_client: OmdbClient,
-        title_repo: TitleRepository,
-        occurrence_repo: OccurrenceRepository,
-        cache_repo: OmdbCacheRepository,
-        run_repo: ScanRunRepository,
-        parse_log_repo: Optional[ParseLogRepository] = None,
-        manual_mapping_repo: Optional[ManualMappingRepository] = None,
-        audit_proposal_repo: Optional[AuditProposalRepository] = None,
-        ai_matcher: Optional[AiMatcher] = None,
-        now: Optional[datetime.datetime] = None,
-        feed_fetcher: Optional[FeedFetcher] = None,
-        metadata_resolver: Optional[MetadataResolver] = None,
-        application_store: Optional[ProposalApplicationStore] = None,
-        rss_snapshot_repo: Optional[RssSnapshotRepository] = None,
+        repositories: ScannerRepositories,
+        services: ScannerServices,
     ):
         self.config = config
-        self.omdb_client = omdb_client
-        self.title_repo = title_repo
-        self.occurrence_repo = occurrence_repo
-        self.cache_repo = cache_repo
-        self.run_repo = run_repo
-        self.parse_log_repo = parse_log_repo
-        self.manual_mapping_repo = manual_mapping_repo
-        self.audit_proposal_repo = audit_proposal_repo
-        self.application_store = application_store
-        self.rss_snapshot_repo = rss_snapshot_repo
-        if self.application_store is None and self.audit_proposal_repo is not None:
-            self.application_store = RepositoryProposalApplicationStore(
-                self.audit_proposal_repo,
-                self.title_repo,
-                self.occurrence_repo,
-            )
-        self.ai_matcher = ai_matcher
-        self.now = now or datetime.datetime.now(datetime.timezone.utc)
-        self.feed_fetcher = feed_fetcher or FeedFetcher()
-        self.metadata_resolver = metadata_resolver or OmdbResolver(
-            omdb_client,
-            cache_repo,
-            cache_ttl_days=config.cache_ttl_days,
-            request_limit=config.omdb_limit,
-            is_dry_run=config.is_dry_run,
-            now=self.now,
-        )
+        self.omdb_client = services.omdb_client
+        self.title_repo = repositories.title_repo
+        self.occurrence_repo = repositories.occurrence_repo
+        self.cache_repo = repositories.cache_repo
+        self.run_repo = repositories.run_repo
+        self.parse_log_repo = repositories.parse_log_repo
+        self.manual_mapping_repo = repositories.manual_mapping_repo
+        self.audit_proposal_repo = repositories.audit_proposal_repo
+        self.application_store = services.application_store
+        self.rss_snapshot_repo = repositories.rss_snapshot_repo
+        self.ai_matcher = services.ai_matcher
+        self.now = services.now
+        self.feed_fetcher = services.feed_fetcher
+        self.metadata_resolver = services.metadata_resolver
         self._reset_session_caches()
         self.existing_title_audit = ExistingTitleAuditService(
             config=self.config,

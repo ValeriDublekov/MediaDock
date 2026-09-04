@@ -280,7 +280,7 @@ python -m unittest backend.tests.test_scan_orchestration backend.tests.test_cli 
 
 ### STEP 9 - Group Scanner Dependencies at the Composition Boundary
 
-Status: not started
+Status: complete
 
 Introduce explicit dataclasses such as `ScannerRepositories` and `ScannerServices`, or one similarly small grouping, and construct them in the CLI composition root. Do not add a DI framework or service locator.
 

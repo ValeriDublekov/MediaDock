@@ -19,9 +19,11 @@ from .firestore_repository import (
     FirestoreAuditProposalRepository,
     get_firestore_client,
 )
+from .feed_fetcher import FeedFetcher
+from .metadata_resolver import OmdbResolver
 from .omdb_client import OmdbClient
 from .ai_matcher import AiMatcher, GeminiModelCapabilityError
-from .scanner import ScannerConfig, ScannerService
+from .scanner import ScannerConfig, ScannerRepositories, ScannerService, ScannerServices
 from .firestore_proposal_application_store import FirestoreProposalApplicationStore
 from .proposal_application_store import FakeProposalApplicationStore
 from .repository import (
@@ -401,9 +403,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if ai_matcher.is_available:
         logger.info("AI matching and validation enabled via GEMINI_API_KEY.")
 
-    scanner = ScannerService(
-        config=config,
-        omdb_client=omdb_client,
+    now = datetime.datetime.now(datetime.timezone.utc)
+    scanner_repositories = ScannerRepositories(
         title_repo=title_repo,
         occurrence_repo=occ_repo,
         cache_repo=cache_repo,
@@ -411,9 +412,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parse_log_repo=parse_log_repo,
         manual_mapping_repo=manual_mapping_repo,
         audit_proposal_repo=audit_proposal_repo,
+        rss_snapshot_repo=rss_snapshot_repo,
+    )
+    scanner_services = ScannerServices(
+        omdb_client=omdb_client,
+        now=now,
+        feed_fetcher=FeedFetcher(),
+        metadata_resolver=OmdbResolver(
+            omdb_client,
+            cache_repo,
+            cache_ttl_days=config.cache_ttl_days,
+            request_limit=config.omdb_limit,
+            is_dry_run=config.is_dry_run,
+            now=now,
+        ),
         ai_matcher=ai_matcher,
         application_store=application_store,
-        rss_snapshot_repo=rss_snapshot_repo,
+    )
+    scanner = ScannerService(
+        config=config,
+        repositories=scanner_repositories,
+        services=scanner_services,
     )
 
     run_id = str(uuid.uuid4())
