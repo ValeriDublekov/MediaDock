@@ -212,7 +212,7 @@ python -m unittest backend.tests.test_scan_write_buffer backend.tests.test_scan_
 
 ### STEP 7 - Extract RSS Ingestion Service
 
-Status: not started
+Status: complete
 
 Create `backend/src/movies_feed/rss_ingestion.py` and move the complete RSS phase into `RssIngestionService`:
 

@@ -5,34 +5,22 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-try:
-    import feedparser
-except ImportError:
-    feedparser = None
-
 from .ids import (
     get_audit_event_id,
-    get_occurrence_id_v1,
     get_rss_snapshot_id,
     get_source_item_id,
-    get_title_id_v2,
-    normalize_title,
 )
 from .match_policy import (
     MatchDecision,
-    effective_source_type,
     evaluate_match,
     get_exclusion_reason as policy_get_exclusion_reason,
     normalize_source_type,
 )
 from .models import (
     ManualMapping,
-    Occurrence,
     ParseLog,
     RssSnapshot,
     ScanRun,
-    SourceContext,
-    Title,
 )
 from .metadata_resolver import MetadataOutcome, MetadataOutcomeStatus, MetadataResolver, OmdbResolver
 from .omdb_client import (
@@ -50,12 +38,11 @@ from .repository import (
     TitleRepository,
     AuditProposalRepository,
 )
-from .rutracker_parser import ParsedTitle, iter_feed_definitions, parse_rutracker_title
 from .ai_matcher import AiMatcher
 from .feed_fetcher import FeedFetcher
-from .scan_contracts import FeedDefinition
 from .rss_snapshot import RssSnapshotCollector
 from .scan_write_buffer import ScanWriteBuffer
+from .rss_ingestion import RssIngestionService, RssPhaseResult
 from .existing_title_audit import ExistingTitleAuditService
 from .reparse_service import ReparseService
 from .proposal_application import ProposalApplicationService, ProposalApplicationResult
@@ -87,28 +74,6 @@ class ScannerConfig:
     reject_proposal: bool = False
     allow_same_run_chaining: bool = False
 
-
-def _get_entry_datetime(entry: Any) -> Optional[datetime.datetime]:
-    parsed_time = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
-    if parsed_time:
-        try:
-            return datetime.datetime(*parsed_time[:6], tzinfo=datetime.timezone.utc)
-        except Exception:
-            return None
-    return None
-
-@dataclass
-class ParsedEntryContext:
-    entry: Any
-    source_context: SourceContext
-    is_ignored_by_date: bool = False
-    raw_title: str = ""
-    parsed: Optional[ParsedTitle] = None
-    lookup_year: Optional[int] = None
-    expected_source_type: Optional[str] = None
-    parse_error: Optional[str] = None
-    feed_order: int = 0
-    entry_order: int = 0
 
 class ScannerService:
     def __init__(
@@ -175,18 +140,6 @@ class ScannerService:
             on_proposal_created=self._run_created_proposal_ids.add,
         )
 
-    def _iter_scan_feed_definitions(self) -> List[FeedDefinition]:
-        if self.config.feed_file:
-            return [
-                FeedDefinition(
-                    id=self.config.feed_file_name,
-                    name=self.config.feed_file_name,
-                    url=None,
-                    type=self.config.feed_file_type,
-                )
-            ]
-        return list(iter_feed_definitions(self.config.rss_feeds))
-
     def _reset_session_caches(self) -> None:
         self.write_buffer = ScanWriteBuffer(
             title_repo=self.title_repo,
@@ -198,6 +151,14 @@ class ScannerService:
         )
         self._run_created_proposal_ids: Set[str] = set()
         self._rss_snapshot_collector = RssSnapshotCollector()
+        self.rss_ingestion = RssIngestionService(
+            config=self.config,
+            feed_fetcher=self.feed_fetcher,
+            metadata_resolver=self.metadata_resolver,
+            write_buffer=self.write_buffer,
+            snapshot_collector=self._rss_snapshot_collector,
+            now=self.now,
+        )
 
     @staticmethod
     def _record_phase_error(run: Optional[ScanRun], message: str) -> None:
@@ -220,7 +181,7 @@ class ScannerService:
             return
 
         rss_metrics = run.phase_metrics.get("rss", {})
-        expected_feed_count = len(self._iter_scan_feed_definitions())
+        expected_feed_count = len(self.rss_ingestion.feed_definitions())
         if (
             expected_feed_count == 0
             or run.feeds_processed != expected_feed_count
@@ -257,13 +218,6 @@ class ScannerService:
             self._record_phase_error(run, f"OMDb phase rejected an invalid request during {phase}")
         self._sync_omdb_attempts(run)
 
-    @staticmethod
-    def _expected_source_type(feed_type: Optional[str], series_marker: bool = False) -> Optional[str]:
-        normalized = normalize_source_type(feed_type)
-        if normalized != "unknown":
-            return normalized
-        return "series" if series_marker else None
-
     def _evaluate_match(
         self,
         *,
@@ -285,19 +239,6 @@ class ScannerService:
             excluded_genres=self.config.excluded_genres,
             manual_mapping=manual_mapping,
         )
-
-    @staticmethod
-    def _match_trace(decision: MatchDecision, omdb_result: OmdbMovieResult) -> Dict[str, Any]:
-        trace: Dict[str, Any] = {
-            "matchDecision": decision.status,
-            "matchReasonCode": decision.reason_code,
-            "matchReason": decision.message,
-            "omdbSourceType": effective_source_type(omdb_result.media_type, omdb_result.source_type),
-            "omdbContentKind": omdb_result.content_kind,
-        }
-        if omdb_result.broadcast_range is not None:
-            trace["omdbBroadcastRange"] = omdb_result.broadcast_range.to_dict()
-        return trace
 
     @staticmethod
     def _match_ignore_reason(decision: MatchDecision) -> str:
@@ -338,28 +279,6 @@ class ScannerService:
 
     def _consume_manual_mapping(self, manual_mapping: ManualMapping) -> None:
         self.write_buffer.consume_manual_mapping(manual_mapping)
-
-    def _get_title(self, title_id: str) -> Optional[Title]:
-        return self.write_buffer.get_title(title_id)
-
-    def _get_occurrence(self, title_id: str, occurrence_id: str) -> Optional[Occurrence]:
-        return self.write_buffer.get_occurrence(title_id, occurrence_id)
-
-    def _stage_title_and_occurrence(
-        self,
-        title_id: str,
-        title_record: Title,
-        occurrence_id: str,
-        occurrence_record: Occurrence,
-        run: ScanRun,
-    ) -> None:
-        self.write_buffer.stage_title_and_occurrence(
-            title_id,
-            title_record,
-            occurrence_id,
-            occurrence_record,
-            run,
-        )
 
     def _flush_parse_logs(self, section_timings: Optional[Dict[str, float]] = None) -> None:
         self.write_buffer.flush_parse_logs(section_timings)
@@ -479,173 +398,8 @@ class ScannerService:
             logger.info(f"Section [prune_logs]: completed in {t_prune:.4f}s")
 
         try:
-            # 1. RSS Feed Processing (if mode is "rss" or "all")
-            phase_1_metrics: Dict[str, Any] = {
-                "status": "skipped",
-                "started_at": None,
-                "finished_at": None,
-                "duration_seconds": 0.0,
-                "feeds_processed": 0,
-                "entries_seen": 0,
-                "titles_created": 0,
-                "titles_updated": 0,
-                "occurrences_created": 0,
-                "occurrences_updated": 0,
-                "cache_hits": 0,
-                "omdb_requests": 0,
-                "ignored_entries": 0,
-                "errors": 0,
-            }
-            if self.config.mode in ("rss", "all"):
-                logger.info("--> [Phase 1/4] Processing RSS feeds...")
-                p1_start = datetime.datetime.now(datetime.timezone.utc)
-                phase_1_metrics["started_at"] = p1_start.isoformat()
-                p1_initial_errors = run.error_count
-                p1_t0 = time.perf_counter()
-                for feed_order, feed_def in enumerate(self._iter_scan_feed_definitions()):
-                    run.feeds_processed += 1
-                    try:
-                        t0_feed = time.perf_counter()
-                        if self.config.feed_file:
-                            feed_bytes = self.feed_fetcher.fetch_file(self.config.feed_file)
-                        else:
-                            feed_bytes = self.feed_fetcher.fetch(feed_def.require_url())
-                        feed = feedparser.parse(feed_bytes)
-                        t_feed = time.perf_counter() - t0_feed
-                        section_timings["feed_fetch"] += t_feed
-                        entries = self.feed_fetcher.validate_parsed_feed(feed)
-                        entries_cnt = len(entries)
-                        logger.info(
-                            f"Section [feed_fetch]: Feed '{feed_def.name}' fetched in {t_feed:.4f}s ({entries_cnt} entries)"
-                        )
-
-                        # Parse entries once, filtering by date early
-                        parsed_contexts: List[ParsedEntryContext] = []
-                        cache_requests_to_prefetch = []
-
-                        cutoff = None
-                        if self.config.force_days > 0:
-                            cutoff = self.now - datetime.timedelta(days=self.config.force_days)
-
-                        for entry_order, entry in enumerate(entries):
-                            source_context = self._source_context_for_entry(entry, feed_def)
-                            raw_title = getattr(entry, "title", "") or ""
-                            
-                            is_ignored = False
-                            if cutoff is not None and source_context.source_published_at is not None:
-                                if source_context.source_published_at < cutoff:
-                                    is_ignored = True
-                                    
-                            ctx = ParsedEntryContext(
-                                entry=entry,
-                                source_context=source_context,
-                                is_ignored_by_date=is_ignored,
-                                raw_title=raw_title,
-                                feed_order=feed_order,
-                                entry_order=entry_order,
-                            )
-                            
-                            if not is_ignored and raw_title:
-                                t0_parse = time.perf_counter()
-                                try:
-                                    ctx.parsed = parse_rutracker_title(
-                                        raw_title,
-                                        content_type=feed_def.type,
-                                        video_settings=self.config.video_settings,
-                                    )
-                                    section_timings["title_parse"] += (time.perf_counter() - t0_parse)
-                                    
-                                    if ctx.parsed and ctx.parsed.title:
-                                        if ctx.parsed.year:
-                                            try:
-                                                ctx.lookup_year = int(ctx.parsed.year)
-                                            except ValueError:
-                                                pass
-                                        ctx.expected_source_type = self._expected_source_type(
-                                            feed_def.type,
-                                             ctx.parsed.is_series,
-                                        )
-                                        cache_requests_to_prefetch.append(
-                                            (ctx.parsed.title, ctx.lookup_year, ctx.expected_source_type, None)
-                                        )
-                                except Exception as e:
-                                    section_timings["title_parse"] += (time.perf_counter() - t0_parse)
-                                    logger.error(f"Error parsing rutracker title '{raw_title}': {e}", exc_info=True)
-                                    ctx.parsed = ParsedTitle(title="", year=None, is_series=False, quality="", rip_type="")
-                                    ctx.parse_error = f"Грешка при парсване: {e}"
-                            
-                            parsed_contexts.append(ctx)
-
-                        if cache_requests_to_prefetch:
-                            self.metadata_resolver.prefetch(
-                                cache_requests_to_prefetch,
-                                section_timings,
-                            )
-
-                        for ctx in parsed_contexts:
-                            run.entries_seen += 1
-                            try:
-                                self._process_entry(ctx, feed_def, run, section_timings)
-                            except OmdbLimitReachedError as e:
-                                logger.warning(f"OMDb limit reached: {e}")
-                                run.error_count += 1
-                                if "OMDb API limit reached" not in run.error_summary:
-                                    run.error_summary.append("OMDb API limit reached")
-                                break
-                            except Exception as e:
-                                err_text = f"Entry error ({type(e).__name__}): {e}"
-                                logger.error(f"Error processing entry {ctx.raw_title}: {err_text}", exc_info=True)
-                                run.error_count += 1
-                                run.error_summary.append(err_text)
-                                try:
-                                    self._log_parse_entry(
-                                        raw_title=ctx.raw_title,
-                                        feed_name=feed_def.name,
-                                        parsed_successfully=False,
-                                        parsed_title=None,
-                                        parsed_year=None,
-                                        omdb_status="error",
-                                        ignored=True,
-                                        ignore_reason="entry_error",
-                                        error_message=err_text,
-                                        feed_entry_id=getattr(ctx.entry, "id", None),
-                                        torrent_url=getattr(ctx.entry, "link", None),
-                                        source_feed_id=feed_def.id,
-                                        source_context=ctx.source_context,
-                                        section_timings=section_timings,
-                                    )
-                                except Exception as log_ex:
-                                    logger.error(f"Failed to log entry error to parse logs: {log_ex}")
-
-                        # Flush batch parse logs and db upserts for feed
-                        self._flush_parse_logs(section_timings)
-                        self._flush_pending_db_upserts(section_timings)
-
-                    except Exception as e:
-                        err_text = f"Feed error for '{feed_def.name}' ({type(e).__name__}): {e}"
-                        logger.error(err_text, exc_info=True)
-                        run.error_count += 1
-                        run.error_summary.append(err_text)
-
-                p1_finish = datetime.datetime.now(datetime.timezone.utc)
-                p1_duration = time.perf_counter() - p1_t0
-                phase_1_metrics["finished_at"] = p1_finish.isoformat()
-                phase_1_metrics["duration_seconds"] = round(p1_duration, 4)
-                phase_1_metrics["feeds_processed"] = run.feeds_processed
-                phase_1_metrics["entries_seen"] = run.entries_seen
-                phase_1_metrics["titles_created"] = run.titles_created
-                phase_1_metrics["titles_updated"] = run.titles_updated
-                phase_1_metrics["occurrences_created"] = run.occurrences_created
-                phase_1_metrics["occurrences_updated"] = run.occurrences_updated
-                phase_1_metrics["cache_hits"] = run.cache_hits
-                phase_1_metrics["omdb_requests"] = run.omdb_requests
-                phase_1_metrics["ignored_entries"] = run.ignored_entries
-                p1_errors = run.error_count - p1_initial_errors
-                phase_1_metrics["errors"] = p1_errors
-                phase_1_metrics["status"] = "succeeded" if p1_errors == 0 else ("failed" if run.feeds_processed == 0 and p1_errors > 0 else "partial")
-            else:
-                logger.info(f"--> [Phase 1/4] RSS feed processing SKIPPED (mode is '{self.config.mode}')")
-            run.phase_metrics["rss"] = phase_1_metrics
+            rss_result = self.rss_ingestion.run(run, section_timings)
+            run.phase_metrics["rss"] = rss_result.to_dict()
 
             if self.config.is_parse_only:
                 logger.info("--> [Phase 2/4] AI Database Audit SKIPPED (parse-only mode)")
@@ -949,408 +703,3 @@ class ScannerService:
             stats["proposals_skipped"] += 1
         return stats
 
-    def _source_context_for_entry(
-        self,
-        entry: Any,
-        feed_def: FeedDefinition,
-    ) -> SourceContext:
-        return SourceContext(
-            source_feed_id=feed_def.id,
-            source_feed_name=feed_def.name,
-            feed_type=feed_def.type or "unknown",
-            feed_entry_id=getattr(entry, "id", None),
-            torrent_url=getattr(entry, "link", None),
-            raw_title=getattr(entry, "title", "") or "",
-            source_published_at=_get_entry_datetime(entry),
-            observed_at=self.now,
-        )
-
-    def _process_entry(
-        self,
-        ctx: ParsedEntryContext,
-        feed_def: FeedDefinition,
-        run: ScanRun,
-        section_timings: Optional[Dict[str, float]] = None,
-    ) -> None:
-        if section_timings is None:
-            section_timings = {
-                "prune_logs": 0.0,
-                "feed_fetch": 0.0,
-                "title_parse": 0.0,
-                "cache_lookup": 0.0,
-                "omdb_api": 0.0,
-                "db_upsert": 0.0,
-                "parse_log_write": 0.0,
-            }
-
-        raw_title = ctx.raw_title
-        feed_entry_id = getattr(ctx.entry, "id", None)
-        torrent_url = getattr(ctx.entry, "link", "")
-        feed_name = feed_def.name
-        source_feed_id = feed_def.id
-        source_context = ctx.source_context
-        item_time = source_context.observed_at or self.now
-
-        if ctx.is_ignored_by_date:
-            run.ignored_entries += 1
-            return
-
-        if not raw_title:
-            run.ignored_entries += 1
-            self._log_parse_entry(
-                raw_title="",
-                feed_name=feed_name,
-                parsed_successfully=False,
-                parsed_title=None,
-                parsed_year=None,
-                omdb_status="not_parsed",
-                ignored=True,
-                ignore_reason="empty_title",
-                error_message=None,
-                feed_entry_id=feed_entry_id,
-                torrent_url=torrent_url,
-                source_feed_id=source_feed_id,
-                source_context=source_context,
-                section_timings=section_timings,
-            )
-            return
-
-        parsed = ctx.parsed
-        parse_error = ctx.parse_error
-
-        if not parsed or not parsed.title or parsed.confidence < 0.7:
-            run.ignored_entries += 1
-            if parse_error:
-                run.error_count += 1
-                run.error_summary.append(f"Parse error for '{raw_title}': {parse_error}")
-
-            if not parsed or not parsed.title:
-                ignore_reason = "parse_error" if parse_error else "no_title"
-                error_msg = parse_error
-            else:
-                primary_reason = parsed.reasons[0] if parsed.reasons else "ambiguous"
-                ignore_reason = f"low_confidence_parse:{primary_reason}"
-                error_msg = f"Low parse confidence ({parsed.confidence:.2f}): {', '.join(parsed.reasons)}"
-
-            trace_details = {
-                "rawTitle": raw_title,
-                "feedName": feed_name,
-                "feedType": feed_def.type,
-                "parseConfidence": parsed.confidence if parsed else 0.0,
-                "parseReasons": list(parsed.reasons) if parsed else ["parse_error"],
-            }
-            if parsed and parsed.title:
-                trace_details["parsedTitle"] = parsed.title
-                trace_details["parsedYear"] = ctx.lookup_year
-
-            self._log_parse_entry(
-                raw_title=raw_title,
-                feed_name=feed_name,
-                parsed_successfully=False,
-                parsed_title=parsed.title if (parsed and parsed.title) else None,
-                parsed_year=ctx.lookup_year if parsed else None,
-                omdb_status="not_parsed",
-                ignored=True,
-                ignore_reason=ignore_reason,
-                error_message=error_msg,
-                feed_entry_id=feed_entry_id,
-                torrent_url=torrent_url,
-                source_feed_id=source_feed_id,
-                source_context=source_context,
-                section_timings=section_timings,
-                trace_details=trace_details,
-            )
-            return
-
-        norm_lookup_title = normalize_title(parsed.title)
-        lookup_year = ctx.lookup_year
-
-        base_trace = {
-            "parsedTitle": parsed.title,
-            "parsedYear": lookup_year,
-            "parsedQuality": parsed.quality or None,
-            "parsedRipType": parsed.rip_type or None,
-            "parsedIsSeries": parsed.is_series,
-            "parseConfidence": parsed.confidence,
-            "parseReasons": list(parsed.reasons),
-            "feedName": feed_name,
-            "feedType": feed_def.type,
-        }
-        expected_source_type = ctx.expected_source_type
-        base_trace["expectedSourceType"] = expected_source_type
-
-        logger.info(f"[Scanner:Parse] Feed '{feed_name}' | '{raw_title}' -> Title: '{parsed.title}', Year: {lookup_year}, Quality: '{parsed.quality}', Rip: '{parsed.rip_type}', IsSeries: {parsed.is_series}")
-
-        if self.config.is_parse_only:
-            self._log_parse_entry(
-                raw_title=raw_title,
-                feed_name=feed_name,
-                parsed_successfully=True,
-                parsed_title=parsed.title,
-                parsed_year=lookup_year,
-                omdb_status="skipped",
-                ignored=True,
-                ignore_reason="parse_only",
-                error_message="Режим само парсване (OMDb заявките са изключени)",
-                feed_entry_id=feed_entry_id,
-                torrent_url=torrent_url,
-                source_feed_id=source_feed_id,
-                source_context=source_context,
-                section_timings=section_timings,
-                trace_details={**base_trace, "decision": "ignored_parse_only", "decisionDetails": "Parse only mode"},
-            )
-            return
-
-        used_manual_mapping = False
-
-        # Check if there is a manual IMDb mapping provided for this title
-        entry_log_id = get_source_item_id(source_feed_id, feed_entry_id, torrent_url)
-        legacy_entry_log_id = get_occurrence_id_v1(feed_entry_id, torrent_url)
-        manual_mapping = self._find_manual_mapping(
-            source_item_id=entry_log_id,
-            legacy_item_id=legacy_entry_log_id,
-            raw_title=raw_title,
-            parsed_title=parsed.title,
-        )
-
-        if manual_mapping and manual_mapping.imdb_id:
-            resolver_outcome = self.metadata_resolver.resolve_by_imdb_id(
-                manual_mapping.imdb_id,
-                lookup_title=parsed.title,
-                lookup_year=lookup_year,
-                media_type=expected_source_type,
-                section_timings=section_timings,
-            )
-        else:
-            resolver_outcome = self.metadata_resolver.resolve_title(
-                parsed.title,
-                lookup_year,
-                media_type=expected_source_type,
-                section_timings=section_timings,
-            )
-
-        self._sync_omdb_attempts(run)
-        if resolver_outcome.cache_hit:
-            run.cache_hits += 1
-
-        if resolver_outcome.status is MetadataOutcomeStatus.FOUND:
-            omdb_result = resolver_outcome.result
-            used_manual_mapping = manual_mapping is not None and bool(manual_mapping.imdb_id)
-        else:
-            run.ignored_entries += 1
-            self._record_metadata_outcome_failure(run, resolver_outcome, "rss")
-            status = (
-                "not_found"
-                if resolver_outcome.status is MetadataOutcomeStatus.CONFIRMED_NOT_FOUND
-                else "skipped"
-                if resolver_outcome.status is MetadataOutcomeStatus.QUOTA_EXHAUSTED
-                else "error"
-            )
-            ignore_reason = (
-                "omdb_not_found"
-                if resolver_outcome.status is MetadataOutcomeStatus.CONFIRMED_NOT_FOUND
-                else "omdb_limit_reached"
-                if resolver_outcome.status is MetadataOutcomeStatus.QUOTA_EXHAUSTED
-                else "omdb_error"
-            )
-            if resolver_outcome.status is MetadataOutcomeStatus.CONFIRMED_NOT_FOUND:
-                err_msg = (
-                    f"OMDb не намери заглавие '{parsed.title}' (търсено с година: {lookup_year}, "
-                    f"тип: {expected_source_type or 'всички'})"
-                )
-            elif resolver_outcome.status is MetadataOutcomeStatus.QUOTA_EXHAUSTED:
-                err_msg = "Достигнат лимит на OMDb заявки за това сканиране"
-            else:
-                err_msg = resolver_outcome.error_message or "OMDb lookup failed"
-            trace_details = {
-                **base_trace,
-                "cacheKey": resolver_outcome.cache_key,
-                "cacheHit": resolver_outcome.cache_hit,
-                "metadataOutcome": resolver_outcome.status.value,
-                "decision": f"ignored_{resolver_outcome.status.value}",
-                "decisionDetails": err_msg,
-            }
-            self._log_parse_entry(
-                raw_title=raw_title,
-                feed_name=feed_name,
-                parsed_successfully=True,
-                parsed_title=parsed.title,
-                parsed_year=lookup_year,
-                omdb_status=status,
-                ignored=True,
-                ignore_reason=ignore_reason,
-                error_message=err_msg,
-                feed_entry_id=feed_entry_id,
-                torrent_url=torrent_url,
-                source_feed_id=source_feed_id,
-                source_context=source_context,
-                section_timings=section_timings,
-                trace_details=trace_details,
-            )
-            if resolver_outcome.status is MetadataOutcomeStatus.QUOTA_EXHAUSTED:
-                raise OmdbLimitReachedError("OMDb quota exhausted for this run")
-            return
-
-        if not omdb_result:
-            return
-
-        omdb_trace_info = {
-            "omdbFoundTitle": omdb_result.title,
-            "omdbFoundYear": omdb_result.year,
-            "omdbFoundType": omdb_result.media_type,
-            "omdbSourceType": effective_source_type(omdb_result.media_type, omdb_result.source_type),
-            "omdbContentKind": omdb_result.content_kind,
-            "omdbImdbId": omdb_result.imdb_id,
-            "omdbGenres": omdb_result.genres,
-            "omdbCountries": omdb_result.countries,
-            "omdbRating": omdb_result.rating,
-        }
-
-        match_decision = self._evaluate_match(
-            expected_source_type=expected_source_type,
-            omdb_result=omdb_result,
-            source_year=lookup_year,
-            manual_mapping=used_manual_mapping,
-        )
-        match_trace = self._match_trace(match_decision, omdb_result)
-        omdb_trace_info.update(match_trace)
-        if not match_decision.is_accepted:
-            run.ignored_entries += 1
-            if match_decision.reason_code in ("excluded_country", "excluded_genre"):
-                err_msg = f"Филтрирано по конфигурация: {match_decision.message}"
-            elif match_decision.reason_code == "type_mismatch":
-                actual_type = effective_source_type(omdb_result.media_type, omdb_result.source_type)
-                err_msg = (
-                    f"Разминаване в типа медия: RSS каналът очаква '{expected_source_type}', "
-                    f"а OMDb върна '{actual_type}'"
-                )
-            elif match_decision.reason_code == "series_season_year_out_of_range":
-                range_text = omdb_result.broadcast_range.raw if omdb_result.broadcast_range else "неизвестен диапазон"
-                err_msg = (
-                    f"Разминаване в годината на сезона: търсена {lookup_year}, "
-                    f"OMDb диапазон '{range_text}'"
-                )
-            elif match_decision.reason_code == "movie_release_year_mismatch":
-                err_msg = f"Разминаване в годината: търсена {lookup_year}, OMDb върна {omdb_result.year} (> 1 г. разлика)"
-            else:
-                err_msg = match_decision.message or "Съвпадението изисква преглед"
-            logger.info(f"[Scanner:Validate] '{parsed.title}' -> {err_msg}")
-            self._log_parse_entry(
-                raw_title=raw_title,
-                feed_name=feed_name,
-                parsed_successfully=True,
-                parsed_title=parsed.title,
-                parsed_year=lookup_year,
-                omdb_status="found",
-                ignored=True,
-                ignore_reason=self._match_ignore_reason(match_decision),
-                error_message=err_msg,
-                feed_entry_id=feed_entry_id,
-                torrent_url=torrent_url,
-                source_feed_id=source_feed_id,
-                source_context=source_context,
-                section_timings=section_timings,
-                trace_details={
-                    **base_trace,
-                    **omdb_trace_info,
-                    "decision": f"{match_decision.status}_{match_decision.reason_code}",
-                    "decisionDetails": err_msg,
-                },
-            )
-            return
-
-        # Record success log entry
-        success_msg = f"Успешно съвпадение в OMDb ({omdb_result.imdb_id}) и преминати всички филтри"
-        logger.info(f"[Scanner:Success] '{omdb_result.title}' ({omdb_result.year}) [{omdb_result.imdb_id}] -> Добавено в каталога")
-        self._log_parse_entry(
-            raw_title=raw_title,
-            feed_name=feed_name,
-            parsed_successfully=True,
-            parsed_title=parsed.title,
-            parsed_year=lookup_year,
-            omdb_status="found",
-            ignored=False,
-            ignore_reason=None,
-            error_message=None,
-            feed_entry_id=feed_entry_id,
-            torrent_url=torrent_url,
-            source_feed_id=source_feed_id,
-            source_context=source_context,
-            section_timings=section_timings,
-            trace_details={
-                **base_trace,
-                **omdb_trace_info,
-                "decision": "added_to_catalog",
-                "decisionDetails": success_msg,
-            },
-        )
-
-        # Prepare records
-        media_type = omdb_result.media_type
-        imdb_id = omdb_result.imdb_id
-        source_type = effective_source_type(omdb_result.media_type, omdb_result.source_type)
-        title_id = get_title_id_v2(
-            imdb_id,
-            omdb_result.title,
-            omdb_result.year,
-            source_type,
-        )
-
-        title_record = Title(
-            title=omdb_result.title,
-            normalized_title=normalize_title(omdb_result.title),
-            year=omdb_result.year,
-            media_type=media_type,
-            first_seen_at=item_time,
-            last_seen_at=item_time,
-            updated_at=self.now,
-            imdb_id=imdb_id,
-            imdb_rating=omdb_result.rating,
-            imdb_votes=omdb_result.votes,
-            metascore=omdb_result.metascore,
-            genres=omdb_result.genres,
-            countries=omdb_result.countries,
-            director=omdb_result.director,
-            plot=omdb_result.plot,
-            poster_url=omdb_result.poster_url,
-            runtime=omdb_result.runtime,
-            awards=omdb_result.awards,
-            box_office=omdb_result.box_office,
-            ratings=omdb_result.ratings,
-            source_type=source_type,
-            content_kind=omdb_result.content_kind,
-            broadcast_range=omdb_result.broadcast_range,
-        )
-
-        occurrence_id = get_source_item_id(source_feed_id, feed_entry_id, torrent_url)
-
-        occurrence_record = Occurrence(
-            source_feed_id=source_feed_id,
-            source_feed_name=feed_def.name,
-            feed_entry_id=feed_entry_id,
-            torrent_url=torrent_url,
-            raw_title=raw_title,
-            quality=parsed.quality,
-            rip_type=parsed.rip_type,
-            first_seen_at=item_time,
-            last_seen_at=item_time,
-            source_context=source_context,
-        )
-
-        # Upsert
-        if not self.config.is_dry_run:
-            self._stage_title_and_occurrence(title_id, title_record, occurrence_id, occurrence_record, run)
-        else:
-            # Simulate creation tracking for dry run without storing
-            run.titles_created += 1
-            run.occurrences_created += 1
-
-        self._rss_snapshot_collector.record_candidate(
-            title_id=title_id,
-            source_type=source_type,
-            feed_order=ctx.feed_order,
-            entry_order=ctx.entry_order,
-        )
-
-        if used_manual_mapping and manual_mapping is not None and not self.config.is_dry_run:
-            self.write_buffer.stage_manual_mapping(manual_mapping)

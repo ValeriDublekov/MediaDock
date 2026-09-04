@@ -21,13 +21,59 @@ except ImportError:
         make_series_result,
     )
 
-from movies_feed.models import ParseLog, RssSnapshot, RssSnapshotItem
+from movies_feed.ids import get_title_id_v2
+from movies_feed.models import ParseLog, RssSnapshot, RssSnapshotItem, Title
 from movies_feed.omdb_client import OmdbTransportError
 from movies_feed.repository import FakeRssSnapshotRepository
 from movies_feed.scanner import ScannerConfig
 
 
 class TestRssIngestion(ScannerTestMixin, unittest.TestCase):
+    def test_existing_accepted_title_is_recorded_in_snapshot(self):
+        snapshot_repo = FakeRssSnapshotRepository()
+        title_id = get_title_id_v2(
+            self.valid_movie.imdb_id,
+            self.valid_movie.title,
+            self.valid_movie.year,
+            "movie",
+        )
+        self.title_repo.upsert(
+            title_id,
+            Title(
+                title=self.valid_movie.title,
+                normalized_title="the matrix",
+                year=self.valid_movie.year,
+                media_type="movie",
+                first_seen_at=self.now,
+                last_seen_at=self.now,
+                updated_at=self.now,
+                imdb_id=self.valid_movie.imdb_id,
+                source_type="movie",
+            ),
+        )
+        config = ScannerConfig(
+            rss_feeds={
+                "movie-feed": {
+                    "name": "Movie Feed",
+                    "url": make_inline_feed("The Matrix (1999) [1080p]"),
+                    "type": "movie",
+                }
+            },
+            omdb_limit=10,
+        )
+        scanner = self.scanner_builder.build(
+            config=config,
+            omdb_client=MockOmdbClient({"the matrix": self.valid_movie}),
+            rss_snapshot_repo=snapshot_repo,
+        )
+
+        run = scanner.run("existing-title-snapshot")
+
+        self.assertEqual(run.status, "succeeded")
+        latest = snapshot_repo.get_latest()
+        self.assertIsNotNone(latest)
+        self.assertEqual([item.title_id for item in latest[1]], [title_id])
+
     def test_successful_rss_run_publishes_movie_first_snapshot_order(self):
         snapshot_repo = FakeRssSnapshotRepository()
         config = ScannerConfig(
@@ -402,7 +448,7 @@ class TestRssIngestion(ScannerTestMixin, unittest.TestCase):
         omdb = MockOmdbClient({})
         scanner = self.create_scanner(config, omdb)
 
-        with patch("movies_feed.scanner.parse_rutracker_title", side_effect=ValueError("Syntax parsing crash")):
+        with patch("movies_feed.rss_ingestion.parse_rutracker_title", side_effect=ValueError("Syntax parsing crash")):
             run = scanner.run("run_parse_err")
 
         self.assertEqual(run.ignored_entries, 1)
@@ -494,7 +540,7 @@ class TestRssIngestion(ScannerTestMixin, unittest.TestCase):
             parse_calls.append(raw)
             return real_parse(raw, **kwargs)
 
-        with patch("movies_feed.scanner.parse_rutracker_title", side_effect=parse_spy):
+        with patch("movies_feed.rss_ingestion.parse_rutracker_title", side_effect=parse_spy):
             run = scanner.run("run_single_pass")
 
         self.assertEqual(run.status, "succeeded")
