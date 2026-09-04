@@ -254,7 +254,7 @@ class TestExistingTitleAudit(unittest.TestCase):
         }
         scanner.ai_matcher = mock_ai
 
-        res = scanner._recheck_existing_titles()
+        res = scanner.recheck_existing_titles()
         # Should only check 1 title (t2), because t1 was already ai_validated=True
         self.assertEqual(res["titles_checked"], 1)
         # Verify t2 is now marked ai_validated=True in repository
@@ -286,7 +286,7 @@ class TestExistingTitleAudit(unittest.TestCase):
         mock_ai.batch_recheck_matches.return_value = {}
         scanner.ai_matcher = mock_ai
 
-        res = scanner._recheck_existing_titles()
+        res = scanner.recheck_existing_titles()
         # On batch 1 failure, it should stop immediately
         self.assertEqual(mock_ai.batch_recheck_matches.call_count, 1)
 
@@ -753,7 +753,7 @@ class TestExistingTitleAudit(unittest.TestCase):
             last_seen_at=self.now + datetime.timedelta(hours=1),
         )
 
-        scanner._stage_title_and_occurrence(
+        scanner.write_buffer.stage_title_and_occurrence(
             title_id,
             changed_target,
             occurrence_id,

@@ -301,7 +301,7 @@ python -m unittest backend.tests.test_cli backend.tests.test_scanner backend.tes
 
 ### STEP 10 - Remove Scanner Compatibility Wrappers and Dead Paths
 
-Status: not started
+Status: complete
 
 Use symbol references and tests to remove wrappers made obsolete by the extracted services, including duplicate private/public forwarding methods and repeated validation paths. Do not remove a public CLI behavior or repository method solely to reduce line count.
 
@@ -310,6 +310,8 @@ Acceptance criteria:
 - Every remaining scanner method owns orchestration behavior used by at least one production caller.
 - Existing-title audit, reparse, and proposal application each have one authoritative implementation path.
 - `scanner.py` meets the approximate 500-line budget or documents a concrete reason for exceeding it.
+
+Line-budget note: `scanner.py` remains above the approximate 500-line budget because it is the shared scan lifecycle boundary. It owns run initialization and finalization, phase status and timing aggregation, run persistence, RSS snapshot publication, and the callback adapters connecting the extracted services to the shared write buffer. Moving those responsibilities would either duplicate lifecycle accounting or cross service ownership boundaries.
 
 Validation:
 

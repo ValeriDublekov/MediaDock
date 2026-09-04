@@ -58,7 +58,6 @@ class ExistingTitleAuditService:
         record_metadata_outcome_failure: Callable[[Optional[ScanRun], MetadataOutcome, str], None],
         sync_omdb_attempts: Callable[[Optional[ScanRun]], None],
         evaluate_match_callback: Callable[..., MatchDecision],
-        on_proposal_created: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.config = config
         self.title_repo = title_repo
@@ -73,7 +72,6 @@ class ExistingTitleAuditService:
         self._record_metadata_outcome_failure = record_metadata_outcome_failure
         self._sync_omdb_attempts = sync_omdb_attempts
         self._evaluate_match = evaluate_match_callback
-        self._on_proposal_created = on_proposal_created
 
     def _evaluate_existing_title_match(self, title_record: Title, raw_title: str) -> MatchDecision:
         expected_source_type = effective_source_type(title_record.media_type, title_record.source_type)
@@ -623,8 +621,6 @@ class ExistingTitleAuditService:
                             },
                         )
                         stats["proposals"] += 1
-                        if self._on_proposal_created:
-                            self._on_proposal_created(proposal_id)
                         if not self.config.is_dry_run and self.audit_proposal_repo:
                             self.audit_proposal_repo.refresh_from_audit(prop)
 

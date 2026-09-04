@@ -277,7 +277,7 @@ class FeedFetcherTests(unittest.TestCase):
         scanner = self.create_scanner(fetcher)
         parsed_feed = SimpleNamespace(bozo=False, entries=[])
 
-        with patch("movies_feed.scanner.feedparser.parse", return_value=parsed_feed) as parse:
+        with patch("movies_feed.rss_ingestion.feedparser.parse", return_value=parsed_feed) as parse:
             run = scanner.run("bytes-only")
 
         self.assertEqual(run.status, "succeeded")
@@ -297,7 +297,7 @@ class FeedFetcherTests(unittest.TestCase):
             entries=[SimpleNamespace(title="Should not be processed")],
         )
 
-        with patch("movies_feed.scanner.feedparser.parse", return_value=bozo_feed):
+        with patch("movies_feed.rss_ingestion.feedparser.parse", return_value=bozo_feed):
             run = scanner.run("bozo")
 
         self.assertEqual(run.status, "partial")

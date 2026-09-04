@@ -1,9 +1,8 @@
 import datetime
 import logging
-import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 from .ids import (
     get_audit_event_id,
@@ -13,7 +12,6 @@ from .ids import (
 from .match_policy import (
     MatchDecision,
     evaluate_match,
-    get_exclusion_reason as policy_get_exclusion_reason,
     normalize_source_type,
 )
 from .models import (
@@ -27,7 +25,6 @@ from .scan_contracts import ScanPhaseOutcome
 from .metadata_resolver import MetadataOutcome, MetadataOutcomeStatus, MetadataResolver, OmdbResolver
 from .omdb_client import (
     OmdbClient,
-    OmdbLimitReachedError,
     OmdbMovieResult,
 )
 from .repository import (
@@ -47,7 +44,7 @@ from .scan_write_buffer import ScanWriteBuffer
 from .rss_ingestion import RssIngestionService
 from .existing_title_audit import ExistingTitleAuditService
 from .reparse_service import ReparseService
-from .proposal_application import ProposalApplicationService, ProposalApplicationResult
+from .proposal_application import ProposalApplicationService
 from .proposal_application_store import ProposalApplicationStore
 
 logger = logging.getLogger(__name__)
@@ -144,7 +141,6 @@ class ScannerService:
             record_metadata_outcome_failure=self._record_metadata_outcome_failure,
             sync_omdb_attempts=self._sync_omdb_attempts,
             evaluate_match_callback=self._evaluate_match,
-            on_proposal_created=self._run_created_proposal_ids.add,
         )
 
     def _reset_session_caches(self) -> None:
@@ -156,7 +152,6 @@ class ScannerService:
             is_dry_run=self.config.is_dry_run,
             is_parse_only=self.config.is_parse_only,
         )
-        self._run_created_proposal_ids: Set[str] = set()
         self._rss_snapshot_collector = RssSnapshotCollector()
         self.rss_ingestion = RssIngestionService(
             config=self.config,
@@ -312,17 +307,6 @@ class ScannerService:
 
     def _flush_pending_db_upserts(self, section_timings: Optional[Dict[str, float]] = None) -> None:
         self.write_buffer.flush_pending_db_upserts(section_timings)
-
-    def get_exclusion_reason(self, countries: List[str], genres: List[str]) -> Optional[str]:
-        return policy_get_exclusion_reason(
-            countries,
-            genres,
-            self.config.excluded_countries,
-            self.config.excluded_genres,
-        )
-
-    def is_excluded(self, countries: List[str], genres: List[str]) -> bool:
-        return self.get_exclusion_reason(countries, genres) is not None
 
     def _log_parse_entry(
         self,
@@ -692,18 +676,6 @@ class ScannerService:
             run.proposals_created += stats["proposals"]
         return stats
 
-    def _recheck_existing_titles(
-        self,
-        run: Optional[ScanRun] = None,
-        section_timings: Optional[Dict[str, float]] = None,
-        excluded_title_ids: Optional[Set[str]] = None,
-    ) -> Dict[str, int]:
-        return self.recheck_existing_titles(
-            run=run,
-            section_timings=section_timings,
-            excluded_title_ids=excluded_title_ids,
-        )
-
     def reparse_unfound_entries(
         self,
         run: Optional[ScanRun] = None,
@@ -750,7 +722,6 @@ class ScannerService:
         self,
         run: Optional[ScanRun] = None,
         section_timings: Optional[Dict[str, float]] = None,
-        excluded_proposal_ids: Optional[Set[str]] = None,
     ) -> Dict[str, int]:
         stats = {
             "proposals_seen": 0,
@@ -777,9 +748,6 @@ class ScannerService:
 
         logger.info(f"Applying explicit proposal {proposal_id}")
         stats["proposals_seen"] += 1
-        if excluded_proposal_ids and proposal_id in excluded_proposal_ids:
-            stats["proposals_skipped"] += 1
-            return stats
         res = app_service.apply_proposal(
             proposal_id,
             dry_run=self.config.is_dry_run,
