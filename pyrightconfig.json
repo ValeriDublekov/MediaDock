@@ -4,6 +4,7 @@
     "backend/src/movies_feed/rss_snapshot.py",
     "backend/src/movies_feed/scan_write_buffer.py",
     "backend/src/movies_feed/rss_ingestion.py",
+    "backend/src/movies_feed/rss_entry_processor.py",
     "backend/src/movies_feed/firestore_codecs.py"
   ],
   "exclude": [

@@ -188,7 +188,7 @@ python -m unittest backend.tests.test_rss_entry_processor backend.tests.test_rss
 
 ### STEP 5 - Add the New Boundary to Strict Type Checking
 
-Status: not started
+Status: complete
 
 Add `backend/src/movies_feed/rss_entry_processor.py` to `pyrightconfig.json`. Resolve strict errors at the new module boundary without broad ignores or weakening global settings.
 

@@ -529,7 +529,7 @@ class RssEntryProcessor:
     ) -> Any:
         return self.write_buffer.find_manual_mapping(
             source_item_id=get_source_item_id(source_feed_id, feed_entry_id, torrent_url),
-            legacy_item_id=get_occurrence_id_v1(feed_entry_id, torrent_url),
+            legacy_item_id=get_occurrence_id_v1(feed_entry_id, torrent_url or ""),
             raw_title=raw_title,
             parsed_title=parsed_title,
         )
