@@ -1,14 +1,35 @@
+import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from movies_feed.feed_fetcher import FeedFetcher
 from movies_feed.match_policy import parse_broadcast_range
+from movies_feed.metadata_resolver import MetadataResolver
 from movies_feed.omdb_client import (
     OmdbClient,
     OmdbLimitReachedError,
     OmdbMovieResult,
     OmdbNoMatchError,
 )
+from movies_feed.proposal_application_store import ProposalApplicationStore
+from movies_feed.repository import (
+    AuditProposalRepository,
+    FakeAuditProposalRepository,
+    FakeManualMappingRepository,
+    FakeOccurrenceRepository,
+    FakeOmdbCacheRepository,
+    FakeParseLogRepository,
+    FakeScanRunRepository,
+    FakeTitleRepository,
+    ManualMappingRepository,
+    OccurrenceRepository,
+    OmdbCacheRepository,
+    ParseLogRepository,
+    RssSnapshotRepository,
+    ScanRunRepository,
+    TitleRepository,
+)
+from movies_feed.scanner import ScannerConfig, ScannerService
 
 
 class StaticTestFeedFetcher:
@@ -82,6 +103,112 @@ class MockOmdbClient(OmdbClient):
             countries=payload.get("Country", "").split(", "),
             director=None, plot=None, poster_url=None,
             runtime=None, awards=None, box_office=None, ratings=[], raw_payload=payload
+        )
+
+
+class ScannerTestBuilder:
+    def __init__(
+        self,
+        *,
+        config: Optional[ScannerConfig] = None,
+        omdb_client: Optional[OmdbClient] = None,
+        now: Optional[datetime.datetime] = None,
+        metadata_resolver: Optional[MetadataResolver] = None,
+        feed_fetcher: Optional[FeedFetcher] = None,
+        title_repo: Optional[TitleRepository] = None,
+        occurrence_repo: Optional[OccurrenceRepository] = None,
+        cache_repo: Optional[OmdbCacheRepository] = None,
+        run_repo: Optional[ScanRunRepository] = None,
+        parse_log_repo: Optional[ParseLogRepository] = None,
+        manual_mapping_repo: Optional[ManualMappingRepository] = None,
+        audit_proposal_repo: Optional[AuditProposalRepository] = None,
+        ai_matcher: Any = None,
+        application_store: Optional[ProposalApplicationStore] = None,
+        rss_snapshot_repo: Optional[RssSnapshotRepository] = None,
+    ) -> None:
+        self.config = config
+        self.omdb_client = omdb_client
+        self.now = now
+        self.metadata_resolver = metadata_resolver
+        self.feed_fetcher = feed_fetcher
+        self.title_repo = title_repo
+        self.occurrence_repo = occurrence_repo
+        self.cache_repo = cache_repo
+        self.run_repo = run_repo
+        self.parse_log_repo = parse_log_repo
+        self.manual_mapping_repo = manual_mapping_repo
+        self.audit_proposal_repo = audit_proposal_repo
+        self.ai_matcher = ai_matcher
+        self.application_store = application_store
+        self.rss_snapshot_repo = rss_snapshot_repo
+
+    def build(
+        self,
+        *,
+        config: Optional[ScannerConfig] = None,
+        omdb_client: Optional[OmdbClient] = None,
+        now: Optional[datetime.datetime] = None,
+        metadata_resolver: Optional[MetadataResolver] = None,
+        feed_fetcher: Optional[FeedFetcher] = None,
+        title_repo: Optional[TitleRepository] = None,
+        occurrence_repo: Optional[OccurrenceRepository] = None,
+        cache_repo: Optional[OmdbCacheRepository] = None,
+        run_repo: Optional[ScanRunRepository] = None,
+        parse_log_repo: Optional[ParseLogRepository] = None,
+        manual_mapping_repo: Optional[ManualMappingRepository] = None,
+        audit_proposal_repo: Optional[AuditProposalRepository] = None,
+        ai_matcher: Any = None,
+        application_store: Optional[ProposalApplicationStore] = None,
+        rss_snapshot_repo: Optional[RssSnapshotRepository] = None,
+    ) -> ScannerService:
+        return ScannerService(
+            config=config or self.config or ScannerConfig(),
+            omdb_client=omdb_client or self.omdb_client or MockOmdbClient({}),
+            title_repo=title_repo or self.title_repo or FakeTitleRepository(),
+            occurrence_repo=(
+                occurrence_repo
+                or self.occurrence_repo
+                or FakeOccurrenceRepository()
+            ),
+            cache_repo=cache_repo or self.cache_repo or FakeOmdbCacheRepository(),
+            run_repo=run_repo or self.run_repo or FakeScanRunRepository(),
+            parse_log_repo=(
+                parse_log_repo
+                or self.parse_log_repo
+                or FakeParseLogRepository()
+            ),
+            manual_mapping_repo=(
+                manual_mapping_repo
+                or self.manual_mapping_repo
+                or FakeManualMappingRepository()
+            ),
+            audit_proposal_repo=(
+                audit_proposal_repo
+                or self.audit_proposal_repo
+                or FakeAuditProposalRepository()
+            ),
+            ai_matcher=ai_matcher if ai_matcher is not None else self.ai_matcher,
+            now=now if now is not None else self.now,
+            feed_fetcher=(
+                feed_fetcher
+                or self.feed_fetcher
+                or StaticTestFeedFetcher()
+            ),
+            metadata_resolver=(
+                metadata_resolver
+                if metadata_resolver is not None
+                else self.metadata_resolver
+            ),
+            application_store=(
+                application_store
+                if application_store is not None
+                else self.application_store
+            ),
+            rss_snapshot_repo=(
+                rss_snapshot_repo
+                if rss_snapshot_repo is not None
+                else self.rss_snapshot_repo
+            ),
         )
 
 

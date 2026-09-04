@@ -5,8 +5,10 @@ from unittest.mock import patch
 
 try:
     from . import _test_stubs
+    from .scanner_test_support import ScannerTestBuilder
 except ImportError:
     import _test_stubs
+    from scanner_test_support import ScannerTestBuilder
 
 from movies_feed.cli import (
     ConfigurationError,
@@ -24,14 +26,7 @@ from movies_feed.ai_matcher import GeminiModelCapabilityError
 from movies_feed.models import ScanRun
 from movies_feed.proposal_application import ProposalApplicationResult
 from movies_feed.proposal_application_store import FakeProposalApplicationStore
-from movies_feed.repository import (
-    FakeOccurrenceRepository,
-    FakeOmdbCacheRepository,
-    FakeParseLogRepository,
-    FakeScanRunRepository,
-    FakeTitleRepository,
-)
-from movies_feed.scanner import ScannerConfig, ScannerService
+from movies_feed.scanner import ScannerConfig
 
 
 class TestCliConfiguration(unittest.TestCase):
@@ -301,15 +296,9 @@ class TestCliConfiguration(unittest.TestCase):
         self.assertTrue(scanner_config.reject_proposal)
 
     def test_all_mode_skips_proposal_application(self) -> None:
-        scanner = ScannerService(
+        scanner = ScannerTestBuilder().build(
             config=ScannerConfig(mode="all", rss_feeds={}),
             omdb_client=object(),
-            title_repo=FakeTitleRepository(),
-            occurrence_repo=FakeOccurrenceRepository(),
-            cache_repo=FakeOmdbCacheRepository(),
-            run_repo=FakeScanRunRepository(),
-            parse_log_repo=FakeParseLogRepository(),
-            ai_matcher=None,
         )
 
         with patch.object(
@@ -329,13 +318,9 @@ class TestCliConfiguration(unittest.TestCase):
             status="running",
             trigger="local",
         )
-        scanner = ScannerService(
+        scanner = ScannerTestBuilder().build(
             config=ScannerConfig(mode="apply-proposals"),
             omdb_client=object(),
-            title_repo=FakeTitleRepository(),
-            occurrence_repo=FakeOccurrenceRepository(),
-            cache_repo=FakeOmdbCacheRepository(),
-            run_repo=FakeScanRunRepository(),
             application_store=FakeProposalApplicationStore(),
         )
 
@@ -353,13 +338,9 @@ class TestCliConfiguration(unittest.TestCase):
             status="running",
             trigger="local",
         )
-        scanner = ScannerService(
+        scanner = ScannerTestBuilder().build(
             config=ScannerConfig(mode="apply-proposals", proposal_id="proposal-1"),
             omdb_client=object(),
-            title_repo=FakeTitleRepository(),
-            occurrence_repo=FakeOccurrenceRepository(),
-            cache_repo=FakeOmdbCacheRepository(),
-            run_repo=FakeScanRunRepository(),
             application_store=FakeProposalApplicationStore(),
         )
         result = ProposalApplicationResult(
@@ -433,7 +414,7 @@ class TestParseOnlyExecution(unittest.TestCase):
                 }
 
         now = datetime.datetime.now(datetime.timezone.utc)
-        scanner = ScannerService(
+        scanner = ScannerTestBuilder().build(
             config=ScannerConfig(
                 rss_feeds={},
                 feed_file="tests/fixtures/movies_feed.atom",
@@ -441,11 +422,6 @@ class TestParseOnlyExecution(unittest.TestCase):
                 mode="rss",
             ),
             omdb_client=ExplodingOmdb(),
-            title_repo=FakeTitleRepository(),
-            occurrence_repo=FakeOccurrenceRepository(),
-            cache_repo=FakeOmdbCacheRepository(),
-            run_repo=FakeScanRunRepository(),
-            parse_log_repo=FakeParseLogRepository(),
             ai_matcher=ExplodingAi(),
             now=now,
         )

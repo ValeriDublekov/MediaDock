@@ -83,7 +83,7 @@ python -m unittest backend.tests.test_scanner backend.tests.test_existing_title_
 
 ### STEP 2 - Add a Scanner Test Builder
 
-Status: not started
+Status: complete
 
 Add a `ScannerTestBuilder` to `backend/tests/scanner_test_support.py`. It should create fresh fake repositories by default and allow explicit overrides for config, clock, resolver, fetcher, repositories, and application store.
 

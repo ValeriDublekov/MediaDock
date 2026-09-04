@@ -5,10 +5,10 @@ from unittest.mock import MagicMock
 
 try:
     from . import _test_stubs
-    from .scanner_test_support import MockOmdbClient, make_series_result
+    from .scanner_test_support import MockOmdbClient, ScannerTestBuilder, make_series_result
 except ImportError:
     import _test_stubs
-    from scanner_test_support import MockOmdbClient, make_series_result
+    from scanner_test_support import MockOmdbClient, ScannerTestBuilder, make_series_result
 
 from movies_feed.audit_proposal import ProposalTarget, audit_proposal_from_dict
 from movies_feed.metadata_resolver import MetadataOutcome, MetadataOutcomeStatus
@@ -36,6 +36,15 @@ class TestExistingTitleAudit(unittest.TestCase):
         self.run_repo = FakeScanRunRepository()
         self.parse_log_repo = FakeParseLogRepository()
         self.proposal_repo = FakeAuditProposalRepository()
+        self.scanner_builder = ScannerTestBuilder(
+            now=self.now,
+            title_repo=self.title_repo,
+            occurrence_repo=self.occurrence_repo,
+            cache_repo=self.cache_repo,
+            run_repo=self.run_repo,
+            parse_log_repo=self.parse_log_repo,
+            audit_proposal_repo=self.proposal_repo,
+        )
 
         self.candidate = OmdbMovieResult(
             title="Replacement Film",
@@ -98,16 +107,9 @@ class TestExistingTitleAudit(unittest.TestCase):
         self.assertEqual({log.event_kind for log in logs}, {"source", "audit_review"})
 
     def create_scanner(self, config: ScannerConfig, omdb_client, metadata_resolver=None) -> ScannerService:
-        return ScannerService(
+        return self.scanner_builder.build(
             config=config,
             omdb_client=omdb_client,
-            title_repo=self.title_repo,
-            occurrence_repo=self.occurrence_repo,
-            cache_repo=self.cache_repo,
-            run_repo=self.run_repo,
-            parse_log_repo=self.parse_log_repo,
-            audit_proposal_repo=self.proposal_repo,
-            now=self.now,
             metadata_resolver=metadata_resolver,
         )
 
@@ -842,16 +844,9 @@ class TestExistingTitleAudit(unittest.TestCase):
             status=MetadataOutcomeStatus.FOUND,
             result=self.candidate,
         )
-        scanner = ScannerService(
+        scanner = self.scanner_builder.build(
             config=ScannerConfig(trigger="manual", mode="recheck-existing"),
             omdb_client=MockOmdbClient({"replacement film": self.candidate}),
-            title_repo=self.title_repo,
-            occurrence_repo=self.occurrence_repo,
-            cache_repo=self.cache_repo,
-            run_repo=self.run_repo,
-            parse_log_repo=self.parse_log_repo,
-            audit_proposal_repo=self.proposal_repo,
-            now=self.now,
             metadata_resolver=metadata_resolver,
         )
         mock_ai = MagicMock()

@@ -6,8 +6,10 @@ from unittest.mock import patch
 
 try:
     from . import _test_stubs
+    from .scanner_test_support import ScannerTestBuilder
 except ImportError:
     import _test_stubs
+    from scanner_test_support import ScannerTestBuilder
 
 import requests
 
@@ -24,13 +26,6 @@ from movies_feed.feed_fetcher import (
     FeedUrlError,
 )
 from movies_feed.omdb_client import OmdbClient
-from movies_feed.repository import (
-    FakeOccurrenceRepository,
-    FakeOmdbCacheRepository,
-    FakeParseLogRepository,
-    FakeScanRunRepository,
-    FakeTitleRepository,
-)
 from movies_feed.scanner import ScannerConfig, ScannerService
 
 
@@ -258,7 +253,7 @@ class FeedFetcherTests(unittest.TestCase):
                 fetcher.fetch_file(oversized_path)
 
     def create_scanner(self, feed_fetcher):
-        return ScannerService(
+        return ScannerTestBuilder().build(
             config=ScannerConfig(
                 rss_feeds={
                     "test": {
@@ -268,11 +263,6 @@ class FeedFetcherTests(unittest.TestCase):
                 },
             ),
             omdb_client=OmdbClient(api_key="test"),
-            title_repo=FakeTitleRepository(),
-            occurrence_repo=FakeOccurrenceRepository(),
-            cache_repo=FakeOmdbCacheRepository(),
-            run_repo=FakeScanRunRepository(),
-            parse_log_repo=FakeParseLogRepository(),
             feed_fetcher=feed_fetcher,
         )
 

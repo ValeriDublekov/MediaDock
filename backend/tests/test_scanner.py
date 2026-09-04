@@ -7,7 +7,7 @@ try:
     from . import _test_stubs
     from .scanner_test_support import (
         MockOmdbClient,
-        StaticTestFeedFetcher,
+        ScannerTestBuilder,
         make_inline_feed,
         make_multi_entry_feed,
         make_series_result,
@@ -16,7 +16,7 @@ except ImportError:
     import _test_stubs
     from scanner_test_support import (
         MockOmdbClient,
-        StaticTestFeedFetcher,
+        ScannerTestBuilder,
         make_inline_feed,
         make_multi_entry_feed,
         make_series_result,
@@ -57,6 +57,16 @@ class TestScanner(unittest.TestCase):
         self.parse_log_repo = FakeParseLogRepository()
         self.manual_mapping_repo = FakeManualMappingRepository()
         self.audit_proposal_repo = FakeAuditProposalRepository()
+        self.scanner_builder = ScannerTestBuilder(
+            now=self.now,
+            title_repo=self.title_repo,
+            occurrence_repo=self.occ_repo,
+            cache_repo=self.cache_repo,
+            run_repo=self.run_repo,
+            parse_log_repo=self.parse_log_repo,
+            manual_mapping_repo=self.manual_mapping_repo,
+            audit_proposal_repo=self.audit_proposal_repo,
+        )
 
         self.valid_movie = OmdbMovieResult(
             title="The Matrix", year=1999, imdb_id="tt0133093",
@@ -81,18 +91,10 @@ class TestScanner(unittest.TestCase):
         )
 
     def create_scanner(self, config: ScannerConfig, omdb_client: OmdbClient) -> ScannerService:
-        return ScannerService(
+        return self.scanner_builder.build(
             config=config,
             omdb_client=omdb_client,
-            title_repo=self.title_repo,
-            occurrence_repo=self.occ_repo,
-            cache_repo=self.cache_repo,
-            run_repo=self.run_repo,
-            parse_log_repo=self.parse_log_repo,
-            manual_mapping_repo=self.manual_mapping_repo,
-            audit_proposal_repo=self.audit_proposal_repo,
             now=self.now,
-            feed_fetcher=StaticTestFeedFetcher(),
         )
 
     def make_retry_log(
@@ -158,22 +160,13 @@ class TestScanner(unittest.TestCase):
             },
             omdb_limit=10,
         )
-        scanner = ScannerService(
+        scanner = self.scanner_builder.build(
             config=config,
             omdb_client=MockOmdbClient({
                 "the matrix": self.valid_movie,
                 "filtered movie": self.filtered_movie,
                 "seasoned show": make_series_result(),
             }),
-            title_repo=self.title_repo,
-            occurrence_repo=self.occ_repo,
-            cache_repo=self.cache_repo,
-            run_repo=self.run_repo,
-            parse_log_repo=self.parse_log_repo,
-            manual_mapping_repo=self.manual_mapping_repo,
-            audit_proposal_repo=self.audit_proposal_repo,
-            now=self.now,
-            feed_fetcher=StaticTestFeedFetcher(),
             rss_snapshot_repo=snapshot_repo,
         )
 
@@ -225,18 +218,9 @@ class TestScanner(unittest.TestCase):
             },
             omdb_limit=10,
         )
-        scanner = ScannerService(
+        scanner = self.scanner_builder.build(
             config=config,
             omdb_client=MockOmdbClient({"the matrix": self.valid_movie}),
-            title_repo=self.title_repo,
-            occurrence_repo=self.occ_repo,
-            cache_repo=self.cache_repo,
-            run_repo=self.run_repo,
-            parse_log_repo=self.parse_log_repo,
-            manual_mapping_repo=self.manual_mapping_repo,
-            audit_proposal_repo=self.audit_proposal_repo,
-            now=self.now,
-            feed_fetcher=StaticTestFeedFetcher(),
             rss_snapshot_repo=snapshot_repo,
         )
 
