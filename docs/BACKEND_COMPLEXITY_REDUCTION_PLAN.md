@@ -190,7 +190,7 @@ python -m unittest backend.tests.test_rss_snapshot backend.tests.test_rss_ingest
 
 ### STEP 6 - Extract the Scan Write Buffer
 
-Status: not started
+Status: complete
 
 Create `backend/src/movies_feed/scan_write_buffer.py`. Move ownership of run-scoped title, occurrence, parse-log, and manual-mapping staging/caches from `ScannerService` into this object, including focused flush operations.
 

@@ -761,8 +761,8 @@ class TestExistingTitleAudit(unittest.TestCase):
             ScanRun(started_at=self.now, finished_at=None, status="running", trigger="test"),
         )
 
-        staged_title = scanner._pending_titles[title_id]
-        staged_occurrence = scanner._pending_occurrences[(title_id, occurrence_id)]
+        staged_title = scanner.write_buffer.pending_titles[title_id]
+        staged_occurrence = scanner.write_buffer.pending_occurrences[(title_id, occurrence_id)]
         self.assertFalse(staged_title.ai_validated)
         self.assertIsNone(staged_title.ai_checked_at)
         self.assertIsNone(staged_occurrence.validation_status)

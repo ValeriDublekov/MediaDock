@@ -49,15 +49,13 @@ from .repository import (
     ScanRunRepository,
     TitleRepository,
     AuditProposalRepository,
-    merge_occurrences,
-    merge_titles,
-    occurrence_validation_fingerprint,
 )
 from .rutracker_parser import ParsedTitle, iter_feed_definitions, parse_rutracker_title
 from .ai_matcher import AiMatcher
 from .feed_fetcher import FeedFetcher
 from .scan_contracts import FeedDefinition
 from .rss_snapshot import RssSnapshotCollector
+from .scan_write_buffer import ScanWriteBuffer
 from .existing_title_audit import ExistingTitleAuditService
 from .reparse_service import ReparseService
 from .proposal_application import ProposalApplicationService, ProposalApplicationResult
@@ -190,18 +188,14 @@ class ScannerService:
         return list(iter_feed_definitions(self.config.rss_feeds))
 
     def _reset_session_caches(self) -> None:
-        self._session_titles: Dict[str, Optional[Title]] = {}
-        self._session_occurrences: Dict[tuple, Optional[Occurrence]] = {}
-        self._pending_parse_logs: List[ParseLog] = []
-        self._pending_titles: Dict[str, Title] = {}
-        self._pending_occurrences: Dict[tuple[str, str], Occurrence] = {}
-        self._pending_manual_mappings: Dict[str, ManualMapping] = {}
-        self._manual_mappings_by_id: Dict[str, ManualMapping] = {}
-        self._manual_mappings_by_raw_title: Dict[str, ManualMapping] = {}
-        self._manual_mappings_by_parsed_title: Dict[str, ManualMapping] = {}
-        self._run_written_title_ids: Set[str] = set()
-        self._run_written_occurrence_keys: Set[Tuple[str, str]] = set()
-        self._run_written_parse_log_ids: Set[str] = set()
+        self.write_buffer = ScanWriteBuffer(
+            title_repo=self.title_repo,
+            occurrence_repo=self.occurrence_repo,
+            parse_log_repo=self.parse_log_repo,
+            manual_mapping_repo=self.manual_mapping_repo,
+            is_dry_run=self.config.is_dry_run,
+            is_parse_only=self.config.is_parse_only,
+        )
         self._run_created_proposal_ids: Set[str] = set()
         self._rss_snapshot_collector = RssSnapshotCollector()
 
@@ -325,15 +319,7 @@ class ScannerService:
         return None
 
     def _load_manual_mappings(self) -> None:
-        if not self.manual_mapping_repo:
-            return
-        mappings = self.manual_mapping_repo.get_all()
-        for m in mappings:
-            self._manual_mappings_by_id[m.id] = m
-            if m.raw_title:
-                self._manual_mappings_by_raw_title[m.raw_title.strip().lower()] = m
-            if m.parsed_title:
-                self._manual_mappings_by_parsed_title[normalize_title(m.parsed_title)] = m
+        self.write_buffer.load_manual_mappings()
 
     def _find_manual_mapping(
         self,
@@ -343,55 +329,21 @@ class ScannerService:
         raw_title: Optional[str] = None,
         parsed_title: Optional[str] = None,
     ) -> Optional[ManualMapping]:
-        mapping = (
-            self._manual_mappings_by_id.get(source_item_id or "")
-            or self._manual_mappings_by_id.get(legacy_item_id or "")
+        return self.write_buffer.find_manual_mapping(
+            source_item_id=source_item_id,
+            legacy_item_id=legacy_item_id,
+            raw_title=raw_title,
+            parsed_title=parsed_title,
         )
-        if mapping is not None and mapping.id not in self._pending_manual_mappings:
-            return mapping
-        if mapping is not None:
-            return None
-        if raw_title:
-            mapping = self._manual_mappings_by_raw_title.get(raw_title.strip().lower())
-            if mapping is not None and mapping.id not in self._pending_manual_mappings:
-                return mapping
-            if mapping is not None:
-                return None
-        if parsed_title:
-            mapping = self._manual_mappings_by_parsed_title.get(normalize_title(parsed_title))
-            if mapping is not None and mapping.id not in self._pending_manual_mappings:
-                return mapping
-        return None
 
     def _consume_manual_mapping(self, manual_mapping: ManualMapping) -> None:
-        if self.config.is_dry_run or not self.manual_mapping_repo:
-            return
-        self.manual_mapping_repo.delete(manual_mapping.id)
-        if self._manual_mappings_by_id.get(manual_mapping.id) == manual_mapping:
-            self._manual_mappings_by_id.pop(manual_mapping.id, None)
-        if manual_mapping.raw_title:
-            raw_key = manual_mapping.raw_title.strip().lower()
-            if self._manual_mappings_by_raw_title.get(raw_key) == manual_mapping:
-                self._manual_mappings_by_raw_title.pop(raw_key, None)
-        if manual_mapping.parsed_title:
-            parsed_key = normalize_title(manual_mapping.parsed_title)
-            if self._manual_mappings_by_parsed_title.get(parsed_key) == manual_mapping:
-                self._manual_mappings_by_parsed_title.pop(parsed_key, None)
+        self.write_buffer.consume_manual_mapping(manual_mapping)
 
     def _get_title(self, title_id: str) -> Optional[Title]:
-        if title_id in self._session_titles:
-            return self._session_titles[title_id]
-        title = self.title_repo.get(title_id)
-        self._session_titles[title_id] = title
-        return title
+        return self.write_buffer.get_title(title_id)
 
     def _get_occurrence(self, title_id: str, occurrence_id: str) -> Optional[Occurrence]:
-        key = (title_id, occurrence_id)
-        if key in self._session_occurrences:
-            return self._session_occurrences[key]
-        occ = self.occurrence_repo.get(title_id, occurrence_id)
-        self._session_occurrences[key] = occ
-        return occ
+        return self.write_buffer.get_occurrence(title_id, occurrence_id)
 
     def _stage_title_and_occurrence(
         self,
@@ -401,80 +353,19 @@ class ScannerService:
         occurrence_record: Occurrence,
         run: ScanRun,
     ) -> None:
-        existing_title = self._get_title(title_id)
-        if existing_title is None:
-            run.titles_created += 1
-            merged_title = title_record
-        else:
-            run.titles_updated += 1
-            merged_title = merge_titles(existing_title, title_record)
-        self._session_titles[title_id] = merged_title
-        self._pending_titles[title_id] = merged_title
-        self._run_written_title_ids.add(title_id)
-
-        existing_occ = self._get_occurrence(title_id, occurrence_id)
-        if existing_occ is None:
-            run.occurrences_created += 1
-            merged_occ = occurrence_record
-            merged_title.ai_validated = False
-            merged_title.ai_checked_at = None
-        else:
-            run.occurrences_updated += 1
-            merged_occ = merge_occurrences(existing_occ, occurrence_record)
-            if (
-                occurrence_validation_fingerprint(existing_occ, existing_title)
-                != occurrence_validation_fingerprint(occurrence_record, merged_title)
-            ):
-                merged_occ.validation_status = None
-                merged_occ.validation_policy_version = None
-                merged_occ.validation_reason = None
-                merged_occ.validated_at = None
-            if existing_occ.validation_status is not None and merged_occ.validation_status is None:
-                merged_title.ai_validated = False
-                merged_title.ai_checked_at = None
-        occ_key = (title_id, occurrence_id)
-        self._session_occurrences[occ_key] = merged_occ
-        self._pending_occurrences[occ_key] = merged_occ
-        self._run_written_occurrence_keys.add(occ_key)
+        self.write_buffer.stage_title_and_occurrence(
+            title_id,
+            title_record,
+            occurrence_id,
+            occurrence_record,
+            run,
+        )
 
     def _flush_parse_logs(self, section_timings: Optional[Dict[str, float]] = None) -> None:
-        if (
-            not self._pending_parse_logs
-            or not self.parse_log_repo
-            or self.config.is_dry_run
-            or self.config.is_parse_only
-        ):
-            return
-        t0 = time.perf_counter()
-        self.parse_log_repo.add_many(self._pending_parse_logs)
-        if section_timings is not None:
-            section_timings["parse_log_write"] += (time.perf_counter() - t0)
-        self._pending_parse_logs.clear()
+        self.write_buffer.flush_parse_logs(section_timings)
 
     def _flush_pending_db_upserts(self, section_timings: Optional[Dict[str, float]] = None) -> None:
-        if self.config.is_dry_run:
-            self._pending_titles.clear()
-            self._pending_occurrences.clear()
-            return
-
-        t0 = time.perf_counter()
-        if self._pending_titles:
-            titles_to_upsert = [(tid, t) for tid, t in self._pending_titles.items()]
-            self.title_repo.upsert_many(titles_to_upsert)
-            self._pending_titles.clear()
-
-        if self._pending_occurrences:
-            occs_to_upsert = [(tid, oid, occ) for (tid, oid), occ in self._pending_occurrences.items()]
-            self.occurrence_repo.upsert_many(occs_to_upsert)
-            self._pending_occurrences.clear()
-
-        pending_mappings = list(self._pending_manual_mappings.values())
-        self._pending_manual_mappings.clear()
-        for manual_mapping in pending_mappings:
-            self._consume_manual_mapping(manual_mapping)
-
-        if section_timings is not None:
-            section_timings["db_upsert"] += (time.perf_counter() - t0)
+        self.write_buffer.flush_pending_db_upserts(section_timings)
 
     def get_exclusion_reason(self, countries: List[str], genres: List[str]) -> Optional[str]:
         return policy_get_exclusion_reason(
@@ -520,11 +411,6 @@ class ScannerService:
         else:
             raise ValueError("source or audit identity is required for a parse log")
 
-        self._run_written_parse_log_ids.add(log_id)
-
-        if not self.parse_log_repo or self.config.is_dry_run:
-            return
-
         log = ParseLog(
             id=log_id,
             raw_title=raw_title,
@@ -542,7 +428,7 @@ class ScannerService:
             source_context=source_context,
             event_kind=event_kind,
         )
-        self._pending_parse_logs.append(log)
+        self.write_buffer.stage_parse_log(log)
 
     def run(self, run_id: str) -> ScanRun:
         self._reset_session_caches()
@@ -784,7 +670,7 @@ class ScannerService:
                     p2_t0 = time.perf_counter()
                     excluded_titles = None
                     if not self.config.allow_same_run_chaining and self.config.mode == "all":
-                        excluded_titles = set(self._run_written_title_ids)
+                        excluded_titles = set(self.write_buffer.written_title_ids)
 
                     recheck_stats = self.recheck_existing_titles(
                         run=run,
@@ -824,7 +710,7 @@ class ScannerService:
                     p3_t0 = time.perf_counter()
                     excluded_logs = None
                     if not self.config.allow_same_run_chaining and self.config.mode == "all":
-                        excluded_logs = set(self._run_written_parse_log_ids)
+                        excluded_logs = set(self.write_buffer.written_parse_log_ids)
 
                     reparse_stats = self.reparse_unfound_entries(
                         run=run,
@@ -1467,4 +1353,4 @@ class ScannerService:
         )
 
         if used_manual_mapping and manual_mapping is not None and not self.config.is_dry_run:
-            self._pending_manual_mappings[manual_mapping.id] = manual_mapping
+            self.write_buffer.stage_manual_mapping(manual_mapping)
