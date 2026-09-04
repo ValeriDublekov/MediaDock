@@ -401,7 +401,7 @@ npx vitest run src/test/firestoreContracts.test.ts
 Checkpoint D gate:
 
 ```powershell
-npx firebase emulators:exec --project demo-mediadock "python -m unittest discover -s backend/tests -p test_firestore*.py -v"
+npx firebase emulators:exec --project demo-mediadock "python -m unittest discover -s backend/tests -p 'test_firestore*.py' -v"
 npx vitest run src/test/catalogRepository.test.ts src/test/firestoreContracts.test.ts
 ```
 
@@ -460,7 +460,7 @@ Validation:
 
 ```powershell
 python -m unittest discover -s backend/tests -p "test_*.py" -v
-npx firebase emulators:exec --project demo-mediadock "python -m unittest discover -s backend/tests -p test_firestore*.py -v"
+npx firebase emulators:exec --project demo-mediadock "python -m unittest discover -s backend/tests -p 'test_firestore*.py' -v"
 npx vitest run src/test
 npx firebase emulators:exec --project demo-mediadock "npx vitest run firebase/tests/rules.test.ts"
 npm run build
@@ -516,12 +516,6 @@ npm run build
 - Optimizing line counts at the cost of discoverability.
 - Refactoring frontend components unrelated to Firestore contract decoding.
 
-## New Session Prompt
+## Follow-up Outcome
 
-```text
-Work through docs/BACKEND_COMPLEXITY_REDUCTION_PLAN.md using the plan-runner-orchestrator agent.
-
-Start with STEP 1 only. Follow the plan's Mandatory Execution Rules exactly. Before editing, verify the current files named by STEP 1 and identify the focused characterization check. Preserve behavior, do not modify legacy/, do not reopen unrelated proposal-safety work, and do not continue to STEP 2 in the same session.
-
-At completion report: changed files, acceptance criteria met, the exact validation command and result, and any blocker or deviation. Update STEP 1 status in the plan only after its validation passes.
-```
+The completed follow-up is documented in [BACKEND_COMPLEXITY_FOLLOW_UP_PLAN.md](BACKEND_COMPLEXITY_FOLLOW_UP_PLAN.md). Checkpoints A and B are complete through STEP 5; STEP 6 reconciles this plan's implementation evidence and preserves the final decision.
