@@ -1,13 +1,26 @@
 import datetime
 import unittest
 from dataclasses import replace
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional
 
 try:
     from . import _test_stubs
+    from .scanner_test_support import (
+        MockOmdbClient,
+        StaticTestFeedFetcher,
+        make_inline_feed,
+        make_multi_entry_feed,
+        make_series_result,
+    )
 except ImportError:
     import _test_stubs
+    from scanner_test_support import (
+        MockOmdbClient,
+        StaticTestFeedFetcher,
+        make_inline_feed,
+        make_multi_entry_feed,
+        make_series_result,
+    )
 
 from movies_feed.models import (
     ManualMapping,
@@ -20,8 +33,7 @@ from movies_feed.models import (
     Occurrence,
     ScanRun,
 )
-from movies_feed.omdb_client import OmdbMovieResult, OmdbLimitReachedError, OmdbTransportError, OmdbNoMatchError, OmdbClient, HttpTransport
-from movies_feed.match_policy import parse_broadcast_range
+from movies_feed.omdb_client import OmdbMovieResult, OmdbTransportError, OmdbClient
 from movies_feed.repository import (
     FakeAuditProposalRepository,
     FakeTitleRepository,
@@ -33,81 +45,7 @@ from movies_feed.repository import (
     FakeManualMappingRepository,
 )
 from movies_feed.scanner import ScannerConfig, ScannerService
-from movies_feed.feed_fetcher import FeedFetcher
 from movies_feed.ids import get_occurrence_id_v1, get_source_item_id, get_title_id_v2
-
-
-class StaticTestFeedFetcher:
-    def __init__(self):
-        self.validator = FeedFetcher(
-            allowed_hosts={"feed.example.test"},
-            dns_resolver=lambda host, port: ["8.8.8.8"],
-        )
-
-    def _resolve_path(self, target: str) -> Path:
-        p = Path(target)
-        if not p.exists():
-            for candidate in (
-                Path(__file__).parent / "fixtures" / p.name,
-                Path(__file__).parent.parent / p,
-                Path("backend") / p,
-            ):
-                if candidate.exists():
-                    return candidate
-        return p
-
-    def fetch(self, url: str) -> bytes:
-        if url.lstrip().startswith("<"):
-            return url.encode("utf-8")
-        return self._resolve_path(url).read_bytes()
-
-    def fetch_file(self, path: str) -> bytes:
-        return self._resolve_path(path).read_bytes()
-
-    def validate_parsed_feed(self, feed: Any):
-        return self.validator.validate_parsed_feed(feed)
-
-class MockOmdbClient(OmdbClient):
-    def __init__(self, responses: Dict[str, Any]):
-        super().__init__(api_key="mock")
-        self.responses = responses
-        self.request_count = 0
-        self.limit_reached_on = -1
-
-    def get_movie_info(self, title: str, year: str = None, media_type: str = None) -> OmdbMovieResult:
-        self.request_count += 1
-        if self.limit_reached_on > 0 and self.request_count >= self.limit_reached_on:
-            raise OmdbLimitReachedError("limit reached")
-        
-        for k, v in self.responses.items():
-            if k.lower() in title.lower():
-                if isinstance(v, Exception):
-                    raise v
-                return v
-        
-        raise OmdbNoMatchError("Not found")
-
-    def get_by_imdb_id(self, imdb_id: str) -> OmdbMovieResult:
-        self.request_count += 1
-        for k, v in self.responses.items():
-            if k.lower() == imdb_id.lower():
-                if isinstance(v, Exception):
-                    raise v
-                return v
-        raise OmdbNoMatchError(f"IMDb ID {imdb_id} not found")
-
-    def _normalize_payload(self, payload: Dict[str, Any]) -> OmdbMovieResult:
-        return OmdbMovieResult(
-            title=payload.get("Title", ""),
-            year=int(payload.get("Year")) if payload.get("Year") else None,
-            imdb_id=payload.get("imdbID"),
-            media_type="movie",
-            rating=None, votes=None, metascore=None,
-            genres=payload.get("Genre", "").split(", "),
-            countries=payload.get("Country", "").split(", "),
-            director=None, plot=None, poster_url=None,
-            runtime=None, awards=None, box_office=None, ratings=[], raw_payload=payload
-        )
 
 class TestScanner(unittest.TestCase):
     def setUp(self):
@@ -191,88 +129,20 @@ class TestScanner(unittest.TestCase):
             event_kind="source",
         )
 
-    def make_series_result(
-        self,
-        title: str = "Seasoned Show",
-        year: int = 2007,
-        broadcast_year: str = "2007-2015",
-        genres=None,
-    ) -> OmdbMovieResult:
-        genres = genres or ["Drama"]
-        content_kind = "documentary" if "Documentary" in genres else "standard"
-        return OmdbMovieResult(
-            title=title,
-            year=year,
-            imdb_id="tt0804497",
-            media_type="series",
-            rating=8.0,
-            votes=1000,
-            metascore=None,
-            genres=genres,
-            countries=["USA"],
-            director=None,
-            plot="A series",
-            poster_url=None,
-            runtime=None,
-            awards=None,
-            box_office=None,
-            ratings=[],
-            raw_payload={
-                "Response": "True",
-                "Title": title,
-                "Year": broadcast_year,
-                "imdbID": "tt0804497",
-                "Type": "series",
-                "Genre": ", ".join(genres),
-                "Country": "USA",
-            },
-            source_type="series",
-            content_kind=content_kind,
-            broadcast_range=parse_broadcast_range(broadcast_year),
-        )
-
-    @staticmethod
-    def make_inline_feed(raw_title: str, published_at: str = "") -> str:
-        publication = f"<pubDate>{published_at}</pubDate>" if published_at else ""
-        return f'''<?xml version="1.0" encoding="UTF-8"?>
-        <rss version="2.0">
-            <channel>
-                <item>
-                    <title>{raw_title}</title>
-                    <link>https://example.com/torrent/series-1</link>
-                    <guid>series-guid-1</guid>
-                    {publication}
-                </item>
-            </channel>
-        </rss>'''
-
-    @staticmethod
-    def make_multi_entry_feed(entries) -> str:
-        items = "".join(
-            f'''<item>
-                <title>{title}</title>
-                <link>https://example.com/torrent/{guid}</link>
-                <guid>{guid}</guid>
-            </item>'''
-            for guid, title in entries
-        )
-        return f'''<?xml version="1.0" encoding="UTF-8"?>
-        <rss version="2.0"><channel>{items}</channel></rss>'''
-
     def test_successful_rss_run_publishes_movie_first_snapshot_order(self):
         snapshot_repo = FakeRssSnapshotRepository()
         config = ScannerConfig(
             rss_feeds={
                 "series-feed": {
                     "name": "Series Feed",
-                    "url": self.make_multi_entry_feed([
+                    "url": make_multi_entry_feed([
                         ("series-1", "Seasoned Show / Сезон 5 [2012]"),
                     ]),
                     "type": "series",
                 },
                 "movie-feed-1": {
                     "name": "Movie Feed 1",
-                    "url": self.make_multi_entry_feed([
+                    "url": make_multi_entry_feed([
                         ("movie-1", "The Matrix (1999) [1080p]"),
                         ("movie-1-duplicate", "The Matrix (1999) [2160p]"),
                     ]),
@@ -280,7 +150,7 @@ class TestScanner(unittest.TestCase):
                 },
                 "movie-feed-2": {
                     "name": "Movie Feed 2",
-                    "url": self.make_multi_entry_feed([
+                    "url": make_multi_entry_feed([
                         ("movie-2", "Filtered Movie (2000) [720p]"),
                     ]),
                     "type": "movie",
@@ -293,7 +163,7 @@ class TestScanner(unittest.TestCase):
             omdb_client=MockOmdbClient({
                 "the matrix": self.valid_movie,
                 "filtered movie": self.filtered_movie,
-                "seasoned show": self.make_series_result(),
+                "seasoned show": make_series_result(),
             }),
             title_repo=self.title_repo,
             occurrence_repo=self.occ_repo,
@@ -317,7 +187,7 @@ class TestScanner(unittest.TestCase):
         self.assertEqual([item.title_id for item in items], [
             self.valid_movie.imdb_id,
             self.filtered_movie.imdb_id,
-            self.make_series_result().imdb_id,
+            make_series_result().imdb_id,
         ])
         self.assertEqual([item.source_type for item in items], ["movie", "movie", "series"])
         self.assertEqual([item.rss_position for item in items], [0, 1, 2])
@@ -344,7 +214,7 @@ class TestScanner(unittest.TestCase):
             rss_feeds={
                 "working-feed": {
                     "name": "Working Feed",
-                    "url": self.make_inline_feed("The Matrix (1999) [1080p]"),
+                    "url": make_inline_feed("The Matrix (1999) [1080p]"),
                     "type": "movie",
                 },
                 "broken-feed": {
@@ -410,7 +280,7 @@ class TestScanner(unittest.TestCase):
             rss_feeds={
                 "stable-feed": {
                     "name": "Original Display Name",
-                    "url": self.make_inline_feed(raw_title, "Thu, 02 Jan 2020 12:00:00 GMT"),
+                    "url": make_inline_feed(raw_title, "Thu, 02 Jan 2020 12:00:00 GMT"),
                     "type": "movie",
                 }
             },
@@ -443,12 +313,12 @@ class TestScanner(unittest.TestCase):
             rss_feeds={
                 "movies-primary": {
                     "name": "Shared Display Name",
-                    "url": self.make_inline_feed(raw_title),
+                    "url": make_inline_feed(raw_title),
                     "type": "movie",
                 },
                 "movies-secondary": {
                     "name": "Shared Display Name",
-                    "url": self.make_inline_feed(raw_title),
+                    "url": make_inline_feed(raw_title),
                     "type": "movie",
                 },
             },
@@ -480,7 +350,7 @@ class TestScanner(unittest.TestCase):
             rss_feeds={
                 "stable-feed": {
                     "name": "Movies",
-                    "url": self.make_inline_feed(
+                    "url": make_inline_feed(
                         "Матрица / The Matrix (Вачовски) [1999, США, фантастика, BDRip 1080p]"
                     ),
                     "type": "movie",
@@ -507,7 +377,7 @@ class TestScanner(unittest.TestCase):
             rss_feeds={
                 "movies": {
                     "name": "Movies",
-                    "url": self.make_inline_feed(raw_title),
+                    "url": make_inline_feed(raw_title),
                     "type": "movie",
                 }
             },
@@ -685,7 +555,7 @@ class TestScanner(unittest.TestCase):
 
     def test_rss_documentary_series_preserves_source_type_and_range(self):
         raw_title = "Документални / Nature Watch / Сезон 2 [2022, США, WEB-DL 1080p]"
-        result = self.make_series_result(
+        result = make_series_result(
             title="Nature Watch",
             year=2018,
             broadcast_year="2018-",
@@ -695,7 +565,7 @@ class TestScanner(unittest.TestCase):
             rss_feeds={
                 "series_feed": {
                     "name": "series_feed",
-                    "url": self.make_inline_feed(raw_title),
+                    "url": make_inline_feed(raw_title),
                     "type": "series",
                 }
             },
@@ -714,12 +584,12 @@ class TestScanner(unittest.TestCase):
 
     def test_rss_known_movie_feed_does_not_follow_series_result(self):
         raw_title = "Документални / Nature Watch / Сезон 2 [2022, США, WEB-DL 1080p]"
-        result = self.make_series_result(title="Nature Watch", year=2018)
+        result = make_series_result(title="Nature Watch", year=2018)
         config = ScannerConfig(
             rss_feeds={
                 "movie_feed": {
                     "name": "movie_feed",
-                    "url": self.make_inline_feed(raw_title),
+                    "url": make_inline_feed(raw_title),
                     "type": "movie",
                 }
             },
@@ -736,12 +606,12 @@ class TestScanner(unittest.TestCase):
 
     def test_rss_unknown_feed_infers_series_from_marker(self):
         raw_title = "Документални / Nature Watch / Сезон 2 [2022, США, WEB-DL 1080p]"
-        result = self.make_series_result(title="Nature Watch", year=2018, broadcast_year="2018-")
+        result = make_series_result(title="Nature Watch", year=2018, broadcast_year="2018-")
         config = ScannerConfig(
             rss_feeds={
                 "untyped_feed": {
                     "name": "untyped_feed",
-                    "url": self.make_inline_feed(raw_title),
+                    "url": make_inline_feed(raw_title),
                     "type": None,
                 }
             },
@@ -756,7 +626,7 @@ class TestScanner(unittest.TestCase):
         self.assertEqual(stored.source_type, "series")
 
     def test_reparse_uses_stored_series_feed_type_and_accepts_later_season(self):
-        result = self.make_series_result()
+        result = make_series_result()
         source_log = ParseLog(
             id="unmapped-series",
             raw_title="Seasoned Show / Сезон 5 [2012]",
@@ -1320,7 +1190,7 @@ class TestScanner(unittest.TestCase):
         rss_feeds = {
             "test_feed": {
                 "name": "test_feed",
-                "url": self.make_inline_feed("The Matrix (1999) [1080p]"),
+                "url": make_inline_feed("The Matrix (1999) [1080p]"),
                 "type": "movie",
             }
         }
@@ -1545,7 +1415,7 @@ class TestScanner(unittest.TestCase):
 
     def test_same_parsed_context_used_for_prefetch_and_processing(self):
         raw_title = "Матрица / The Matrix (Вачовски) [1999, САЩ, фантастика, BDRip 1080p]"
-        feed_xml = self.make_inline_feed(raw_title)
+        feed_xml = make_inline_feed(raw_title)
         config = ScannerConfig(
             rss_feeds={
                 "test_feed": {
@@ -1576,7 +1446,7 @@ class TestScanner(unittest.TestCase):
         self.assertEqual(prefetch_calls[0][1], 1999)
 
     def test_parse_only_isolation_makes_no_api_or_db_writes(self):
-        feed_xml = self.make_inline_feed("The Matrix (1999) [1080p]")
+        feed_xml = make_inline_feed("The Matrix (1999) [1080p]")
         config = ScannerConfig(
             rss_feeds={
                 "test_feed": {
@@ -1603,7 +1473,7 @@ class TestScanner(unittest.TestCase):
         self.assertEqual(self.parse_log_repo.get_all(), [])
 
     def test_phase_boundaries_metrics_and_counters(self):
-        feed_xml = self.make_inline_feed("The Matrix (1999) [1080p]")
+        feed_xml = make_inline_feed("The Matrix (1999) [1080p]")
         config = ScannerConfig(
             rss_feeds={
                 "test_feed": {
@@ -1640,7 +1510,7 @@ class TestScanner(unittest.TestCase):
         self.assertEqual(recheck_metrics["status"], "succeeded")
 
     def test_mode_all_phase_isolation_prevents_same_run_auditing_unless_allowed(self):
-        feed_xml = self.make_inline_feed("The Matrix (1999) [1080p]")
+        feed_xml = make_inline_feed("The Matrix (1999) [1080p]")
         config = ScannerConfig(
             rss_feeds={
                 "test_feed": {

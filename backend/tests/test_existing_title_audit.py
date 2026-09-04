@@ -5,12 +5,11 @@ from unittest.mock import MagicMock
 
 try:
     from . import _test_stubs
-    from .test_scanner import MockOmdbClient
+    from .scanner_test_support import MockOmdbClient, make_series_result
 except ImportError:
     import _test_stubs
-    from test_scanner import MockOmdbClient
+    from scanner_test_support import MockOmdbClient, make_series_result
 
-from movies_feed.match_policy import parse_broadcast_range
 from movies_feed.audit_proposal import ProposalTarget, audit_proposal_from_dict
 from movies_feed.metadata_resolver import MetadataOutcome, MetadataOutcomeStatus
 from movies_feed.models import Occurrence, ScanRun, Title
@@ -112,46 +111,6 @@ class TestExistingTitleAudit(unittest.TestCase):
             metadata_resolver=metadata_resolver,
         )
 
-    def make_series_result(
-        self,
-        title: str = "Seasoned Show",
-        year: int = 2007,
-        broadcast_year: str = "2007-2015",
-        genres=None,
-    ) -> OmdbMovieResult:
-        genres = genres or ["Drama"]
-        content_kind = "documentary" if "Documentary" in genres else "standard"
-        return OmdbMovieResult(
-            title=title,
-            year=year,
-            imdb_id="tt0804497",
-            media_type="series",
-            rating=8.0,
-            votes=1000,
-            metascore=None,
-            genres=genres,
-            countries=["USA"],
-            director=None,
-            plot="A series",
-            poster_url=None,
-            runtime=None,
-            awards=None,
-            box_office=None,
-            ratings=[],
-            raw_payload={
-                "Response": "True",
-                "Title": title,
-                "Year": broadcast_year,
-                "imdbID": "tt0804497",
-                "Type": "series",
-                "Genre": ", ".join(genres),
-                "Country": "USA",
-            },
-            source_type="series",
-            content_kind=content_kind,
-            broadcast_range=parse_broadcast_range(broadcast_year),
-        )
-
     def add_recheck_occurrence(self, title_id: str, raw_title: str = "Stored Film 2020 1080p") -> None:
         feed_entry_id = f"{title_id}-entry"
         torrent_url = f"https://example.test/{title_id}"
@@ -206,7 +165,7 @@ class TestExistingTitleAudit(unittest.TestCase):
         return scanner, mock_ai
 
     def test_recheck_candidate_uses_series_broadcast_range(self):
-        result = self.make_series_result()
+        result = make_series_result()
         scanner = self.create_scanner(ScannerConfig(mode="recheck-existing"), MockOmdbClient({"seasoned show": result}))
         run = ScanRun(started_at=self.now, finished_at=None, status="running", trigger="local")
 
@@ -232,7 +191,7 @@ class TestExistingTitleAudit(unittest.TestCase):
         self.assertEqual(outcome.candidate.broadcast_range, result.broadcast_range)
 
     def test_recheck_rejected_candidate_has_no_target(self):
-        result = self.make_series_result()
+        result = make_series_result()
         scanner = self.create_scanner(
             ScannerConfig(mode="recheck-existing"),
             MockOmdbClient({"seasoned alias": result}),
