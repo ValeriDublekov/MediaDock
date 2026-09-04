@@ -57,6 +57,7 @@ from .repository import (
 from .rutracker_parser import ParsedTitle, iter_feed_definitions, parse_rutracker_title
 from .ai_matcher import AiMatcher
 from .feed_fetcher import FeedFetcher
+from .scan_contracts import FeedDefinition
 from .existing_title_audit import ExistingTitleAuditService
 from .reparse_service import ReparseService
 from .proposal_application import ProposalApplicationService, ProposalApplicationResult
@@ -176,21 +177,17 @@ class ScannerService:
             on_proposal_created=self._run_created_proposal_ids.add,
         )
 
-    def _iter_scan_feed_definitions(self) -> List[Dict[str, Optional[str]]]:
+    def _iter_scan_feed_definitions(self) -> List[FeedDefinition]:
         if self.config.feed_file:
-            return [{
-                "id": self.config.feed_file_name,
-                "name": self.config.feed_file_name,
-                "url": None,
-                "type": self.config.feed_file_type,
-            }]
-        return [
-            {**feed_definition, "id": source_feed_id}
-            for source_feed_id, feed_definition in zip(
-                self.config.rss_feeds,
-                iter_feed_definitions(self.config.rss_feeds),
-            )
-        ]
+            return [
+                FeedDefinition(
+                    id=self.config.feed_file_name,
+                    name=self.config.feed_file_name,
+                    url=None,
+                    type=self.config.feed_file_type,
+                )
+            ]
+        return list(iter_feed_definitions(self.config.rss_feeds))
 
     def _reset_session_caches(self) -> None:
         self._session_titles: Dict[str, Optional[Title]] = {}
@@ -677,17 +674,14 @@ class ScannerService:
                         if self.config.feed_file:
                             feed_bytes = self.feed_fetcher.fetch_file(self.config.feed_file)
                         else:
-                            feed_url = feed_def.get("url")
-                            if not isinstance(feed_url, str):
-                                raise ValueError("configured feed URL is missing")
-                            feed_bytes = self.feed_fetcher.fetch(feed_url)
+                            feed_bytes = self.feed_fetcher.fetch(feed_def.require_url())
                         feed = feedparser.parse(feed_bytes)
                         t_feed = time.perf_counter() - t0_feed
                         section_timings["feed_fetch"] += t_feed
                         entries = self.feed_fetcher.validate_parsed_feed(feed)
                         entries_cnt = len(entries)
                         logger.info(
-                            f"Section [feed_fetch]: Feed '{feed_def['name']}' fetched in {t_feed:.4f}s ({entries_cnt} entries)"
+                            f"Section [feed_fetch]: Feed '{feed_def.name}' fetched in {t_feed:.4f}s ({entries_cnt} entries)"
                         )
 
                         # Parse entries once, filtering by date early
@@ -721,7 +715,7 @@ class ScannerService:
                                 try:
                                     ctx.parsed = parse_rutracker_title(
                                         raw_title,
-                                        content_type=feed_def.get("type"),
+                                        content_type=feed_def.type,
                                         video_settings=self.config.video_settings,
                                     )
                                     section_timings["title_parse"] += (time.perf_counter() - t0_parse)
@@ -733,7 +727,7 @@ class ScannerService:
                                             except ValueError:
                                                 pass
                                         ctx.expected_source_type = self._expected_source_type(
-                                             feed_def.get("type"),
+                                            feed_def.type,
                                              ctx.parsed.is_series,
                                         )
                                         cache_requests_to_prefetch.append(
@@ -771,7 +765,7 @@ class ScannerService:
                                 try:
                                     self._log_parse_entry(
                                         raw_title=ctx.raw_title,
-                                        feed_name=feed_def.get("name", ""),
+                                        feed_name=feed_def.name,
                                         parsed_successfully=False,
                                         parsed_title=None,
                                         parsed_year=None,
@@ -781,7 +775,7 @@ class ScannerService:
                                         error_message=err_text,
                                         feed_entry_id=getattr(ctx.entry, "id", None),
                                         torrent_url=getattr(ctx.entry, "link", None),
-                                        source_feed_id=feed_def.get("id"),
+                                        source_feed_id=feed_def.id,
                                         source_context=ctx.source_context,
                                         section_timings=section_timings,
                                     )
@@ -793,7 +787,7 @@ class ScannerService:
                         self._flush_pending_db_upserts(section_timings)
 
                     except Exception as e:
-                        err_text = f"Feed error for '{feed_def['name']}' ({type(e).__name__}): {e}"
+                        err_text = f"Feed error for '{feed_def.name}' ({type(e).__name__}): {e}"
                         logger.error(err_text, exc_info=True)
                         run.error_count += 1
                         run.error_summary.append(err_text)
@@ -1123,12 +1117,12 @@ class ScannerService:
     def _source_context_for_entry(
         self,
         entry: Any,
-        feed_def: Dict[str, Optional[str]],
+        feed_def: FeedDefinition,
     ) -> SourceContext:
         return SourceContext(
-            source_feed_id=feed_def.get("id"),
-            source_feed_name=feed_def.get("name"),
-            feed_type=feed_def.get("type") or "unknown",
+            source_feed_id=feed_def.id,
+            source_feed_name=feed_def.name,
+            feed_type=feed_def.type or "unknown",
             feed_entry_id=getattr(entry, "id", None),
             torrent_url=getattr(entry, "link", None),
             raw_title=getattr(entry, "title", "") or "",
@@ -1139,7 +1133,7 @@ class ScannerService:
     def _process_entry(
         self,
         ctx: ParsedEntryContext,
-        feed_def: Dict[str, Optional[str]],
+        feed_def: FeedDefinition,
         run: ScanRun,
         section_timings: Optional[Dict[str, float]] = None,
     ) -> None:
@@ -1157,8 +1151,8 @@ class ScannerService:
         raw_title = ctx.raw_title
         feed_entry_id = getattr(ctx.entry, "id", None)
         torrent_url = getattr(ctx.entry, "link", "")
-        feed_name = feed_def.get("name", "")
-        source_feed_id = feed_def.get("id", "")
+        feed_name = feed_def.name
+        source_feed_id = feed_def.id
         source_context = ctx.source_context
         item_time = source_context.observed_at or self.now
 
@@ -1206,7 +1200,7 @@ class ScannerService:
             trace_details = {
                 "rawTitle": raw_title,
                 "feedName": feed_name,
-                "feedType": feed_def.get("type"),
+                "feedType": feed_def.type,
                 "parseConfidence": parsed.confidence if parsed else 0.0,
                 "parseReasons": list(parsed.reasons) if parsed else ["parse_error"],
             }
@@ -1245,7 +1239,7 @@ class ScannerService:
             "parseConfidence": parsed.confidence,
             "parseReasons": list(parsed.reasons),
             "feedName": feed_name,
-            "feedType": feed_def.get("type"),
+            "feedType": feed_def.type,
         }
         expected_source_type = ctx.expected_source_type
         base_trace["expectedSourceType"] = expected_source_type
@@ -1497,7 +1491,7 @@ class ScannerService:
 
         occurrence_record = Occurrence(
             source_feed_id=source_feed_id,
-            source_feed_name=feed_def["name"],
+            source_feed_name=feed_def.name,
             feed_entry_id=feed_entry_id,
             torrent_url=torrent_url,
             raw_title=raw_title,

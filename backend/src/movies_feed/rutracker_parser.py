@@ -3,6 +3,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from .scan_contracts import FeedDefinition
+
 logger = logging.getLogger(__name__)
 
 # Realistic year range for cinema and television releases
@@ -94,21 +96,30 @@ def is_latin_candidate(text: str) -> bool:
     return cyrillic_chars < 3 and latin_chars >= cyrillic_chars
 
 
-def normalize_feed_definition(name: str, value: Any) -> Dict[str, Optional[str]]:
+def normalize_feed_definition(name: str, value: Any) -> FeedDefinition:
     if isinstance(value, str):
-        return {"name": name, "url": value, "type": infer_feed_type(name)}
+        feed_name = name
+        feed_url = value
+        feed_type = infer_feed_type(name)
+    elif isinstance(value, dict):
+        feed_name = value.get("name", name)
+        feed_url = value.get("url")
+        feed_type = value.get("type") or infer_feed_type(name)
+    else:
+        raise ValueError(f"Unsupported rss feed definition for '{name}'")
 
-    if isinstance(value, dict):
-        return {
-            "name": value.get("name", name),
-            "url": value.get("url"),
-            "type": (value.get("type") or infer_feed_type(name)),
-        }
+    if not isinstance(feed_url, str):
+        raise ValueError("configured feed URL is missing")
 
-    raise ValueError(f"Unsupported rss feed definition for '{name}'")
+    return FeedDefinition(
+        id=name,
+        name=feed_name,
+        url=feed_url,
+        type=feed_type,
+    )
 
 
-def iter_feed_definitions(rss_feeds: Dict[str, Any]) -> Iterable[Dict[str, Optional[str]]]:
+def iter_feed_definitions(rss_feeds: Dict[str, Any]) -> Iterable[FeedDefinition]:
     for name, value in rss_feeds.items():
         yield normalize_feed_definition(name, value)
 

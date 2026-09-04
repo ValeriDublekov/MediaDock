@@ -144,7 +144,7 @@ python -m unittest discover -s backend/tests -p "test_*.py" -v
 
 ### STEP 4 - Introduce Typed Feed Definitions
 
-Status: not started
+Status: complete
 
 Create a small immutable `FeedDefinition` in a focused scan-contract module such as `backend/src/movies_feed/scan_contracts.py`. Normalize external settings dictionaries once at the configuration boundary while preserving the existing settings format.
 
