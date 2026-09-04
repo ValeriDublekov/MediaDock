@@ -4,12 +4,6 @@ import unittest
 
 from movies_feed import (
     AuditProposal,
-    FakeAuditProposalRepository,
-    FakeOmdbCacheRepository,
-    FakeOccurrenceRepository,
-    FakeParseLogRepository,
-    FakeScanRunRepository,
-    FakeTitleRepository,
     InvalidStatusTransitionError,
     OmdbCacheEntry,
     Occurrence,
@@ -28,6 +22,14 @@ from movies_feed import (
     merge_occurrences,
     merge_titles,
     normalize_title,
+)
+from backend.tests.fakes import (
+    FakeAuditProposalRepository,
+    FakeOmdbCacheRepository,
+    FakeOccurrenceRepository,
+    FakeParseLogRepository,
+    FakeScanRunRepository,
+    FakeTitleRepository,
 )
 
 

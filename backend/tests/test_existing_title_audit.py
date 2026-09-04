@@ -15,7 +15,8 @@ from movies_feed.metadata_resolver import MetadataOutcome, MetadataOutcomeStatus
 from movies_feed.models import Occurrence, ScanRun, Title
 from movies_feed.omdb_client import OmdbLimitReachedError, OmdbMovieResult, OmdbTransportError
 from movies_feed.proposal_application import ProposalApplicationService
-from movies_feed.repository import (
+from movies_feed.proposal_application_store import FakeProposalApplicationStore
+from backend.tests.fakes import (
     FakeAuditProposalRepository,
     FakeOccurrenceRepository,
     FakeOmdbCacheRepository,
@@ -887,9 +888,11 @@ class TestExistingTitleAudit(unittest.TestCase):
         self.assertEqual(self.proposal_repo.get(proposal.id).status, "approved")
 
         service = ProposalApplicationService(
-            self.proposal_repo,
-            self.title_repo,
-            self.occurrence_repo,
+            store=FakeProposalApplicationStore(
+                proposal_repository=self.proposal_repo,
+                title_repository=self.title_repo,
+                occurrence_repository=self.occurrence_repo,
+            ),
             clock=lambda: self.now,
         )
         result = service.apply_proposal(proposal.id)

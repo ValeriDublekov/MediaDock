@@ -12,9 +12,6 @@ from .ids import get_title_id_v2, normalize_title
 from .models import Occurrence, Title
 from .repository import (
     AuditProposalRepository,
-    FakeAuditProposalRepository,
-    FakeOccurrenceRepository,
-    FakeTitleRepository,
     OccurrenceRepository,
     TitleRepository,
     merge_occurrences,
@@ -264,15 +261,15 @@ class FakeProposalApplicationStore(RepositoryProposalApplicationStore):
 
     def __init__(
         self,
-        proposal_repository: Optional[AuditProposalRepository] = None,
-        title_repository: Optional[TitleRepository] = None,
-        occurrence_repository: Optional[OccurrenceRepository] = None,
+        proposal_repository: AuditProposalRepository,
+        title_repository: TitleRepository,
+        occurrence_repository: OccurrenceRepository,
         fail_before_commit: bool = False,
     ) -> None:
         super().__init__(
-            proposal_repository or FakeAuditProposalRepository(),
-            title_repository or FakeTitleRepository(),
-            occurrence_repository or FakeOccurrenceRepository(),
+            proposal_repository,
+            title_repository,
+            occurrence_repository,
         )
         self.fail_before_commit = fail_before_commit
         self.fail_next_commit = False

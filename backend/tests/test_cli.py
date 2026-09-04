@@ -26,6 +26,11 @@ from movies_feed.ai_matcher import GeminiModelCapabilityError
 from movies_feed.models import ScanRun
 from movies_feed.proposal_application import ProposalApplicationResult
 from movies_feed.proposal_application_store import FakeProposalApplicationStore
+from backend.tests.fakes import (
+    FakeAuditProposalRepository,
+    FakeOccurrenceRepository,
+    FakeTitleRepository,
+)
 from movies_feed.scanner import ScannerConfig, ScannerRepositories, ScannerServices
 
 
@@ -347,7 +352,11 @@ class TestCliConfiguration(unittest.TestCase):
         scanner = ScannerTestBuilder().build(
             config=ScannerConfig(mode="apply-proposals"),
             omdb_client=object(),
-            application_store=FakeProposalApplicationStore(),
+            application_store=FakeProposalApplicationStore(
+                proposal_repository=FakeAuditProposalRepository(),
+                title_repository=FakeTitleRepository(),
+                occurrence_repository=FakeOccurrenceRepository(),
+            ),
         )
 
         stats = scanner._apply_proposals(run=run)
@@ -367,7 +376,11 @@ class TestCliConfiguration(unittest.TestCase):
         scanner = ScannerTestBuilder().build(
             config=ScannerConfig(mode="apply-proposals", proposal_id="proposal-1"),
             omdb_client=object(),
-            application_store=FakeProposalApplicationStore(),
+            application_store=FakeProposalApplicationStore(
+                proposal_repository=FakeAuditProposalRepository(),
+                title_repository=FakeTitleRepository(),
+                occurrence_repository=FakeOccurrenceRepository(),
+            ),
         )
         result = ProposalApplicationResult(
             "proposal-1",

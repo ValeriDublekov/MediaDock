@@ -5,7 +5,12 @@ from typing import Optional
 
 from movies_feed.audit_proposal import AuditProposal, ProposalTarget
 from movies_feed.models import Title, Occurrence
-from movies_feed.repository import FakeAuditProposalRepository, FakeTitleRepository, FakeOccurrenceRepository
+from movies_feed.proposal_application_store import FakeProposalApplicationStore
+from backend.tests.fakes import (
+    FakeAuditProposalRepository,
+    FakeOccurrenceRepository,
+    FakeTitleRepository,
+)
 from movies_feed.proposal_application import (
     ApplicationPlanner,
     ApplicationOccurrenceFingerprint,
@@ -20,13 +25,16 @@ class TestProposalApplicationService(unittest.TestCase):
         self.proposal_repo = FakeAuditProposalRepository()
         self.title_repo = FakeTitleRepository()
         self.occ_repo = FakeOccurrenceRepository()
+        self.store = FakeProposalApplicationStore(
+            proposal_repository=self.proposal_repo,
+            title_repository=self.title_repo,
+            occurrence_repository=self.occ_repo,
+        )
         
         self.now = datetime.datetime(2023, 1, 1, tzinfo=datetime.timezone.utc)
         self.clock = lambda: self.now
         
-        self.service = ProposalApplicationService(
-            self.proposal_repo, self.title_repo, self.occ_repo, self.clock
-        )
+        self.service = ProposalApplicationService(store=self.store, clock=self.clock)
 
     def _make_proposal(
         self, 

@@ -24,12 +24,21 @@ from movies_feed.proposal_application import (
     ProposalApplicationService,
 )
 from movies_feed.proposal_application_store import FakeProposalApplicationStore
+from backend.tests.fakes import (
+    FakeAuditProposalRepository,
+    FakeOccurrenceRepository,
+    FakeTitleRepository,
+)
 
 
 class ProposalApplicationStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.now = datetime.datetime(2026, 8, 31, 12, 0, tzinfo=datetime.timezone.utc)
-        self.store = FakeProposalApplicationStore()
+        self.store = FakeProposalApplicationStore(
+            proposal_repository=FakeAuditProposalRepository(),
+            title_repository=FakeTitleRepository(),
+            occurrence_repository=FakeOccurrenceRepository(),
+        )
 
     def make_proposal(
         self,
@@ -257,7 +266,11 @@ class ProposalApplicationStoreTests(unittest.TestCase):
         self.assertEqual(changed_result.outcome, "stale")
         self.assertIsNone(self.store.get_title(changed_plan.target_title_id))
 
-        self.store = FakeProposalApplicationStore()
+        self.store = FakeProposalApplicationStore(
+            proposal_repository=FakeAuditProposalRepository(),
+            title_repository=FakeTitleRepository(),
+            occurrence_repository=FakeOccurrenceRepository(),
+        )
         _, missing_plan, _ = self.make_ready_plan(
             proposal_id="missing-proposal",
             source_occurrence_ids=["occurrence-1", "occurrence-2"],

@@ -63,14 +63,6 @@ from .metadata_resolver import (
 )
 from .repository import (
     AuditProposalRepository,
-    FakeAuditProposalRepository,
-    FakeManualMappingRepository,
-    FakeOmdbCacheRepository,
-    FakeOccurrenceRepository,
-    FakeParseLogRepository,
-    FakeRssSnapshotRepository,
-    FakeScanRunRepository,
-    FakeTitleRepository,
     ManualMappingRepository,
     OmdbCacheRepository,
     OccurrenceRepository,

@@ -24,7 +24,7 @@ except ImportError:
 from movies_feed.ids import get_title_id_v2
 from movies_feed.models import ParseLog, RssSnapshot, RssSnapshotItem, Title
 from movies_feed.omdb_client import OmdbTransportError
-from movies_feed.repository import FakeRssSnapshotRepository
+from backend.tests.fakes import FakeRssSnapshotRepository
 from movies_feed.scanner import ScannerConfig
 
 

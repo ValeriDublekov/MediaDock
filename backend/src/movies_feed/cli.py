@@ -25,17 +25,17 @@ from .omdb_client import OmdbClient
 from .ai_matcher import AiMatcher, GeminiModelCapabilityError
 from .scanner import ScannerConfig, ScannerRepositories, ScannerService, ScannerServices
 from .firestore_proposal_application_store import FirestoreProposalApplicationStore
-from .proposal_application_store import FakeProposalApplicationStore
-from .repository import (
-    FakeOccurrenceRepository,
-    FakeOmdbCacheRepository,
-    FakeParseLogRepository,
-    FakeRssSnapshotRepository,
-    FakeScanRunRepository,
-    FakeTitleRepository,
-    FakeManualMappingRepository,
-    FakeAuditProposalRepository,
+from .in_memory_repositories import (
+    InMemoryAuditProposalRepository,
+    InMemoryManualMappingRepository,
+    InMemoryOccurrenceRepository,
+    InMemoryOmdbCacheRepository,
+    InMemoryParseLogRepository,
+    InMemoryRssSnapshotRepository,
+    InMemoryScanRunRepository,
+    InMemoryTitleRepository,
 )
+from .proposal_application_store import FakeProposalApplicationStore
 
 logger = logging.getLogger(__name__)
 
@@ -368,14 +368,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
 
     if args.fake_repos or args.parse_only:
-        title_repo = FakeTitleRepository()
-        occ_repo = FakeOccurrenceRepository()
-        cache_repo = FakeOmdbCacheRepository()
-        run_repo = FakeScanRunRepository()
-        parse_log_repo = FakeParseLogRepository()
-        rss_snapshot_repo = FakeRssSnapshotRepository()
-        manual_mapping_repo = FakeManualMappingRepository()
-        audit_proposal_repo = FakeAuditProposalRepository()
+        title_repo = InMemoryTitleRepository()
+        occ_repo = InMemoryOccurrenceRepository()
+        cache_repo = InMemoryOmdbCacheRepository()
+        run_repo = InMemoryScanRunRepository()
+        parse_log_repo = InMemoryParseLogRepository()
+        rss_snapshot_repo = InMemoryRssSnapshotRepository()
+        manual_mapping_repo = InMemoryManualMappingRepository()
+        audit_proposal_repo = InMemoryAuditProposalRepository()
         application_store = FakeProposalApplicationStore(
             proposal_repository=audit_proposal_repo,
             title_repository=title_repo,

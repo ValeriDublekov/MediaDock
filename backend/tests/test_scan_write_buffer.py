@@ -7,7 +7,7 @@ except ImportError:
     import _test_stubs
 
 from movies_feed.models import ManualMapping, Occurrence, ParseLog, ScanRun, Title
-from movies_feed.repository import (
+from backend.tests.fakes import (
     FakeManualMappingRepository,
     FakeOccurrenceRepository,
     FakeParseLogRepository,

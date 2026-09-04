@@ -16,8 +16,7 @@ from movies_feed.proposal_application_store import (
     ProposalApplicationStore,
     RepositoryProposalApplicationStore,
 )
-from movies_feed.repository import (
-    AuditProposalRepository,
+from backend.tests.fakes import (
     FakeAuditProposalRepository,
     FakeManualMappingRepository,
     FakeOccurrenceRepository,
@@ -25,6 +24,9 @@ from movies_feed.repository import (
     FakeParseLogRepository,
     FakeScanRunRepository,
     FakeTitleRepository,
+)
+from movies_feed.repository import (
+    AuditProposalRepository,
     ManualMappingRepository,
     OccurrenceRepository,
     OmdbCacheRepository,

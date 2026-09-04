@@ -11,7 +11,6 @@ except ImportError:
 from movies_feed import (
     AuditProposal,
     BroadcastRange,
-    FakeAuditProposalRepository,
     InvalidStatusTransitionError,
     audit_proposal_from_dict,
     get_audit_proposal_id,
@@ -19,6 +18,7 @@ from movies_feed import (
     measure_evidence_size_bytes,
     redact_secrets,
 )
+from backend.tests.fakes import FakeAuditProposalRepository
 from movies_feed.audit_proposal import ProposalSourceSnapshot, ProposalTarget
 from movies_feed.ids import get_audit_proposal_id_v3
 

@@ -329,7 +329,7 @@ python -m unittest discover -s backend/tests -p "test_*.py" -v
 
 ### STEP 11 - Move Fake Repositories to Test Support
 
-Status: not started
+Status: complete
 
 Move fake repository implementations out of `backend/src/movies_feed/repository.py` into `backend/tests/fakes.py`. Keep repository interfaces and pure merge/fingerprint functions in production code.
 

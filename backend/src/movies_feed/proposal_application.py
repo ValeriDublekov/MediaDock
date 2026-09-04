@@ -11,9 +11,6 @@ from .proposal_application_store import (
 )
 from .repository import (
     AuditProposalRepository,
-    FakeAuditProposalRepository,
-    FakeOccurrenceRepository,
-    FakeTitleRepository,
     OccurrenceRepository,
     TitleRepository,
 )
@@ -467,14 +464,11 @@ class ProposalApplicationService:
         else:
             if proposal_repo is None or title_repo is None or occurrence_repo is None:
                 raise ValueError("Proposal application requires a store or all legacy repositories")
-            store_type = (
-                FakeProposalApplicationStore
-                if isinstance(proposal_repo, FakeAuditProposalRepository)
-                and isinstance(title_repo, FakeTitleRepository)
-                and isinstance(occurrence_repo, FakeOccurrenceRepository)
-                else RepositoryProposalApplicationStore
+            self.store = RepositoryProposalApplicationStore(
+                proposal_repo,
+                title_repo,
+                occurrence_repo,
             )
-            self.store = store_type(proposal_repo, title_repo, occurrence_repo)
         if clock is not None:
             self.clock = clock
         elif now is not None:

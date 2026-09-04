@@ -11,7 +11,7 @@ from movies_feed.ids import get_cache_key
 from movies_feed.metadata_resolver import MetadataOutcomeStatus, OmdbResolver
 from movies_feed.models import OmdbCacheEntry
 from movies_feed.omdb_client import HttpTransport, OmdbClient
-from movies_feed.repository import FakeOmdbCacheRepository
+from backend.tests.fakes import FakeOmdbCacheRepository
 
 
 class MockHttpTransport(HttpTransport):
