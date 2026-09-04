@@ -4,9 +4,9 @@ Date: 2026-09-04
 
 ## Purpose
 
-Address the concrete residual issues found after completing `BACKEND_COMPLEXITY_REDUCTION_PLAN.md` without reopening the completed refactoring or starting a .NET migration.
+This document records the concrete residual issues addressed after completing `BACKEND_COMPLEXITY_REDUCTION_PLAN.md` without reopening the completed refactoring or starting a .NET migration.
 
-The original plan has both staged and unstaged changes. Its staged version marks Steps 13-16 complete and contains the final measurements; its unstaged version changes those statuses back to `not started` and removes the measurements. Do not reset, restore, or overwrite either side automatically. Reconcile that document only in STEP 4 after verifying the implementation evidence.
+The staged/worktree reconciliation described in STEP 6 is complete; the original plan retains its implementation evidence, measurements, Windows-safe emulator command, and final decision.
 
 ## Verified Baseline
 
@@ -23,7 +23,7 @@ The original plan has both staged and unstaged changes. Its staged version marks
 
 ## Target State
 
-The follow-up is complete when:
+The follow-up's completion criteria were:
 
 1. Firestore emulator tests run on Windows without OpenSSL, ADC, or a service-account file.
 2. Production Firestore initialization remains unchanged and continues to use Firebase Admin credentials.
@@ -218,21 +218,21 @@ python -m unittest backend.tests.test_rss_entry_processor backend.tests.test_rss
 
 Status: complete
 
-Before editing `docs/BACKEND_COMPLEXITY_REDUCTION_PLAN.md`, inspect both:
+As part of STEP 6, the staged and worktree versions of `docs/BACKEND_COMPLEXITY_REDUCTION_PLAN.md` were inspected:
 
 ```powershell
 git diff -- docs/BACKEND_COMPLEXITY_REDUCTION_PLAN.md
 git diff --cached -- docs/BACKEND_COMPLEXITY_REDUCTION_PLAN.md
 ```
 
-Reconcile the document from implementation evidence, not from whichever index/worktree copy is newer:
+The document was reconciled from implementation evidence, not from whichever index/worktree copy was newer:
 
-- mark Steps 13, 14, 15, and 16 complete;
-- preserve the representative measurements and Python/.NET decision already present in the staged version;
-- retain the Windows-safe emulator command syntax proven by Checkpoint A;
-- replace the stale STEP 1 session prompt with a completion note or remove it;
-- add a short link to this follow-up plan and its outcome;
-- do not discard unrelated staged or unstaged edits.
+- Steps 13, 14, 15, and 16 were marked complete;
+- the representative measurements and Python/.NET decision already present in the staged version were preserved;
+- the Windows-safe emulator command syntax proven by Checkpoint A was retained;
+- the stale STEP 1 session prompt was replaced with a completion note;
+- a short link to this follow-up plan and its outcome was retained;
+- unrelated staged and unstaged edits were preserved.
 
 Also mark completed steps in this follow-up plan only after their validations have passed.
 
@@ -248,9 +248,9 @@ Validation: documentation/evidence review only; do not run Markdown or whitespac
 
 ### STEP 7 - Run the Final Regression Gate and Record the Decision
 
-Status: not started
+Status: complete
 
-Run each command once, stopping at the first failure:
+The final-gate commands were run once in order:
 
 ```powershell
 npx pyright
@@ -262,7 +262,19 @@ npx firebase emulators:exec --project demo-mediadock "npx vitest run firebase/te
 npm run build
 ```
 
-Record final counts and any warnings in this document. Do not fix unrelated failures as part of this plan.
+Final counts and warnings are recorded below. Unrelated failures were not fixed as part of this plan.
+
+Final gate result (2026-09-04):
+
+1. `npx pyright`: PASS, 0 errors, 0 warnings, 0 informations.
+2. `python -m unittest discover -s backend/tests -p "test_*.py" -v`: PASS, 320 tests, 18 skipped, no warnings.
+3. Firestore emulator backend tests: PASS, 28 tests. Warnings: positional-argument `where` filter warnings at `google/cloud/firestore_v1/base_collection.py:317` and `backend/src/movies_feed/firestore_repository.py:594`.
+4. `npx tsc --noEmit`: PASS, no output or warnings.
+5. `npx vitest run src/test`: PASS, 11 files and 74 tests, no warnings.
+6. Firestore rules emulator tests: PASS, 1 file and 32 tests. Warning: Node `ExperimentalWarning` because `localStorage` was used without `--localstorage-file`.
+7. `npm run build`: PASS, 1,713 modules transformed. Warning: the generated JavaScript chunk is 966.93 kB after minification, above the 500 kB threshold.
+
+Decision: Stop backend structural refactoring. All seven gates pass, and a typical RSS entry decision now belongs to `rss_entry_processor.py` plus its focused tests. Keep Python; no .NET migration is authorized solely from module line counts. Treat frontend chunking as a separate performance task.
 
 Decision rule:
 
@@ -286,18 +298,3 @@ Acceptance criteria:
 - Refactoring unrelated frontend components or addressing the Vite bundle warning.
 - Reducing line counts through generic helpers, callback bundles, or hidden control flow.
 
-## New Session Prompt
-
-```text
-Use the plan-runner-orchestrator agent to execute
-docs/BACKEND_COMPLEXITY_FOLLOW_UP_PLAN.md.
-
-Start with STEP 1 only. Follow the Mandatory Execution Rules exactly. The
-original complexity-reduction plan has conflicting staged and unstaged edits;
-do not reset, restore, or reconcile that file before STEP 6.
-
-For STEP 1, change only the Firestore emulator initialization path, preserve
-the Firebase Admin production path, add the focused unit tests, run only the
-listed validation command, and stop after reporting the result. Mark STEP 1
-complete only if that command passes.
-```

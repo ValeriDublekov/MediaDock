@@ -470,22 +470,46 @@ npm run build
 
 ### STEP 16 - Measure the Result and Decide on .NET
 
-Status: not started
+Status: complete
 
-Update this document with before/after measurements from three representative changes:
+### Representative measurements
 
-1. one RSS parsing or ordering change;
-2. one persistence contract field change;
-3. one scanner phase/orchestration change.
+The commit history verifies the changed-file sets and the focused commands, but
+does not record elapsed times, defect-discovery attribution, or historical AI
+session/tool-call counts. Those values are recorded as unavailable rather than
+reconstructed. The current final gate is a post-change result, not a historical
+before measurement.
 
-Record for each change:
+| Change and evidence | Production files read/edited | Test files read/edited | Focused validation duration | Full-gate duration | Runtime-only vs. static-only defects | AI session/tool-call count |
+| --- | --- | --- | --- | --- | --- | --- |
+| RSS snapshot ordering, STEP 5, commit `a88252a` | Before: `backend/src/movies_feed/scanner.py` owned collection and ordering. After: `backend/src/movies_feed/rss_snapshot.py`, `backend/src/movies_feed/scanner.py`. | `backend/tests/test_rss_snapshot.py` | Not recorded. Command: `python -m unittest backend.tests.test_rss_snapshot backend.tests.test_rss_ingestion -v` | Not recorded for the historical change. | Not recorded in the commit or plan history. | Not available for the historical change. |
+| Firestore contract fixtures and field mapping, STEP 13, commit `0abcd1a` | Before: persistence decoding was spread across the existing Python/TypeScript adapters. After: `backend/src/movies_feed/firestore_codecs.py`, `backend/src/movies_feed/firestore_repository.py`, `src/adapters/firestoreCatalogAdapter.ts`, `src/adapters/firestoreCatalogMappers.ts`. | `backend/tests/test_firestore_contracts.py`, `src/test/catalogRepository.test.ts`, `src/test/firestoreContracts.test.ts`; fixtures: `test-contracts/firestore/v1/occurrence.json`, `test-contracts/firestore/v1/rss-snapshot-item.json`, `test-contracts/firestore/v1/rss-snapshot-state.json`, `test-contracts/firestore/v1/title.json` | Not recorded. Commands: `python -m unittest backend.tests.test_firestore_contracts -v`; `npx vitest run src/test/firestoreContracts.test.ts` | Not recorded for the historical change. | Not recorded in the commit or plan history. | Not available for the historical change. |
+| Scanner phase orchestration, STEP 8, commit `4142481` | Before: phase flow was concentrated in `backend/src/movies_feed/scanner.py`. After: `backend/src/movies_feed/rss_ingestion.py`, `backend/src/movies_feed/scan_contracts.py`, `backend/src/movies_feed/scanner.py`. | `backend/tests/test_scan_orchestration.py` | Not recorded. Command: `python -m unittest backend.tests.test_scan_orchestration backend.tests.test_cli -v` | Not recorded for the historical change. | Not recorded in the commit or plan history. | Not available for the historical change. |
 
-- production files that had to be read and edited;
-- test files that had to be read and edited;
-- focused validation duration;
-- full-gate duration;
-- defects first found only by runtime tests versus static checking;
-- approximate AI session/tool-call count if available.
+The local session metadata for this run contains only session-start records, so
+it cannot provide a reliable historical tool-call count. The final gate below
+is the available post-change completeness evidence, and it passed before this
+step was marked complete.
+
+Decision: Keep Python based on the available representative-change evidence.
+The RSS and scanner changes have focused owning modules and tests, and the
+contract change has executable cross-language fixtures. There is no recorded
+pattern of representative changes failing at runtime for issues that C# would
+have caught statically, so an incremental .NET migration is not justified.
+Historical timing and defect data remain unavailable. The initial final gate
+exposed a Firestore transaction lock-timeout in the lease-concurrency test; the
+repair removed the redundant same-source proposal scan from the atomic lease
+transaction while retaining the shared source lock. This decision does not
+authorize a migration.
+
+Initial gate result: commands 1 and 2 passed. Command 3 failed in
+`test_same_source_proposals_have_one_winner_under_concurrent_attempts` with
+Firestore `ABORTED` / `409 Transaction lock timeout` after transaction retries
+were exhausted, so commands 4 through 7 were not run. After the lease repair,
+all seven final-gate commands passed, including 28 emulator-backed Firestore
+tests, 74 frontend tests, 32 rules tests, and the production build.
+
+The representative measurements above are the completed record for the three requested changes. Historical duration, defect-attribution, and AI-session data were unavailable and are explicitly marked as such.
 
 Decision rule:
 
@@ -493,7 +517,7 @@ Decision rule:
 - Consider incremental .NET migration only if, after this plan, representative backend changes still require broad cross-module context or repeatedly fail at runtime for issues C# would catch statically.
 - Do not perform a big-bang rewrite. If migration is justified, define a stable boundary and migrate one worker/use case while retaining the same Firestore contract fixtures.
 
-Final validation:
+Final validation commands executed:
 
 ```powershell
 npx pyright
@@ -518,4 +542,4 @@ npm run build
 
 ## Follow-up Outcome
 
-The completed follow-up is documented in [BACKEND_COMPLEXITY_FOLLOW_UP_PLAN.md](BACKEND_COMPLEXITY_FOLLOW_UP_PLAN.md). Checkpoints A and B are complete through STEP 5; STEP 6 reconciles this plan's implementation evidence and preserves the final decision.
+The completed follow-up is documented in [BACKEND_COMPLEXITY_FOLLOW_UP_PLAN.md](BACKEND_COMPLEXITY_FOLLOW_UP_PLAN.md). The follow-up plan is complete through STEP 7, including the reconciliation in STEP 6 and the final regression gate. The representative measurements, final gate evidence, and Python/.NET decision above remain the source of record.
