@@ -30,7 +30,6 @@ from .models import (
     Occurrence,
     ParseLog,
     RssSnapshot,
-    RssSnapshotItem,
     ScanRun,
     SourceContext,
     Title,
@@ -58,6 +57,7 @@ from .rutracker_parser import ParsedTitle, iter_feed_definitions, parse_rutracke
 from .ai_matcher import AiMatcher
 from .feed_fetcher import FeedFetcher
 from .scan_contracts import FeedDefinition
+from .rss_snapshot import RssSnapshotCollector
 from .existing_title_audit import ExistingTitleAuditService
 from .reparse_service import ReparseService
 from .proposal_application import ProposalApplicationService, ProposalApplicationResult
@@ -203,7 +203,7 @@ class ScannerService:
         self._run_written_occurrence_keys: Set[Tuple[str, str]] = set()
         self._run_written_parse_log_ids: Set[str] = set()
         self._run_created_proposal_ids: Set[str] = set()
-        self._rss_snapshot_candidates: Dict[str, RssSnapshotItem] = {}
+        self._rss_snapshot_collector = RssSnapshotCollector()
 
     @staticmethod
     def _record_phase_error(run: Optional[ScanRun], message: str) -> None:
@@ -218,57 +218,6 @@ class ScannerService:
             return
         resolver_attempts = getattr(self.metadata_resolver, "http_attempts", 0)
         run.omdb_requests = max(run.omdb_requests, resolver_attempts)
-
-    def _record_rss_snapshot_candidate(
-        self,
-        title_id: str,
-        source_type: str,
-        feed_order: int,
-        entry_order: int,
-    ) -> None:
-        if source_type not in ("movie", "series"):
-            return
-        candidate = RssSnapshotItem(
-            title_id=title_id,
-            source_type=source_type,
-            group_order=0 if source_type == "movie" else 1,
-            feed_order=feed_order,
-            entry_order=entry_order,
-            rss_position=-1,
-        )
-        existing = self._rss_snapshot_candidates.get(title_id)
-        if existing is None or (
-            candidate.group_order,
-            candidate.feed_order,
-            candidate.entry_order,
-        ) < (
-            existing.group_order,
-            existing.feed_order,
-            existing.entry_order,
-        ):
-            self._rss_snapshot_candidates[title_id] = candidate
-
-    def _build_rss_snapshot_items(self) -> List[RssSnapshotItem]:
-        ordered_candidates = sorted(
-            self._rss_snapshot_candidates.values(),
-            key=lambda item: (
-                item.group_order,
-                item.feed_order,
-                item.entry_order,
-                item.title_id,
-            ),
-        )
-        return [
-            RssSnapshotItem(
-                title_id=item.title_id,
-                source_type=item.source_type,
-                group_order=item.group_order,
-                feed_order=item.feed_order,
-                entry_order=item.entry_order,
-                rss_position=position,
-            )
-            for position, item in enumerate(ordered_candidates)
-        ]
 
     def _publish_rss_snapshot(self, run_id: str, run: ScanRun) -> None:
         if self.rss_snapshot_repo is None or self.config.is_dry_run or self.config.is_parse_only:
@@ -285,7 +234,7 @@ class ScannerService:
         ):
             return
 
-        items = self._build_rss_snapshot_items()
+        items = self._rss_snapshot_collector.build_items()
         snapshot = RssSnapshot(
             id=get_rss_snapshot_id(run_id),
             run_id=run_id,
@@ -1510,7 +1459,7 @@ class ScannerService:
             run.titles_created += 1
             run.occurrences_created += 1
 
-        self._record_rss_snapshot_candidate(
+        self._rss_snapshot_collector.record_candidate(
             title_id=title_id,
             source_type=source_type,
             feed_order=ctx.feed_order,

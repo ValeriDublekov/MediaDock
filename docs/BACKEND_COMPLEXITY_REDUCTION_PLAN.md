@@ -165,7 +165,7 @@ python -m unittest backend.tests.test_rss_ingestion backend.tests.test_feed_fetc
 
 ### STEP 5 - Extract the RSS Snapshot Collector
 
-Status: not started
+Status: complete
 
 Create `backend/src/movies_feed/rss_snapshot.py` containing a run-scoped collector responsible for:
 
