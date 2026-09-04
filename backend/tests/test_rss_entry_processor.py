@@ -20,10 +20,13 @@ except ImportError:
 
 from movies_feed.ids import get_source_item_id, get_title_id_v2
 from movies_feed.models import ManualMapping, ScanRun, SourceContext, Title
+from movies_feed.metadata_resolver import OmdbResolver
 from movies_feed.omdb_client import OmdbLimitReachedError, OmdbTransportError
-from movies_feed.rss_ingestion import ParsedEntryContext
+from movies_feed.rss_entry_processor import ParsedEntryContext, RssEntryProcessor
 from movies_feed.rutracker_parser import ParsedTitle
 from movies_feed.scan_contracts import FeedDefinition
+from movies_feed.scan_write_buffer import ScanWriteBuffer
+from movies_feed.rss_snapshot import RssSnapshotCollector
 from movies_feed.scanner import ScannerConfig
 
 
@@ -49,12 +52,39 @@ class TestRssEntryProcessor(ScannerTestMixin, unittest.TestCase):
             "omdb_limit": 10,
         }
         config_values.update(config_overrides)
+        config = ScannerConfig(**config_values)
         omdb = MockOmdbClient(responses or {})
-        scanner = self.scanner_builder.build(
-            config=ScannerConfig(**config_values),
-            omdb_client=omdb,
+        metadata_resolver = OmdbResolver(
+            omdb,
+            self.cache_repo,
+            cache_ttl_days=config.cache_ttl_days,
+            request_limit=config.omdb_limit,
+            is_dry_run=config.is_dry_run,
+            now=self.now,
         )
-        return scanner.rss_ingestion, omdb
+        metadata_resolver.start_run(
+            now=self.now,
+            request_limit=config.omdb_limit,
+            is_dry_run=config.is_dry_run,
+        )
+        write_buffer = ScanWriteBuffer(
+            title_repo=self.title_repo,
+            occurrence_repo=self.occ_repo,
+            parse_log_repo=self.parse_log_repo,
+            manual_mapping_repo=self.manual_mapping_repo,
+            is_dry_run=config.is_dry_run,
+            is_parse_only=config.is_parse_only,
+        )
+        if not config.is_parse_only:
+            write_buffer.load_manual_mappings()
+        processor = RssEntryProcessor(
+            config=config,
+            metadata_resolver=metadata_resolver,
+            write_buffer=write_buffer,
+            snapshot_collector=RssSnapshotCollector(),
+            now=self.now,
+        )
+        return processor, omdb
 
     def _context(
         self,

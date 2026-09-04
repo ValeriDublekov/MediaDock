@@ -144,7 +144,7 @@ python -m unittest backend.tests.test_rss_entry_processor backend.tests.test_rss
 
 ### STEP 4 - Extract `RssEntryProcessor`
 
-Status: not started
+Status: complete
 
 Create `backend/src/movies_feed/rss_entry_processor.py` and move entry-level behavior from `RssIngestionService` into `RssEntryProcessor`.
 
