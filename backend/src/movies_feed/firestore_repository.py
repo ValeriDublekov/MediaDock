@@ -3,7 +3,9 @@ import os
 import datetime
 from typing import Any, Dict, List, Optional
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import firestore
+from google.auth.credentials import AnonymousCredentials
+from google.cloud import firestore as cloud_firestore
 from google.cloud.firestore_v1.field_path import FieldPath
 
 from .audit_proposal import (
@@ -19,7 +21,6 @@ from .firestore_codecs import (
     occurrence_from_dict,
     parse_log_from_dict,
     scan_run_from_dict,
-    rss_snapshot_state_to_dict,
     title_from_dict,
 )
 from .models import (
@@ -61,60 +62,17 @@ def get_firestore_client(
     # If the user or env sets "(default)", "%28default%29", or empty string, treat it as default database
     db_id = raw_db_id if raw_db_id and raw_db_id not in ("(default)", "%28default%29") else None
 
+    if os.environ.get("FIRESTORE_EMULATOR_HOST"):
+        client_kwargs: Dict[str, Any] = {
+            "project": project_id,
+            "credentials": AnonymousCredentials(),
+        }
+        if db_id:
+            client_kwargs["database"] = db_id
+        return cloud_firestore.Client(**client_kwargs)
+
     if not firebase_admin._apps:
-        if os.environ.get("FIRESTORE_EMULATOR_HOST"):
-            if not os.environ.get("GCLOUD_PROJECT"):
-                os.environ["GCLOUD_PROJECT"] = project_id
-
-            import shutil
-            import subprocess
-            import tempfile
-            from pathlib import Path
-
-            key_path = Path(tempfile.gettempdir()) / "mediadock_dummy_key.pem"
-            if not key_path.exists():
-                openssl_path = shutil.which("openssl")
-                if openssl_path:
-                    subprocess.run(
-                        [openssl_path, "genrsa", "-out", str(key_path), "2048"],
-                        check=True,
-                        capture_output=True,
-                    )
-                else:
-                    from cryptography.hazmat.primitives import serialization
-                    from cryptography.hazmat.primitives.asymmetric import rsa
-
-                    private_key = rsa.generate_private_key(
-                        public_exponent=65537,
-                        key_size=2048,
-                    )
-                    key_path.write_bytes(
-                        private_key.private_bytes(
-                            encoding=serialization.Encoding.PEM,
-                            format=serialization.PrivateFormat.TraditionalOpenSSL,
-                            encryption_algorithm=serialization.NoEncryption(),
-                        )
-                    )
-
-            private_key_content = key_path.read_text(encoding="utf-8")
-
-            # Initialize with dummy service account dictionary
-            dummy_cert = {
-                "type": "service_account",
-                "project_id": project_id,
-                "private_key_id": "dummy_key_id",
-                "private_key": private_key_content,
-                "client_email": f"dummy@{project_id}.iam.gserviceaccount.com",
-                "client_id": "123456",
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/dummy%40{project_id}.iam.gserviceaccount.com"
-            }
-            cred = credentials.Certificate(dummy_cert)
-            firebase_admin.initialize_app(cred, {"projectId": project_id})
-        else:
-            firebase_admin.initialize_app()
+        firebase_admin.initialize_app()
 
     if db_id:
         return firestore.client(database_id=db_id)
@@ -411,7 +369,12 @@ class FirestoreRssSnapshotRepository(RssSnapshotRepository):
             "status": "ready",
             "schemaVersion": 1,
         }
-        pointer_data = rss_snapshot_state_to_dict(snapshot)
+        pointer_data = {
+            "snapshotId": snapshot_id,
+            "runId": snapshot.run_id,
+            "createdAt": snapshot.created_at,
+            "itemCount": snapshot.item_count,
+        }
 
         @firestore.transactional
         def _promote(transaction):
