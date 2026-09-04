@@ -253,7 +253,7 @@ python -m unittest backend.tests.test_scanner backend.tests.test_scan_orchestrat
 
 ### STEP 8 - Extract Explicit Phase Methods
 
-Status: not started
+Status: complete
 
 Reduce `ScannerService.run()` to lifecycle orchestration. Introduce small private methods or phase adapters for:
 

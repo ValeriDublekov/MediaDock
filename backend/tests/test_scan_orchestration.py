@@ -19,10 +19,63 @@ except ImportError:
     )
 
 from movies_feed.models import ParseLog, ScanRun, SourceContext
+from movies_feed.scan_contracts import ScanPhaseOutcome
 from movies_feed.scanner import ScannerConfig
 
 
 class TestScanOrchestration(ScannerTestMixin, unittest.TestCase):
+    def test_run_executes_selected_phases_in_order_and_all_skips_proposals(self):
+        scanner = self.create_scanner(ScannerConfig(mode="all"), MockOmdbClient({}))
+        phase_order = []
+
+        def record_phase(name):
+            def phase(*args, **kwargs):
+                phase_order.append(name)
+                return ScanPhaseOutcome(status="succeeded", errors=0)
+            return phase
+
+        from unittest.mock import patch
+        with patch.object(scanner, "_run_rss_phase", side_effect=record_phase("rss")), patch.object(
+            scanner,
+            "_run_existing_title_audit_phase",
+            side_effect=record_phase("recheck_existing"),
+        ), patch.object(
+            scanner,
+            "_run_reparse_unfound_phase",
+            side_effect=record_phase("reparse_unfound"),
+        ), patch.object(scanner, "_apply_proposals") as apply_proposals:
+            run = scanner.run("ordered-all-phases")
+
+        self.assertEqual(phase_order, ["rss", "recheck_existing", "reparse_unfound"])
+        self.assertEqual(run.status, "succeeded")
+        apply_proposals.assert_not_called()
+
+    def test_final_status_aggregation_handles_fatal_partial_skipped_and_success(self):
+        scanner = self.create_scanner(ScannerConfig(mode="rss"), MockOmdbClient({}))
+        cases = (
+            ("successful", {"rss": "succeeded", "recheck": "skipped"}, 0, False, "succeeded"),
+            ("partial", {"rss": "partial", "recheck": "skipped"}, 0, False, "partial"),
+            ("skipped", {"rss": "skipped", "recheck": "skipped"}, 0, False, "succeeded"),
+            ("fatal", {"rss": "succeeded"}, 1, True, "failed"),
+        )
+        for name, statuses, error_count, fatal, expected in cases:
+            with self.subTest(name=name):
+                run = ScanRun(
+                    started_at=self.now,
+                    finished_at=None,
+                    status="running",
+                    trigger="local",
+                    error_count=error_count,
+                    phase_metrics={
+                        phase: {"status": status}
+                        for phase, status in statuses.items()
+                    },
+                )
+                self.assertEqual(
+                    scanner._calculate_final_status(run, fatal=fatal),
+                    expected,
+                )
+
     def test_reparse_uses_stored_series_feed_type_and_accepts_later_season(self):
         result = make_series_result()
         source_log = ParseLog(

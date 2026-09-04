@@ -27,47 +27,14 @@ from .metadata_resolver import MetadataOutcome, MetadataOutcomeStatus, MetadataR
 from .models import Occurrence, ParseLog, ScanRun, SourceContext, Title
 from .omdb_client import OmdbLimitReachedError, OmdbMovieResult
 from .rutracker_parser import ParsedTitle, iter_feed_definitions, parse_rutracker_title
-from .scan_contracts import FeedDefinition
+from .scan_contracts import FeedDefinition, ScanPhaseOutcome
 from .scan_write_buffer import ScanWriteBuffer
 from .rss_snapshot import RssSnapshotCollector
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class RssPhaseResult:
-    status: str = "skipped"
-    started_at: Optional[str] = None
-    finished_at: Optional[str] = None
-    duration_seconds: float = 0.0
-    feeds_processed: int = 0
-    entries_seen: int = 0
-    titles_created: int = 0
-    titles_updated: int = 0
-    occurrences_created: int = 0
-    occurrences_updated: int = 0
-    cache_hits: int = 0
-    omdb_requests: int = 0
-    ignored_entries: int = 0
-    errors: int = 0
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "status": self.status,
-            "started_at": self.started_at,
-            "finished_at": self.finished_at,
-            "duration_seconds": self.duration_seconds,
-            "feeds_processed": self.feeds_processed,
-            "entries_seen": self.entries_seen,
-            "titles_created": self.titles_created,
-            "titles_updated": self.titles_updated,
-            "occurrences_created": self.occurrences_created,
-            "occurrences_updated": self.occurrences_updated,
-            "cache_hits": self.cache_hits,
-            "omdb_requests": self.omdb_requests,
-            "ignored_entries": self.ignored_entries,
-            "errors": self.errors,
-        }
+RssPhaseResult = ScanPhaseOutcome
 
 
 @dataclass
@@ -131,12 +98,6 @@ class RssIngestionService:
     ) -> RssPhaseResult:
         if section_timings is None:
             section_timings = self._new_section_timings()
-
-        if self.config.mode not in ("rss", "all"):
-            logger.info(
-                f"--> [Phase 1/4] RSS feed processing SKIPPED (mode is '{self.config.mode}')"
-            )
-            return RssPhaseResult()
 
         logger.info("--> [Phase 1/4] Processing RSS feeds...")
         phase_started = datetime.datetime.now(datetime.timezone.utc)
@@ -298,15 +259,17 @@ class RssIngestionService:
             started_at=phase_started.isoformat(),
             finished_at=phase_finished.isoformat(),
             duration_seconds=round(phase_duration, 4),
-            feeds_processed=run.feeds_processed,
-            entries_seen=run.entries_seen,
-            titles_created=run.titles_created,
-            titles_updated=run.titles_updated,
-            occurrences_created=run.occurrences_created,
-            occurrences_updated=run.occurrences_updated,
-            cache_hits=run.cache_hits,
-            omdb_requests=run.omdb_requests,
-            ignored_entries=run.ignored_entries,
+            counters={
+                "feeds_processed": run.feeds_processed,
+                "entries_seen": run.entries_seen,
+                "titles_created": run.titles_created,
+                "titles_updated": run.titles_updated,
+                "occurrences_created": run.occurrences_created,
+                "occurrences_updated": run.occurrences_updated,
+                "cache_hits": run.cache_hits,
+                "omdb_requests": run.omdb_requests,
+                "ignored_entries": run.ignored_entries,
+            },
             errors=phase_errors,
         )
 
