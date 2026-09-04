@@ -11,6 +11,7 @@ from movies_feed.omdb_client import (
     OmdbMovieResult,
     OmdbNoMatchError,
 )
+from movies_feed.models import ParseLog, SourceContext
 from movies_feed.proposal_application_store import ProposalApplicationStore
 from movies_feed.repository import (
     AuditProposalRepository,
@@ -209,6 +210,91 @@ class ScannerTestBuilder:
                 if rss_snapshot_repo is not None
                 else self.rss_snapshot_repo
             ),
+        )
+
+
+class ScannerTestMixin:
+    def setUp(self):
+        self.now = datetime.datetime.now(datetime.timezone.utc)
+        self.title_repo = FakeTitleRepository()
+        self.occ_repo = FakeOccurrenceRepository()
+        self.cache_repo = FakeOmdbCacheRepository()
+        self.run_repo = FakeScanRunRepository()
+        self.parse_log_repo = FakeParseLogRepository()
+        self.manual_mapping_repo = FakeManualMappingRepository()
+        self.audit_proposal_repo = FakeAuditProposalRepository()
+        self.scanner_builder = ScannerTestBuilder(
+            now=self.now,
+            title_repo=self.title_repo,
+            occurrence_repo=self.occ_repo,
+            cache_repo=self.cache_repo,
+            run_repo=self.run_repo,
+            parse_log_repo=self.parse_log_repo,
+            manual_mapping_repo=self.manual_mapping_repo,
+            audit_proposal_repo=self.audit_proposal_repo,
+        )
+
+        self.valid_movie = OmdbMovieResult(
+            title="The Matrix", year=1999, imdb_id="tt0133093",
+            media_type="movie", rating=8.7, votes=1000000, metascore=92,
+            genres=["Action", "Sci-Fi"], countries=["USA"], director="Wachowski", plot="Matrix", poster_url=None,
+            runtime="136 min", awards="Oscars", box_office=None, ratings=[],
+            raw_payload={
+                "Response": "True", "Title": "The Matrix", "Year": "1999", "imdbID": "tt0133093",
+                "Genre": "Action, Sci-Fi", "Country": "USA", "Type": "movie"
+            }
+        )
+
+        self.filtered_movie = OmdbMovieResult(
+            title="Filtered Movie", year=2000, imdb_id="tt9999999",
+            media_type="movie", rating=1.0, votes=100, metascore=10,
+            genres=["Action", "Horror"], countries=["Russia"], director="Someone", plot="Plot", poster_url=None,
+            runtime="90 min", awards=None, box_office=None, ratings=[],
+            raw_payload={
+                "Response": "True", "Title": "Filtered Movie", "Year": "2000", "imdbID": "tt9999999",
+                "Genre": "Action, Horror", "Country": "Russia", "Type": "movie"
+            }
+        )
+
+    def create_scanner(self, config: ScannerConfig, omdb_client: OmdbClient) -> ScannerService:
+        return self.scanner_builder.build(
+            config=config,
+            omdb_client=omdb_client,
+            now=self.now,
+        )
+
+    def make_retry_log(
+        self,
+        log_id: str,
+        raw_title: str,
+        *,
+        source_feed_id: str,
+        feed_entry_id: str,
+        feed_type: str = "movie",
+        processed_at: Optional[datetime.datetime] = None,
+    ) -> ParseLog:
+        return ParseLog(
+            id=log_id,
+            raw_title=raw_title,
+            feed_name=source_feed_id,
+            parsed_successfully=True,
+            parsed_title=None,
+            parsed_year=None,
+            omdb_status="not_found",
+            ignored=True,
+            ignore_reason="omdb_not_found",
+            processed_at=processed_at or self.now,
+            source_context=SourceContext(
+                source_feed_id=source_feed_id,
+                source_feed_name=source_feed_id,
+                feed_type=feed_type,
+                feed_entry_id=feed_entry_id,
+                torrent_url=f"https://example.test/{source_feed_id}/{feed_entry_id}",
+                raw_title=raw_title,
+                source_published_at=self.now - datetime.timedelta(days=2),
+                observed_at=self.now - datetime.timedelta(days=1),
+            ),
+            event_kind="source",
         )
 
 

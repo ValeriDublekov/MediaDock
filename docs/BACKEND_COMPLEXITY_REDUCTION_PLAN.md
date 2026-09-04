@@ -110,7 +110,7 @@ python -m unittest backend.tests.test_scanner backend.tests.test_existing_title_
 
 ### STEP 3 - Split Scanner Tests by Behavior
 
-Status: not started
+Status: complete
 
 Move tests mechanically from `test_scanner.py` into focused modules. Use names that match the behavior actually present, for example:
 
