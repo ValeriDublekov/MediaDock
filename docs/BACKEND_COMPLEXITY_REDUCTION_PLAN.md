@@ -350,7 +350,7 @@ python -m unittest backend.tests.test_repository backend.tests.test_proposal_app
 
 ### STEP 12 - Extract Firestore Codecs
 
-Status: not started
+Status: complete
 
 Create `backend/src/movies_feed/firestore_codecs.py` and move pure Firestore dictionary conversion into named codecs. Repository classes in `firestore_repository.py` should own queries, batching, and transactions, while codecs own field names, defaults, nullability, and timestamp conversion.
 

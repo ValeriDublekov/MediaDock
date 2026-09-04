@@ -39,8 +39,8 @@ from movies_feed import (
     get_cache_key,
     BroadcastRange,
 )
-from movies_feed.firestore_repository import (
-    audit_proposal_from_dict,
+from movies_feed.audit_proposal import audit_proposal_from_dict
+from movies_feed.firestore_codecs import (
     manual_mapping_from_dict,
     occurrence_from_dict,
     parse_log_from_dict,

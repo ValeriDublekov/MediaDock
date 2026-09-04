@@ -7,13 +7,12 @@ from typing import Any, Mapping, Optional
 
 from firebase_admin import firestore
 
+from .firestore_codecs import occurrence_from_dict, title_from_dict
 from .firestore_repository import (
     FirestoreAuditProposalRepository,
     FirestoreOccurrenceRepository,
     FirestoreTitleRepository,
     get_firestore_client,
-    occurrence_from_dict,
-    title_from_dict,
 )
 from .ids import get_title_id_v2, normalize_title
 from .models import Occurrence, Title
