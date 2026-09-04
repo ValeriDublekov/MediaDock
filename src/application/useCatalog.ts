@@ -102,7 +102,11 @@ export function useCatalog(options: UseCatalogOptions = {}): UseCatalogReturn {
         setTitles(loadedTitles);
         setLatestSnapshotAvailable(snapshotAvailable);
       } else {
-        const page = await repository.getCatalogPage({ pageSize, cursor: null });
+        const page = await repository.getCatalogPage({
+          pageSize,
+          sourceType: rssSourceType,
+          cursor: null,
+        });
         if (requestId !== requestIdRef.current) return;
         setTitles(page.items);
         setHasMore(page.hasMore);
@@ -138,6 +142,7 @@ export function useCatalog(options: UseCatalogOptions = {}): UseCatalogReturn {
             })
           : await repository.getCatalogPage({
               pageSize,
+              sourceType: rssSourceType,
               cursor: nextCursor as CatalogCursor,
             });
 
@@ -170,7 +175,15 @@ export function useCatalog(options: UseCatalogOptions = {}): UseCatalogReturn {
   useEffect(() => {
     if (autoFetch) {
       loadInitialPage();
+      return;
     }
+
+    requestIdRef.current += 1;
+    setTitles([]);
+    setError(null);
+    setHasMore(false);
+    setNextCursor(null);
+    setLatestSnapshotAvailable(null);
   }, [autoFetch, loadInitialPage]);
 
   const isEmpty = !isLoading && !error && titles.length === 0;

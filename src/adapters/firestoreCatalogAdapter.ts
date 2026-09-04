@@ -112,10 +112,14 @@ export class FirestoreCatalogAdapter implements CatalogRepository {
   async getCatalogPage(options: CatalogPageOptions): Promise<CatalogPage> {
     const db = this.getDbInstance();
     const titlesRef = collection(db, 'titles');
+    const sourceConstraint = options.sourceType
+      ? [where('sourceType', '==', options.sourceType)]
+      : [];
 
     const q = options.cursor
       ? query(
           titlesRef,
+          ...sourceConstraint,
           orderBy('lastSeenAt', 'desc'),
           orderBy(documentId(), 'desc'),
           startAfter(
@@ -126,6 +130,7 @@ export class FirestoreCatalogAdapter implements CatalogRepository {
         )
       : query(
           titlesRef,
+          ...sourceConstraint,
           orderBy('lastSeenAt', 'desc'),
           orderBy(documentId(), 'desc'),
           limit(options.pageSize)

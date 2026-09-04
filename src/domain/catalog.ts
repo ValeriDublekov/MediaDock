@@ -66,6 +66,7 @@ export interface LatestRssSnapshotPage {
 
 export interface CatalogPageOptions {
   pageSize: number;
+  sourceType?: RssSourceType;
   cursor?: CatalogCursor | null;
 }
 

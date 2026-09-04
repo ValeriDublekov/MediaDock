@@ -92,8 +92,55 @@ describe('Catalog Query and Pagination', () => {
       expect.stringContaining('Movie One'),
       expect.stringContaining('Movie Three'),
     ]);
-    expect(screen.queryByTestId('catalog-load-more-button')).not.toBeInTheDocument();
+    expect(screen.getByTestId('catalog-load-more-button')).toHaveTextContent('Зареди по-стари заглавия');
     expect(mockRepository.getCatalogPage).not.toHaveBeenCalled();
+  });
+
+  it('loads older titles by category and continues with the catalog cursor', async () => {
+    const user = userEvent.setup();
+    const catalogCursor = { lastSeenAt: date2, id: item2.id };
+    vi.mocked(mockRepository.getLatestRssSnapshotPage!).mockResolvedValue({
+      items: [item1],
+      nextCursor: null,
+      hasMore: false,
+      snapshotId: 'snapshot-1',
+    });
+    vi.mocked(mockRepository.getCatalogPage)
+      .mockResolvedValueOnce({
+        items: [item1, item2],
+        nextCursor: catalogCursor,
+        hasMore: true,
+      })
+      .mockResolvedValueOnce({
+        items: [item3],
+        nextCursor: null,
+        hasMore: false,
+      });
+
+    render(<CatalogView repository={mockRepository} pageSize={2} />);
+    await waitFor(() => expect(screen.getByText('Movie One')).toBeInTheDocument());
+
+    await user.click(screen.getByTestId('catalog-load-more-button'));
+    await waitFor(() => expect(screen.getByText('Series Two')).toBeInTheDocument());
+
+    expect(mockRepository.getCatalogPage).toHaveBeenNthCalledWith(1, {
+      pageSize: 2,
+      sourceType: 'movie',
+      cursor: null,
+    });
+    expect(screen.getAllByTestId('title-card')).toHaveLength(2);
+    expect(screen.getByTestId('catalog-load-more-button')).toHaveTextContent('Зареди още');
+
+    await user.click(screen.getByTestId('catalog-load-more-button'));
+    await waitFor(() => expect(screen.getByText('Movie Three')).toBeInTheDocument());
+
+    expect(mockRepository.getCatalogPage).toHaveBeenNthCalledWith(2, {
+      pageSize: 2,
+      sourceType: 'movie',
+      cursor: catalogCursor,
+    });
+    expect(screen.getAllByTestId('title-card')).toHaveLength(3);
+    expect(screen.getByTestId('catalog-end-of-results')).toHaveTextContent('Няма повече заглавия');
   });
 
   it('renders only Movies and Series tabs and switches RSS category', async () => {

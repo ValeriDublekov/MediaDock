@@ -12,7 +12,7 @@ import {
   DEFAULT_LATEST_FILTER_STATE,
   filterAndSortTitles,
 } from '../domain/catalogFilter';
-import { AlertCircle, RefreshCw, Film, FilterX, RotateCcw } from 'lucide-react';
+import { AlertCircle, RefreshCw, Film, FilterX, Loader2, RotateCcw } from 'lucide-react';
 
 interface CatalogViewProps {
   repository?: CatalogRepository;
@@ -22,18 +22,36 @@ interface CatalogViewProps {
 export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestoreCatalogAdapter, pageSize = 16 }) => {
   const [viewMode, setViewMode] = useState<CatalogViewMode>('movies');
   const [filterState, setFilterState] = useState<CatalogFilterState>(DEFAULT_LATEST_FILTER_STATE);
+  const [olderTitlesStarted, setOlderTitlesStarted] = useState(false);
   const rssSourceType: RssSourceType = viewMode === 'movies' ? 'movie' : 'series';
 
   const {
-    titles,
+    titles: latestTitles,
     isLoading,
-    error,
-    retry,
+    error: latestError,
+    retry: retryLatest,
     latestSnapshotAvailable,
   } = useCatalog({
     repository,
     pageSize,
     source: 'latest',
+    rssSourceType,
+  });
+
+  const {
+    titles: olderTitles,
+    isLoading: isLoadingOlder,
+    isLoadingMore: isLoadingMoreOlder,
+    error: olderError,
+    hasMore: hasMoreOlder,
+    loadInitialPage: loadInitialOlderTitles,
+    loadNextPage: loadNextOlderTitles,
+    retry: retryOlderTitles,
+  } = useCatalog({
+    repository,
+    pageSize,
+    autoFetch: false,
+    source: 'catalog',
     rssSourceType,
   });
 
@@ -46,7 +64,17 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
 
   const handleViewModeChange = (mode: CatalogViewMode) => {
     setViewMode(mode);
+    setOlderTitlesStarted(false);
     setFilterState((previous) => ({ ...previous, sortBy: 'rssOrder' }));
+  };
+
+  const handleLoadOlderTitles = () => {
+    if (!olderTitlesStarted) {
+      setOlderTitlesStarted(true);
+      void loadInitialOlderTitles();
+      return;
+    }
+    void loadNextOlderTitles();
   };
 
   useEffect(() => {
@@ -66,14 +94,25 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
     applySavedSettings();
   }, []);
 
+  const titles = useMemo(() => {
+    const combined = new Map<string, Title>();
+    latestTitles.forEach((title) => combined.set(title.id, title));
+    if (olderTitlesStarted) {
+      olderTitles.forEach((title) => {
+        if (!combined.has(title.id)) combined.set(title.id, title);
+      });
+    }
+    return Array.from(combined.values());
+  }, [latestTitles, olderTitles, olderTitlesStarted]);
+
   const filteredTitles = useMemo(() => {
     const visibleTitles = titles.filter((title) => !isIgnored(title.id));
     return filterAndSortTitles(visibleTitles, filterState);
   }, [titles, filterState, isIgnored]);
 
-  const isPermissionError = error?.message.toLowerCase().includes('permission') || false;
+  const isPermissionError = latestError?.message.toLowerCase().includes('permission') || false;
 
-  if (latestSnapshotAvailable === false && !isLoading && !error) {
+  if (latestSnapshotAvailable === false && !isLoading && !latestError) {
     return (
       <div
         data-testid="catalog-no-latest-snapshot"
@@ -94,7 +133,7 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
     return <CatalogSkeleton count={pageSize} />;
   }
 
-  if (error && titles.length === 0) {
+  if (latestError && latestTitles.length === 0) {
     return (
       <div
         data-testid="catalog-error"
@@ -110,10 +149,10 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
           {isPermissionError
             ? 'Проверете дали сте в allowlist-а и дали последните Firestore rules са deploy-нати. '
               + 'Необходим е read достъп до rssSnapshotState и rssSnapshots.'
-            : error.message}
+            : latestError.message}
         </p>
         <button
-          onClick={retry}
+          onClick={retryLatest}
           data-testid="catalog-retry-button"
           className="inline-flex items-center gap-2 min-h-[44px] px-5 py-2.5 text-sm font-medium text-neutral-200 bg-neutral-800 border border-neutral-700 rounded-lg hover:bg-neutral-700 transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
         >
@@ -186,14 +225,14 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
       )}
 
       {/* Error state during loadNextPage */}
-      {error && titles.length > 0 && (
+      {olderError && (
         <div
           data-testid="catalog-error"
           className="flex items-center justify-between p-4 bg-red-950/60 border border-red-800 rounded-xl text-sm text-red-200"
         >
-          <span>Failed to load next page: {error.message}</span>
+          <span>Неуспешно зареждане на по-стари заглавия: {olderError.message}</span>
           <button
-            onClick={retry}
+            onClick={retryOlderTitles}
             data-testid="catalog-retry-button"
             className="inline-flex items-center gap-1.5 min-h-[44px] px-3.5 py-2 text-xs font-medium text-red-200 bg-red-900/40 border border-red-700 rounded-lg hover:bg-red-800/60 transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-red-400"
           >
@@ -204,9 +243,29 @@ export const CatalogView: React.FC<CatalogViewProps> = ({ repository = firestore
       )}
 
       <footer className="flex justify-center pt-4">
-        <div data-testid="catalog-end-of-results" className="text-xs text-neutral-500 py-3">
-          Заредени са всички заглавия от RSS категорията
-        </div>
+        {!olderTitlesStarted || hasMoreOlder ? (
+          <button
+            onClick={handleLoadOlderTitles}
+            disabled={isLoadingOlder || isLoadingMoreOlder}
+            data-testid="catalog-load-more-button"
+            className="inline-flex items-center gap-2 min-h-[44px] px-6 py-2.5 text-sm font-semibold text-neutral-200 bg-neutral-900 border border-neutral-700 rounded-lg shadow-sm hover:bg-neutral-800 hover:border-neutral-600 active:bg-neutral-950 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 cursor-pointer"
+          >
+            {isLoadingOlder || isLoadingMoreOlder ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+                <span>Зареждане...</span>
+              </>
+            ) : olderTitlesStarted ? (
+              'Зареди още'
+            ) : (
+              'Зареди по-стари заглавия'
+            )}
+          </button>
+        ) : (
+          <div data-testid="catalog-end-of-results" className="text-xs text-neutral-500 py-3">
+            Няма повече заглавия
+          </div>
+        )}
       </footer>
     </div>
   );

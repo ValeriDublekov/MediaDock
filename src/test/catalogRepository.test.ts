@@ -122,6 +122,16 @@ describe('FirestoreCatalogAdapter', () => {
     expect(result.nextCursor).toBeNull();
   });
 
+  it('getCatalogPage filters historical titles by source type', async () => {
+    vi.mocked(firestoreModule.getDocs).mockResolvedValueOnce({ docs: [] } as any);
+
+    await adapter.getCatalogPage({ pageSize: 10, sourceType: 'series' });
+
+    expect(firestoreModule.where).toHaveBeenCalledWith('sourceType', '==', 'series');
+    expect(firestoreModule.orderBy).toHaveBeenCalledWith('lastSeenAt', 'desc');
+    expect(firestoreModule.orderBy).toHaveBeenCalledWith('__name__', 'desc');
+  });
+
   it('getCatalogPage passes cursor and computes nextCursor when page is full', async () => {
     const mockDate1 = new Date('2026-08-01T10:00:00Z');
     const mockDate2 = new Date('2026-07-31T10:00:00Z');
