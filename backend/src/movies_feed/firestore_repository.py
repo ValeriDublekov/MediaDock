@@ -63,6 +63,7 @@ def get_firestore_client(
     db_id = raw_db_id if raw_db_id and raw_db_id not in ("(default)", "%28default%29") else None
 
     if os.environ.get("FIRESTORE_EMULATOR_HOST"):
+        os.environ.setdefault("GCLOUD_PROJECT", project_id)
         client_kwargs: Dict[str, Any] = {
             "project": project_id,
             "credentials": AnonymousCredentials(),

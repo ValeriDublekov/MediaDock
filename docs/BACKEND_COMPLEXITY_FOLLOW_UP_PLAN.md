@@ -86,7 +86,7 @@ python -m unittest backend.tests.test_unit_firestore_client -v
 
 ### STEP 2 - Prove Emulator Portability and Repository Behavior
 
-Status: not started
+Status: complete
 
 Run the existing backend Firestore integration suite on the explicit demo emulator. Repair only defects caused by the client initialization change. Do not change repository semantics or weaken integration assertions.
 
