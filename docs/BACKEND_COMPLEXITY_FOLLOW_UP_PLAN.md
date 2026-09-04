@@ -111,7 +111,7 @@ Checkpoint A gate: STEP 2 validation is the gate.
 
 ### STEP 3 - Add Direct Entry-Processing Characterization Tests
 
-Status: not started
+Status: complete
 
 Create `backend/tests/test_rss_entry_processor.py` using the existing scanner test support, fake repositories, `ScanWriteBuffer`, and `RssSnapshotCollector`.
 

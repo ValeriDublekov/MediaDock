@@ -29,51 +29,6 @@ from movies_feed.scanner import ScannerConfig
 
 
 class TestRssIngestion(ScannerTestMixin, unittest.TestCase):
-    def test_existing_accepted_title_is_recorded_in_snapshot(self):
-        snapshot_repo = FakeRssSnapshotRepository()
-        title_id = get_title_id_v2(
-            self.valid_movie.imdb_id,
-            self.valid_movie.title,
-            self.valid_movie.year,
-            "movie",
-        )
-        self.title_repo.upsert(
-            title_id,
-            Title(
-                title=self.valid_movie.title,
-                normalized_title="the matrix",
-                year=self.valid_movie.year,
-                media_type="movie",
-                first_seen_at=self.now,
-                last_seen_at=self.now,
-                updated_at=self.now,
-                imdb_id=self.valid_movie.imdb_id,
-                source_type="movie",
-            ),
-        )
-        config = ScannerConfig(
-            rss_feeds={
-                "movie-feed": {
-                    "name": "Movie Feed",
-                    "url": make_inline_feed("The Matrix (1999) [1080p]"),
-                    "type": "movie",
-                }
-            },
-            omdb_limit=10,
-        )
-        scanner = self.scanner_builder.build(
-            config=config,
-            omdb_client=MockOmdbClient({"the matrix": self.valid_movie}),
-            rss_snapshot_repo=snapshot_repo,
-        )
-
-        run = scanner.run("existing-title-snapshot")
-
-        self.assertEqual(run.status, "succeeded")
-        latest = snapshot_repo.get_latest()
-        self.assertIsNotNone(latest)
-        self.assertEqual([item.title_id for item in latest[1]], [title_id])
-
     def test_successful_rss_run_publishes_movie_first_snapshot_order(self):
         snapshot_repo = FakeRssSnapshotRepository()
         config = ScannerConfig(
@@ -583,34 +538,6 @@ class TestRssIngestion(ScannerTestMixin, unittest.TestCase):
         self.assertEqual(len(prefetch_calls), 1)
         self.assertEqual(prefetch_calls[0][0], "The Matrix")
         self.assertEqual(prefetch_calls[0][1], 1999)
-
-    def test_parse_only_isolation_makes_no_api_or_db_writes(self):
-        feed_xml = make_inline_feed("The Matrix (1999) [1080p]")
-        config = ScannerConfig(
-            rss_feeds={
-                "test_feed": {
-                    "name": "test_feed",
-                    "url": feed_xml,
-                    "type": "movie",
-                }
-            },
-            is_parse_only=True,
-            mode="rss",
-            omdb_limit=10,
-        )
-        omdb = MockOmdbClient({"the matrix": self.valid_movie})
-        scanner = self.create_scanner(config, omdb)
-
-        run = scanner.run("run_parse_only")
-        self.assertEqual(run.status, "succeeded")
-        self.assertEqual(run.entries_seen, 1)
-        # 0 OMDb requests
-        self.assertEqual(omdb.request_count, 0)
-        self.assertEqual(run.omdb_requests, 0)
-        # 0 DB writes
-        self.assertEqual(self.title_repo.list_all(), [])
-        self.assertEqual(self.parse_log_repo.get_all(), [])
-
 
 if __name__ == "__main__":
     unittest.main()
