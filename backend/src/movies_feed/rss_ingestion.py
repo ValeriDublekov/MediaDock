@@ -1,13 +1,22 @@
 import datetime
+import importlib
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol, Tuple, cast
+
+
+class _FeedParser(Protocol):
+    def parse(self, source: bytes) -> Any:
+        ...
+
 
 try:
-    import feedparser
+    _feedparser_module = importlib.import_module("feedparser")
 except ImportError:
-    feedparser = None
+    _feedparser_module = None
+
+feedparser: Optional[_FeedParser] = cast(Optional[_FeedParser], _feedparser_module)
 
 from .feed_fetcher import FeedFetcher
 from .ids import (
@@ -20,7 +29,6 @@ from .match_policy import (
     MatchDecision,
     effective_source_type,
     evaluate_match,
-    get_exclusion_reason as policy_get_exclusion_reason,
     normalize_source_type,
 )
 from .metadata_resolver import MetadataOutcome, MetadataOutcomeStatus, MetadataResolver
@@ -112,6 +120,8 @@ class RssIngestionService:
                     feed_bytes = self.feed_fetcher.fetch_file(self.config.feed_file)
                 else:
                     feed_bytes = self.feed_fetcher.fetch(feed_def.require_url())
+                if feedparser is None:
+                    raise RuntimeError("feedparser is required for RSS ingestion")
                 feed = feedparser.parse(feed_bytes)
                 feed_duration = time.perf_counter() - feed_t0
                 section_timings["feed_fetch"] += feed_duration
@@ -122,7 +132,9 @@ class RssIngestionService:
                 )
 
                 parsed_contexts: List[ParsedEntryContext] = []
-                cache_requests_to_prefetch = []
+                cache_requests_to_prefetch: List[
+                    Tuple[str, Optional[int], Optional[str], Optional[str]]
+                ] = []
                 cutoff = None
                 if self.config.force_days > 0:
                     cutoff = self.now - datetime.timedelta(days=self.config.force_days)
@@ -525,7 +537,6 @@ class RssIngestionService:
             )
             return
 
-        norm_lookup_title = normalize_title(parsed.title)
         lookup_year = context.lookup_year
         base_trace = {
             "parsedTitle": parsed.title,

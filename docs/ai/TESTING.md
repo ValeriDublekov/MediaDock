@@ -5,27 +5,39 @@
 These are the canonical checks used by PR CI and the Checkpoint F release gate.
 A release is blocked unless every required automated and staging check passes.
 
-## Current Canonical Check
+## Focused Commands
 
-From repository root:
+Run these commands from the repository root after installing the reviewed
+dependencies:
 
 ```powershell
 python -m pip install --requirement backend/requirements.lock
 python -m pip install --no-deps --editable ./backend
-npx firebase emulators:exec --project demo-mediadock "python -m unittest discover -s backend/tests -v"
-npx tsc --noEmit
-npx vitest run src/test
-npx firebase emulators:exec --project demo-mediadock "npx vitest run firebase/tests/rules.test.ts"
-npm run build
+npm ci
 ```
 
-This validates backend unit/integration suites, frontend TypeScript typing, component/repository unit tests, Firestore security rules via emulator, and frontend production compilation.
+Each CI lane uses the corresponding focused command below. The backend fast
+lane does not start Java or an emulator. Backend files beginning with
+`test_firestore` are reserved for Firestore emulator integration tests; the
+emulator-free codec and contract modules use the `test_unit_` prefix. The
+fast discovery command includes every `test_*.py` module, while the explicit
+Firestore command selects only the emulator convention.
 
-The local commands above use an explicit demo project. The CI workflow passes
-that project flag to its emulator commands, so the workflow and this command
-contract are identical. The lock file is the reviewed dependency set; install
-the editable package with `--no-deps` after installing the lock so dependency
-resolution cannot silently drift in CI.
+| Category | Command |
+| --- | --- |
+| Backend static typecheck | `npx pyright` |
+| Backend fast unit tests | `python -m unittest discover -s backend/tests -p "test_*.py" -v` |
+| Backend Firestore emulator tests | `npx firebase emulators:exec --project demo-mediadock "python -m unittest discover -s backend/tests -p test_firestore*.py -v"` |
+| Frontend typecheck | `npx tsc --noEmit` |
+| Frontend unit tests | `npx vitest run src/test` |
+| Firestore rules emulator tests | `npx firebase emulators:exec --project demo-mediadock "npx vitest run firebase/tests/rules.test.ts"` |
+| Frontend build | `npm run build` |
+
+The emulator commands always use the explicit `demo-mediadock` project and
+`firebase emulators:exec`, so they cannot silently fall back to production.
+The lock file is the reviewed dependency set; install the editable package
+with `--no-deps` after installing the lock so dependency resolution cannot
+silently drift in CI.
 
 ## Scanner Process Contract
 

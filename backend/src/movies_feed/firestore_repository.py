@@ -65,15 +65,38 @@ def get_firestore_client(
         if os.environ.get("FIRESTORE_EMULATOR_HOST"):
             if not os.environ.get("GCLOUD_PROJECT"):
                 os.environ["GCLOUD_PROJECT"] = project_id
-            
-            # Generate a real, syntactically valid RSA key file using openssl if not present
-            key_path = "/tmp/dummy_key.pem"
-            if not os.path.exists(key_path):
-                import subprocess
-                subprocess.run(["openssl", "genrsa", "-out", key_path, "2048"], check=True, capture_output=True)
-            
-            with open(key_path, "r") as f:
-                private_key_content = f.read()
+
+            import shutil
+            import subprocess
+            import tempfile
+            from pathlib import Path
+
+            key_path = Path(tempfile.gettempdir()) / "mediadock_dummy_key.pem"
+            if not key_path.exists():
+                openssl_path = shutil.which("openssl")
+                if openssl_path:
+                    subprocess.run(
+                        [openssl_path, "genrsa", "-out", str(key_path), "2048"],
+                        check=True,
+                        capture_output=True,
+                    )
+                else:
+                    from cryptography.hazmat.primitives import serialization
+                    from cryptography.hazmat.primitives.asymmetric import rsa
+
+                    private_key = rsa.generate_private_key(
+                        public_exponent=65537,
+                        key_size=2048,
+                    )
+                    key_path.write_bytes(
+                        private_key.private_bytes(
+                            encoding=serialization.Encoding.PEM,
+                            format=serialization.PrivateFormat.TraditionalOpenSSL,
+                            encryption_algorithm=serialization.NoEncryption(),
+                        )
+                    )
+
+            private_key_content = key_path.read_text(encoding="utf-8")
 
             # Initialize with dummy service account dictionary
             dummy_cert = {

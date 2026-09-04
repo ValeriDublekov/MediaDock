@@ -401,7 +401,7 @@ npx vitest run src/test/firestoreContracts.test.ts
 Checkpoint D gate:
 
 ```powershell
-npx firebase emulators:exec --project demo-mediadock "python -m unittest discover -s backend/tests -p 'test_firestore*.py' -v"
+npx firebase emulators:exec --project demo-mediadock "python -m unittest discover -s backend/tests -p test_firestore*.py -v"
 npx vitest run src/test/catalogRepository.test.ts src/test/firestoreContracts.test.ts
 ```
 
@@ -409,7 +409,7 @@ npx vitest run src/test/catalogRepository.test.ts src/test/firestoreContracts.te
 
 ### STEP 14 - Introduce Incremental Strict Python Type Checking
 
-Status: not started
+Status: complete
 
 Choose one checker and use it consistently. Prefer Pyright because it matches the VS Code/Pylance type model used during development. Add its configuration at the repository root and pin the CLI dependency through the existing Node lockfile, or document and pin an equivalent Python invocation.
 
@@ -438,7 +438,7 @@ npx pyright
 
 ### STEP 15 - Split Fast Unit and Emulator CI Lanes
 
-Status: not started
+Status: complete
 
 Classify backend tests with filename/location conventions rather than runtime guessing. Update `.github/workflows/ci.yml` so that:
 
@@ -460,7 +460,7 @@ Validation:
 
 ```powershell
 python -m unittest discover -s backend/tests -p "test_*.py" -v
-npx firebase emulators:exec --project demo-mediadock "python -m unittest discover -s backend/tests -p 'test_firestore*.py' -v"
+npx firebase emulators:exec --project demo-mediadock "python -m unittest discover -s backend/tests -p test_firestore*.py -v"
 npx vitest run src/test
 npx firebase emulators:exec --project demo-mediadock "npx vitest run firebase/tests/rules.test.ts"
 npm run build

@@ -1,0 +1,19 @@
+{
+  "include": [
+    "backend/src/movies_feed/scan_contracts.py",
+    "backend/src/movies_feed/rss_snapshot.py",
+    "backend/src/movies_feed/scan_write_buffer.py",
+    "backend/src/movies_feed/rss_ingestion.py",
+    "backend/src/movies_feed/firestore_codecs.py"
+  ],
+  "exclude": [
+    "legacy"
+  ],
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.10",
+  "executionEnvironments": [
+    {
+      "root": "backend/src"
+    }
+  ]
+}

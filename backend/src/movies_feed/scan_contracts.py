@@ -21,7 +21,7 @@ class ScanPhaseOutcome:
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     duration_seconds: float = 0.0
-    counters: Mapping[str, Any] = field(default_factory=dict)
+    counters: Mapping[str, Any] = field(default_factory=lambda: dict[str, Any]())
     errors: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:

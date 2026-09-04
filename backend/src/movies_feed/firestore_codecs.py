@@ -1,7 +1,7 @@
 """Explicit codecs for documents stored in Firestore."""
 
 import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional, cast
 
 from .match_policy import broadcast_range_from_dict, effective_source_type
 from .models import (
@@ -19,7 +19,10 @@ from .models import (
 from .repository import effective_retry_state
 
 
-def title_from_dict(d: dict) -> Title:
+FirestoreDocument = Mapping[str, Any]
+
+
+def title_from_dict(d: FirestoreDocument) -> Title:
     """Reconstruct a title from its camelCase Firestore document."""
     if not isinstance(d, dict) or "title" not in d:
         keys_str = list(d.keys()) if isinstance(d, dict) else str(type(d))
@@ -57,7 +60,7 @@ def title_from_dict(d: dict) -> Title:
     )
 
 
-def source_context_from_dict(d: dict) -> Optional[SourceContext]:
+def source_context_from_dict(d: FirestoreDocument) -> Optional[SourceContext]:
     """Read optional flat provenance fields without inferring legacy context."""
     context_markers = ("feedType", "sourcePublishedAt", "observedAt")
     if not any(field_name in d for field_name in context_markers):
@@ -74,7 +77,7 @@ def source_context_from_dict(d: dict) -> Optional[SourceContext]:
     )
 
 
-def occurrence_from_dict(d: dict) -> Occurrence:
+def occurrence_from_dict(d: FirestoreDocument) -> Occurrence:
     """Reconstruct an occurrence from its camelCase Firestore document."""
     return Occurrence(
         source_feed_id=d["sourceFeedId"],
@@ -94,7 +97,7 @@ def occurrence_from_dict(d: dict) -> Occurrence:
     )
 
 
-def cache_entry_from_dict(d: dict) -> OmdbCacheEntry:
+def cache_entry_from_dict(d: FirestoreDocument) -> OmdbCacheEntry:
     """Reconstruct an OMDb cache entry from its Firestore document."""
     return OmdbCacheEntry(
         lookup_title=d["lookupTitle"],
@@ -109,7 +112,7 @@ def cache_entry_from_dict(d: dict) -> OmdbCacheEntry:
     )
 
 
-def scan_run_from_dict(d: dict) -> ScanRun:
+def scan_run_from_dict(d: FirestoreDocument) -> ScanRun:
     """Reconstruct a scan run from its camelCase Firestore document."""
     return ScanRun(
         started_at=d["startedAt"],
@@ -141,7 +144,7 @@ def scan_run_from_dict(d: dict) -> ScanRun:
     )
 
 
-def parse_log_from_dict(d: dict, doc_id: Optional[str] = None) -> ParseLog:
+def parse_log_from_dict(d: FirestoreDocument, doc_id: Optional[str] = None) -> ParseLog:
     """Reconstruct a parse log from its camelCase Firestore document."""
     log_id = d.get("id") or doc_id or ""
     retry_state = d.get("retryState")
@@ -153,13 +156,14 @@ def parse_log_from_dict(d: dict, doc_id: Optional[str] = None) -> ParseLog:
     resolution = None
     resolution_data = d.get("resolution")
     if isinstance(resolution_data, dict):
+        resolution_document = cast(FirestoreDocument, resolution_data)
         try:
             resolution = ParseLogResolution(
-                resolved_at=resolution_data["resolvedAt"],
-                outcome=resolution_data["outcome"],
-                reason=resolution_data["reason"],
-                title_id=resolution_data.get("titleId"),
-                occurrence_id=resolution_data.get("occurrenceId"),
+                resolved_at=resolution_document["resolvedAt"],
+                outcome=resolution_document["outcome"],
+                reason=resolution_document["reason"],
+                title_id=resolution_document.get("titleId"),
+                occurrence_id=resolution_document.get("occurrenceId"),
             )
         except (KeyError, TypeError, ValueError):
             resolution = None
@@ -196,7 +200,7 @@ def parse_log_from_dict(d: dict, doc_id: Optional[str] = None) -> ParseLog:
     return log
 
 
-def manual_mapping_from_dict(d: dict, doc_id: Optional[str] = None) -> ManualMapping:
+def manual_mapping_from_dict(d: FirestoreDocument, doc_id: Optional[str] = None) -> ManualMapping:
     """Reconstruct a manual mapping from its camelCase Firestore document."""
     mapping_id = d.get("id") or doc_id or ""
     return ManualMapping(
@@ -210,7 +214,7 @@ def manual_mapping_from_dict(d: dict, doc_id: Optional[str] = None) -> ManualMap
     )
 
 
-def rss_snapshot_item_from_dict(d: dict) -> RssSnapshotItem:
+def rss_snapshot_item_from_dict(d: FirestoreDocument) -> RssSnapshotItem:
     """Reconstruct an RSS snapshot item from its Firestore document."""
     return RssSnapshotItem(
         title_id=d["titleId"],
@@ -222,7 +226,7 @@ def rss_snapshot_item_from_dict(d: dict) -> RssSnapshotItem:
     )
 
 
-def rss_snapshot_from_dict(d: dict, doc_id: Optional[str] = None) -> RssSnapshot:
+def rss_snapshot_from_dict(d: FirestoreDocument, doc_id: Optional[str] = None) -> RssSnapshot:
     """Reconstruct RSS snapshot metadata from its Firestore document."""
     return RssSnapshot(
         id=d.get("id") or doc_id or "",

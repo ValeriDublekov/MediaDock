@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from typing import Literal, Optional, Sequence, Tuple
+from typing import Any, Dict, Literal, Optional, Sequence, Tuple
 
 
 SourceType = Literal["movie", "series", "unknown"]
@@ -19,7 +19,7 @@ class BroadcastRange:
     def contains(self, year: int) -> bool:
         return year >= self.start_year and (self.end_year is None or year <= self.end_year)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "startYear": self.start_year,
             "endYear": self.end_year,

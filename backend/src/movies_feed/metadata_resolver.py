@@ -131,6 +131,14 @@ class MetadataResolver(ABC):
     ) -> MetadataOutcome:
         pass
 
+    @abstractmethod
+    def prefetch(
+        self,
+        requests: Iterable[Tuple[str, Optional[int], Optional[str], Optional[str]]],
+        section_timings: Optional[Dict[str, float]] = None,
+    ) -> None:
+        pass
+
 
 class OmdbResolver(MetadataResolver):
     """Shared OMDb cache, classification, timing, and run-budget boundary."""
