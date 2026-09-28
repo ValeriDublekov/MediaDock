@@ -1,0 +1,6 @@
+.env
+.vs/
+**/bin/
+**/obj/
+web/node_modules/
+web/dist/

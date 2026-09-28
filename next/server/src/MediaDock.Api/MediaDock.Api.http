@@ -1,0 +1,6 @@
+@MediaDock.Api_HostAddress = http://localhost:5280
+
+GET {{MediaDock.Api_HostAddress}}/health/live
+Accept: application/json
+
+###
