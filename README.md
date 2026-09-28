@@ -14,6 +14,11 @@
    for AI implementation sessions.
 - [docs/ai/ARCHITECTURE.md](docs/ai/ARCHITECTURE.md) - target components, trust
    boundaries, and dependency rules.
+- [docs/DOTNET_REACT_MIGRATION_PLAN.md](docs/DOTNET_REACT_MIGRATION_PLAN.md) -
+   proposed self-hosted .NET, React, PostgreSQL, and Docker migration plan.
+- [docs/MEDIADOCK_NEXT_EXECUTION_PLAN.md](docs/MEDIADOCK_NEXT_EXECUTION_PLAN.md) -
+   isolated, sequential implementation plan for the new app; run it with the
+   `plan-runner-orchestrator` agent.
 - [docs/ai/DATA_CONTRACTS.md](docs/ai/DATA_CONTRACTS.md) - Firestore schema,
    queries, IDs, ownership, and write boundaries.
 - [docs/ai/TESTING.md](docs/ai/TESTING.md) - canonical test commands and verification status.
