@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MediaDock.Application\MediaDock.Application.csproj" />
+    <ProjectReference Include="..\..\src\MediaDock.Infrastructure\MediaDock.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>
