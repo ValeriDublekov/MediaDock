@@ -12,7 +12,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
-using Testcontainers.PostgreSql;
 
 namespace MediaDock.IntegrationTests;
 
@@ -22,12 +21,7 @@ public sealed class CatalogApiTests
     [Fact]
     public async Task CatalogApiValidatesPaginatesAndQueriesPostgresBackedResources()
     {
-        await using var postgres = new PostgreSqlBuilder()
-            .WithImage("postgres:17-alpine")
-            .WithDatabase("mediadock_api_test")
-            .WithUsername("mediadock")
-            .WithPassword("mediadock_test")
-            .Build();
+        await using var postgres = PostgreSqlTestContainerBuilder.Create("mediadock_api_test").Build();
         await postgres.StartAsync();
 
         var connectionString = postgres.GetConnectionString();

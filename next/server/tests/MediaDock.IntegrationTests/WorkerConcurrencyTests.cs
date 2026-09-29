@@ -1,7 +1,6 @@
 using MediaDock.Infrastructure.Persistence;
 using MediaDock.Worker.Locking;
 using Microsoft.EntityFrameworkCore;
-using Testcontainers.PostgreSql;
 
 namespace MediaDock.IntegrationTests;
 
@@ -11,12 +10,7 @@ public sealed class WorkerConcurrencyTests
     [Fact]
     public async Task PostgreSqlAdvisoryLockPreventsConcurrentScansAndAllowsTheNextRun()
     {
-        await using var postgres = new PostgreSqlBuilder()
-            .WithImage("postgres:17-alpine")
-            .WithDatabase("mediadock_worker_test")
-            .WithUsername("mediadock")
-            .WithPassword("mediadock_test")
-            .Build();
+        await using var postgres = PostgreSqlTestContainerBuilder.Create("mediadock_worker_test").Build();
         await postgres.StartAsync();
 
         var options = new DbContextOptionsBuilder<MediaDockDbContext>()

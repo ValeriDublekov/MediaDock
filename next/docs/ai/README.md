@@ -16,3 +16,7 @@ Start here for work under `next/`. These guides cover only the new app; use the 
 | Worker | [Architecture](ARCHITECTURE.md) for worker startup and ingestion flow; [Implementation status](IMPLEMENTATION_STATUS.md) for shipped capabilities and limits. |
 | Tests | [Testing](TESTING.md) for scoped commands, test categories, and required dependencies. |
 | Operations | [Security and operations](SECURITY_AND_OPERATIONS.md) for runtime boundaries and operational constraints; the [local runbook](../../README.md) for executable setup and maintenance instructions. |
+
+## Planned work
+
+- [Oscar catalog plan](OSCAR_CATALOG_PLAN.md)

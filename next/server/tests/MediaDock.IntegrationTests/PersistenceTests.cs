@@ -1,7 +1,6 @@
 using MediaDock.Infrastructure.Persistence;
 using MediaDock.Infrastructure.Persistence.Entities;
 using Microsoft.EntityFrameworkCore;
-using Testcontainers.PostgreSql;
 
 namespace MediaDock.IntegrationTests;
 
@@ -11,12 +10,7 @@ public sealed class PersistenceTests
     [Trait("Category", "Persistence")]
     public async Task MigrationCreatesSchemaAndOccurrenceIdentityIsUnique()
     {
-        await using var postgres = new PostgreSqlBuilder()
-            .WithImage("postgres:17-alpine")
-            .WithDatabase("mediadock_test")
-            .WithUsername("mediadock")
-            .WithPassword("mediadock_test")
-            .Build();
+        await using var postgres = PostgreSqlTestContainerBuilder.Create("mediadock_test").Build();
         await postgres.StartAsync();
 
         var options = new DbContextOptionsBuilder<MediaDockDbContext>()
@@ -27,7 +21,7 @@ public sealed class PersistenceTests
         await db.Database.MigrateAsync();
 
         var appliedMigrations = await db.Database.GetAppliedMigrationsAsync();
-        Assert.Single(appliedMigrations);
+        Assert.Equal(2, appliedMigrations.Count());
 
         await db.Database.OpenConnectionAsync();
         await using (var command = db.Database.GetDbConnection().CreateCommand())
@@ -41,7 +35,11 @@ public sealed class PersistenceTests
             }
 
             Assert.All(
-                new[] { "titles", "sources", "occurrences", "scan_runs", "parse_logs", "settings", "metadata_cache" },
+                new[]
+                {
+                    "titles", "sources", "occurrences", "scan_runs", "parse_logs", "settings", "metadata_cache",
+                    "oscar_films", "oscar_nominations"
+                },
                 tableName => Assert.Contains(tableName, tables));
         }
 

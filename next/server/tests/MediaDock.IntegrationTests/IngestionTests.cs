@@ -9,7 +9,6 @@ using MediaDock.Infrastructure.Persistence;
 using MediaDock.Infrastructure.Persistence.Entities;
 using MediaDock.Infrastructure.Rss;
 using Microsoft.EntityFrameworkCore;
-using Testcontainers.PostgreSql;
 
 namespace MediaDock.IntegrationTests;
 
@@ -23,12 +22,7 @@ public sealed class IngestionTests
     [Fact]
     public async Task ScanIsIdempotentCachesConfirmedNegativeAndContinuesAfterEntryAndProviderFailures()
     {
-        await using var postgres = new PostgreSqlBuilder()
-            .WithImage("postgres:17-alpine")
-            .WithDatabase("mediadock_ingestion_test")
-            .WithUsername("mediadock")
-            .WithPassword("mediadock_test")
-            .Build();
+        await using var postgres = PostgreSqlTestContainerBuilder.Create("mediadock_ingestion_test").Build();
         await postgres.StartAsync();
 
         var options = new DbContextOptionsBuilder<MediaDockDbContext>()

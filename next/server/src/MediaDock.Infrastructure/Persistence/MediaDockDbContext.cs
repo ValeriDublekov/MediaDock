@@ -17,6 +17,8 @@ public sealed class MediaDockDbContext : DbContext
     public DbSet<ParseLog> ParseLogs => Set<ParseLog>();
     public DbSet<AppSetting> Settings => Set<AppSetting>();
     public DbSet<MetadataCacheEntry> MetadataCache => Set<MetadataCacheEntry>();
+    public DbSet<OscarFilm> OscarFilms => Set<OscarFilm>();
+    public DbSet<OscarNomination> OscarNominations => Set<OscarNomination>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

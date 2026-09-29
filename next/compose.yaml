@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
 
   api:
-    image: mediadock-next-api
+    image: ${API_IMAGE:-mediadock-next-api}
     build:
       context: .
       dockerfile: server/Dockerfile
@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
 
   migrate:
-    image: mediadock-next-api
+    image: ${API_IMAGE:-mediadock-next-api}
     build:
       context: .
       dockerfile: server/Dockerfile
@@ -51,7 +51,7 @@ services:
     restart: "no"
 
   worker:
-    image: mediadock-next-worker
+    image: ${WORKER_IMAGE:-mediadock-next-worker}
     build:
       context: .
       dockerfile: server/Dockerfile

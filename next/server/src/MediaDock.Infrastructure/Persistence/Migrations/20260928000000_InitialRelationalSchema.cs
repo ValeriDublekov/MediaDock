@@ -261,6 +261,6 @@ public partial class InitialRelationalSchema : Migration
 
     protected override void BuildTargetModel(ModelBuilder modelBuilder)
     {
-        MediaDockDbContextModelSnapshot.BuildSnapshot(modelBuilder);
+        InitialRelationalSchemaModelBuilder.Build(modelBuilder);
     }
 }

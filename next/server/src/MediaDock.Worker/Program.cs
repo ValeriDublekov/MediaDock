@@ -2,6 +2,7 @@ using MediaDock.Application.Ingestion;
 using MediaDock.Application.Metadata;
 using MediaDock.Infrastructure.Ingestion;
 using MediaDock.Infrastructure.Metadata;
+using MediaDock.Infrastructure.OscarAwards;
 using MediaDock.Infrastructure.Persistence;
 using MediaDock.Infrastructure.Rss;
 using MediaDock.Worker.Locking;
@@ -19,9 +20,11 @@ internal static class WorkerCommand
 
     public static async Task<int> RunAsync(string[] args)
     {
-        if (!TryParseTrigger(args, out var trigger))
+        if (!TryParseArguments(args, out var trigger, out var oscarCsvPath, out var yearAfter))
         {
-            Console.Error.WriteLine("Usage: MediaDock.Worker [--trigger manual|schedule]");
+            Console.Error.WriteLine(
+                "Usage: MediaDock.Worker [--trigger manual|schedule] "
+                + "| --import-oscar <csv-path> [--year-after <year>]");
             return 2;
         }
 
@@ -33,28 +36,38 @@ internal static class WorkerCommand
             return 2;
         }
 
-        var apiKey = builder.Configuration["OMDB_API_KEY"];
-        if (string.IsNullOrWhiteSpace(apiKey))
-        {
-            Console.Error.WriteLine("OMDB_API_KEY must be configured.");
-            return 2;
-        }
-
-        var dnsResolver = new SystemRssDnsResolver();
-        using var rssHttpClient = RssFeedHttpClientFactory.Create(dnsResolver);
-        using var omdbHttpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-
         builder.Services.AddDbContext<MediaDockDbContext>(options => options.UseNpgsql(connectionString));
         builder.Services.AddScoped<PostgresAdvisoryScanLock>();
-        builder.Services.AddScoped<IRssIngestionRepository, PostgresRssIngestionRepository>();
-        builder.Services.AddScoped<IMetadataCacheStore, PostgresMetadataCacheStore>();
-        builder.Services.AddScoped<MetadataResolver>();
-        builder.Services.AddScoped<RssIngestionService>();
-        builder.Services.AddSingleton<IRssDnsResolver>(dnsResolver);
-        builder.Services.AddSingleton(new RssFeedTransport(rssHttpClient, dnsResolver));
-        builder.Services.AddScoped<IRssFeedTransport, RssFeedTransportAdapter>();
-        builder.Services.AddSingleton<IOmdbClient>(new OmdbClient(omdbHttpClient, apiKey));
+        HttpClient? rssHttpClient = null;
+        HttpClient? omdbHttpClient = null;
+        if (trigger is null)
+        {
+            builder.Services.AddScoped<OscarDatasetImporter>();
+        }
+        else
+        {
+            var apiKey = builder.Configuration["OMDB_API_KEY"];
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                Console.Error.WriteLine("OMDB_API_KEY must be configured.");
+                return 2;
+            }
 
+            var dnsResolver = new SystemRssDnsResolver();
+            rssHttpClient = RssFeedHttpClientFactory.Create(dnsResolver);
+            omdbHttpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+            builder.Services.AddScoped<IRssIngestionRepository, PostgresRssIngestionRepository>();
+            builder.Services.AddScoped<IMetadataCacheStore, PostgresMetadataCacheStore>();
+            builder.Services.AddScoped<MetadataResolver>();
+            builder.Services.AddScoped<RssIngestionService>();
+            builder.Services.AddSingleton<IRssDnsResolver>(dnsResolver);
+            builder.Services.AddSingleton(new RssFeedTransport(rssHttpClient, dnsResolver));
+            builder.Services.AddScoped<IRssFeedTransport, RssFeedTransportAdapter>();
+            builder.Services.AddSingleton<IOmdbClient>(new OmdbClient(omdbHttpClient, apiKey));
+        }
+
+        using var rssHttpClientLifetime = rssHttpClient;
+        using var omdbHttpClientLifetime = omdbHttpClient;
         using var host = builder.Build();
         var applicationLifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
         var hostStarted = false;
@@ -72,9 +85,22 @@ internal static class WorkerCommand
                 return ScanAlreadyRunningExitCode;
             }
 
+            if (oscarCsvPath is not null)
+            {
+                var summary = await scope.ServiceProvider
+                    .GetRequiredService<OscarDatasetImporter>()
+                    .ImportAsync(oscarCsvPath, yearAfter, applicationLifetime.ApplicationStopping);
+                Console.WriteLine(
+                    $"Oscar import completed: {summary.OscarFilmsCreated} films, "
+                    + $"{summary.NominationsCreated} nominations added, "
+                    + $"{summary.NominationsUpdated} nominations updated, "
+                    + $"{summary.RowsSkippedByCategory} rows outside the selected categories skipped.");
+                return 0;
+            }
+
             var result = await scope.ServiceProvider
                 .GetRequiredService<RssIngestionService>()
-                .RunAsync(trigger, applicationLifetime.ApplicationStopping);
+                .RunAsync(trigger!, applicationLifetime.ApplicationStopping);
 
             Console.WriteLine(
                 $"RSS scan {result.RunId} {result.Summary.Status}: "
@@ -83,12 +109,13 @@ internal static class WorkerCommand
         }
         catch (OperationCanceledException) when (applicationLifetime.ApplicationStopping.IsCancellationRequested)
         {
-            Console.Error.WriteLine("RSS scan cancelled.");
+            Console.Error.WriteLine(oscarCsvPath is null ? "RSS scan cancelled." : "Oscar import cancelled.");
             return CancelledExitCode;
         }
         catch (Exception exception)
         {
-            Console.Error.WriteLine($"RSS scan failed ({exception.GetType().Name}).");
+            Console.Error.WriteLine(
+                $"{(oscarCsvPath is null ? "RSS scan" : "Oscar import")} failed ({exception.GetType().Name}).");
             return 1;
         }
         finally
@@ -100,8 +127,16 @@ internal static class WorkerCommand
         }
     }
 
-    private static bool TryParseTrigger(string[] args, out string trigger)
+    private static bool TryParseArguments(
+        string[] args,
+        out string? trigger,
+        out string? oscarCsvPath,
+        out int yearAfter)
     {
+        trigger = null;
+        oscarCsvPath = null;
+        yearAfter = 1980;
+
         if (args.Length == 0)
         {
             trigger = "manual";
@@ -114,7 +149,23 @@ internal static class WorkerCommand
             return true;
         }
 
-        trigger = string.Empty;
+        if (args.Length == 2 && args[0] == "--import-oscar" && !string.IsNullOrWhiteSpace(args[1]))
+        {
+            oscarCsvPath = args[1];
+            return true;
+        }
+
+        if (args.Length == 4
+            && args[0] == "--import-oscar"
+            && !string.IsNullOrWhiteSpace(args[1])
+            && args[2] == "--year-after"
+            && int.TryParse(args[3], out yearAfter)
+            && yearAfter is >= 0 and < 9999)
+        {
+            oscarCsvPath = args[1];
+            return true;
+        }
+
         return false;
     }
 }
