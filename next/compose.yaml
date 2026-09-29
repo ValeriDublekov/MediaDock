@@ -1,10 +1,10 @@
 services:
-  postgres:
+  db:
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-mediadock}
       POSTGRES_USER: ${POSTGRES_USER:-mediadock}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mediadock-dev-only}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in next/.env or the host environment}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
@@ -15,6 +15,56 @@ services:
       start_period: 5s
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  api:
+    image: mediadock-next-api
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+      target: api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__MediaDock: "Host=db;Port=5432;Database=${POSTGRES_DB:-mediadock};Username=${POSTGRES_USER:-mediadock};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in next/.env or the host environment}"
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  migrate:
+    image: mediadock-next-api
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+      target: api
+    command: ["--migrate", "true"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__MediaDock: "Host=db;Port=5432;Database=${POSTGRES_DB:-mediadock};Username=${POSTGRES_USER:-mediadock};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in next/.env or the host environment}"
+    profiles:
+      - tools
+    restart: "no"
+
+  worker:
+    image: mediadock-next-worker
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+      target: worker
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__MediaDock: "Host=db;Port=5432;Database=${POSTGRES_DB:-mediadock};Username=${POSTGRES_USER:-mediadock};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in next/.env or the host environment}"
+      OMDB_API_KEY: ${OMDB_API_KEY:-}
+    profiles:
+      - worker
+    restart: "no"
 
 volumes:
   postgres_data:

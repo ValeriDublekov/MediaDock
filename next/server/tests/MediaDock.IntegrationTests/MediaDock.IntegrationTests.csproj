@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MediaDock.Infrastructure\MediaDock.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\MediaDock.Api\MediaDock.Api.csproj" />
+    <ProjectReference Include="..\..\src\MediaDock.Worker\MediaDock.Worker.csproj" />
   </ItemGroup>
 
 </Project>

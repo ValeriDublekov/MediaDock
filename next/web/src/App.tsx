@@ -1,121 +1,91 @@
 import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { CatalogView } from './features/catalog/CatalogView'
+import { HistoryView } from './features/history/HistoryView'
+import { SourceSettingsView } from './features/sources/SourceSettingsView'
+
+type Section = 'catalog' | 'sources' | 'history'
+
+const sections: { id: Section; number: string; label: string }[] = [
+  { id: 'catalog', number: '01', label: 'Catalog' },
+  { id: 'sources', number: '02', label: 'Sources & rules' },
+  { id: 'history', number: '03', label: 'Scan history' },
+]
+
+const sectionContent: Record<Section, { eyebrow: string; title: string; description: string }> = {
+  catalog: {
+    eyebrow: 'LIBRARY',
+    title: 'Catalog',
+    description: 'Browse titles collected from your configured feeds.',
+  },
+  sources: {
+    eyebrow: 'CONFIGURATION',
+    title: 'Sources & rules',
+    description: 'Manage feed sources and the matching rules used during ingestion.',
+  },
+  history: {
+    eyebrow: 'OPERATIONS',
+    title: 'Scan history',
+    description: 'Review completed scans and individual parser decisions.',
+  },
+}
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [section, setSection] = useState<Section>('catalog')
+  const content = sectionContent[section]
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div className="app-shell">
+      <aside className="sidebar">
+        <a className="brand" href="#catalog" onClick={() => setSection('catalog')}>
+          <span className="brand-mark" aria-hidden="true">MD</span>
+          <span className="brand-name">MediaDock</span>
+        </a>
 
-      <div className="ticks"></div>
+        <div className="sidebar-label">WORKSPACE</div>
+        <nav className="primary-nav" aria-label="Main navigation">
+          {sections.map((item) => (
+            <button
+              aria-current={section === item.id ? 'page' : undefined}
+              className={`nav-item${section === item.id ? ' is-active' : ''}`}
+              key={item.id}
+              onClick={() => setSection(item.id)}
+              type="button"
+            >
+              <span className="nav-number">{item.number}</span>
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
+        <div className="sidebar-footer">
+          <span className="status-mark" aria-hidden="true" />
+          <span>Local instance</span>
+          <span className="status-caption">API-backed</span>
         </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+      </aside>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+      <main className="main-shell">
+        <header className="topbar">
+          <div className="breadcrumb">MEDIADOCK <span>/</span> {content.eyebrow}</div>
+          <div className="topbar-tag"><span /> LOCAL WORKSPACE</div>
+        </header>
+
+        <div className="page-content">
+          <div className="page-heading">
+            <div>
+              <p className="eyebrow">{content.eyebrow}</p>
+              <h1>{content.title}</h1>
+              <p className="page-description">{content.description}</p>
+            </div>
+            <div className="edition-mark">MEDIA LIBRARY <span>01</span></div>
+          </div>
+
+          {section === 'catalog' && <CatalogView />}
+          {section === 'sources' && <SourceSettingsView />}
+          {section === 'history' && <HistoryView />}
+        </div>
+      </main>
+    </div>
   )
 }
 

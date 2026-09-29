@@ -22,8 +22,22 @@ builder.Services.AddScoped<IReadinessService, ReadinessService>();
 
 var app = builder.Build();
 
+if (builder.Configuration.GetValue<bool>("migrate"))
+{
+	await using var scope = app.Services.CreateAsyncScope();
+	await scope.ServiceProvider.GetRequiredService<MediaDockDbContext>()
+		.Database.MigrateAsync();
+	return;
+}
+
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+
+if (app.Environment.IsProduction())
+{
+	app.UseDefaultFiles();
+	app.UseStaticFiles();
+}
 
 if (app.Environment.IsDevelopment())
 {
@@ -34,6 +48,11 @@ app.MapHealthEndpoints();
 app.MapCatalogEndpoints();
 app.MapSourceSettingsEndpoints();
 app.MapOperationalHistoryEndpoints();
+
+if (app.Environment.IsProduction())
+{
+	app.MapFallbackToFile("index.html");
+}
 
 app.Run();
 

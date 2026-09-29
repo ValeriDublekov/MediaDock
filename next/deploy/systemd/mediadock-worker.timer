@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily MediaDock RSS ingestion schedule
+
+[Timer]
+OnCalendar=*-*-* 03:17:00 Europe/Sofia
+Persistent=true
+Unit=mediadock-worker.service
+
+[Install]
+WantedBy=timers.target

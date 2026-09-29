@@ -1,0 +1,13 @@
+[Unit]
+Description=MediaDock RSS ingestion scan
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+User=mediadock
+SupplementaryGroups=docker
+WorkingDirectory=/opt/mediadock/next
+ExecStart=/usr/bin/docker compose run --rm worker --trigger schedule
+TimeoutStartSec=infinity
+TimeoutStopSec=5min
