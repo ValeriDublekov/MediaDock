@@ -1,0 +1,78 @@
+using MediaDock.Application.Matching;
+
+namespace MediaDock.Application.Metadata;
+
+public enum MetadataLookupStatus
+{
+    Found,
+    ConfirmedNotFound,
+    QuotaExceeded,
+    TransportFailure,
+    AuthenticationFailure,
+    InvalidRequest,
+    ProviderFailure
+}
+
+public sealed record MetadataDetails(
+    string Title,
+    int? Year,
+    string? ImdbId,
+    string MediaType,
+    string SourceType,
+    string ContentKind,
+    BroadcastRange? BroadcastRange,
+    decimal? ImdbRating,
+    long? ImdbVotes,
+    decimal? Metascore,
+    string[] Genres,
+    string[] Countries,
+    string? Director,
+    string? Plot,
+    string? PosterUrl,
+    string? Runtime,
+    string? Awards,
+    string? BoxOffice);
+
+public sealed record MetadataLookupResult(
+    MetadataLookupStatus Status,
+    MetadataDetails? Metadata = null,
+    int HttpAttempts = 0,
+    string? ErrorCode = null);
+
+public interface IOmdbClient
+{
+    Task<MetadataLookupResult> LookupAsync(
+        string title,
+        int? year,
+        string sourceType,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed record MetadataCacheValue(
+    string LookupTitle,
+    int? LookupYear,
+    string LookupYearSemantics,
+    string SourceType,
+    MetadataLookupStatus Status,
+    MetadataDetails? Metadata,
+    DateTimeOffset FetchedAt,
+    DateTimeOffset ExpiresAt);
+
+public interface IMetadataCacheStore
+{
+    Task<MetadataCacheValue?> GetAsync(
+        string cacheKey,
+        CancellationToken cancellationToken = default);
+
+    Task StoreAsync(
+        string cacheKey,
+        MetadataCacheValue value,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed record MetadataResolution(
+    MetadataLookupStatus Status,
+    MetadataDetails? Metadata,
+    bool CacheHit,
+    int HttpAttempts,
+    string? ErrorCode = null);

@@ -1,6 +1,91 @@
 @MediaDock.Api_HostAddress = http://localhost:5280
+@titleId = 1
+@sourceId = 1
 
 GET {{MediaDock.Api_HostAddress}}/health/live
 Accept: application/json
 
 ###
+
+GET {{MediaDock.Api_HostAddress}}/health/ready
+Accept: application/json
+
+###
+
+GET {{MediaDock.Api_HostAddress}}/api/catalog?page=1&pageSize=25&search=matrix&mediaType=movie
+Accept: application/json
+
+###
+
+GET {{MediaDock.Api_HostAddress}}/api/titles/{{titleId}}
+Accept: application/json
+
+###
+
+GET {{MediaDock.Api_HostAddress}}/api/titles/{{titleId}}/occurrences?page=1&pageSize=25
+Accept: application/json
+
+###
+
+GET {{MediaDock.Api_HostAddress}}/api/sources
+Accept: application/json
+
+###
+
+GET {{MediaDock.Api_HostAddress}}/api/sources/{{sourceId}}
+Accept: application/json
+
+###
+
+# Source and settings writes are unauthenticated and assume trusted LAN access only.
+POST {{MediaDock.Api_HostAddress}}/api/sources
+Content-Type: application/json
+
+{
+	"stableKey": "movies-main",
+	"name": "Movies",
+	"feedType": "movie",
+	"url": "https://feed.rutracker.cc/movies.atom",
+	"isEnabled": true
+}
+
+###
+
+PUT {{MediaDock.Api_HostAddress}}/api/sources/{{sourceId}}
+Content-Type: application/json
+
+{
+	"stableKey": "movies-main",
+	"name": "Movies",
+	"feedType": "movie",
+	"url": "https://feed.rutracker.cc/movies.atom",
+	"isEnabled": true
+}
+
+###
+
+GET {{MediaDock.Api_HostAddress}}/api/settings
+Accept: application/json
+
+###
+
+PUT {{MediaDock.Api_HostAddress}}/api/settings
+Content-Type: application/json
+
+{
+	"excludedGenres": [],
+	"excludedCountries": [],
+	"minMovieRating": 0,
+	"minSeriesRating": 0,
+	"minImdbVotes": 0
+}
+
+###
+
+GET {{MediaDock.Api_HostAddress}}/api/parse-logs?page=1&pageSize=25
+Accept: application/json
+
+###
+
+GET {{MediaDock.Api_HostAddress}}/api/scan-runs?page=1&pageSize=25
+Accept: application/json
