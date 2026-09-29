@@ -22,6 +22,7 @@
 - [docs/ai/DATA_CONTRACTS.md](docs/ai/DATA_CONTRACTS.md) - Firestore schema,
    queries, IDs, ownership, and write boundaries.
 - [docs/ai/TESTING.md](docs/ai/TESTING.md) - canonical test commands and verification status.
+- [MediaDock Next AI documentation](next/docs/ai/README.md) - guides for the standalone Next MVP, separate from the existing root app.
 
 ## Overview
 

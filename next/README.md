@@ -1,5 +1,7 @@
 # MediaDock Next
 
+[AI documentation index](docs/ai/README.md)
+
 Standalone local MVP. The app is unauthenticated and must remain bound to loopback; it has no runtime dependency on the existing root app.
 
 ## Prerequisites
@@ -25,7 +27,7 @@ docker compose -f next/compose.yaml run --rm migrate
 docker compose -f next/compose.yaml up --build -d api
 ```
 
-The UI is at `http://127.0.0.1:8080/`; readiness is `http://127.0.0.1:8080/health/ready`, and the catalog API is `http://127.0.0.1:8080/api/catalog`. PostgreSQL has no public binding; its optional host port is loopback-only. The existing `postgres_data` volume is retained across container stops and recreation.
+The UI is at `http://127.0.0.1:8080/`; readiness is `http://127.0.0.1:8080/health/ready`, and the catalog API is `http://127.0.0.1:8080/api/catalog`. PostgreSQL's host port is also bound to loopback and defaults to `5432` (override with `POSTGRES_PORT`). The existing `postgres_data` volume is retained across container stops and recreation.
 
 Schema changes are checked in as EF Core migrations under `server/src/MediaDock.Infrastructure/Persistence/Migrations/`. The API does not migrate on startup; run the one-shot `migrate` service after adding a migration and before starting the API.
 
