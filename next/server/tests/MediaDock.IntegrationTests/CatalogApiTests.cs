@@ -263,6 +263,7 @@ public sealed class CatalogApiTests
 
         db.ChangeTracker.Clear();
         var providerSettingsInDatabase = await db.Settings.AsNoTracking().SingleAsync();
+        Assert.Equal(1, providerSettingsInDatabase.Id);
         Assert.Equal(testOmdbApiKey, providerSettingsInDatabase.OmdbApiKey);
 
         using var clearProviderSettingsResponse = await client.PutAsJsonAsync(

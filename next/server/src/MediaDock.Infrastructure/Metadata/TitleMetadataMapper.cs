@@ -20,7 +20,11 @@ internal static class TitleMetadataMapper
         title.BroadcastRangeStartYear = metadata.BroadcastRange?.StartYear;
         title.BroadcastRangeEndYear = metadata.BroadcastRange?.EndYear;
         title.BroadcastRangeRaw = metadata.BroadcastRange?.Raw;
-        title.ImdbId = metadata.ImdbId;
+        var imdbId = ImdbIdNormalizer.Normalize(metadata.ImdbId);
+        if (imdbId is not null)
+        {
+            title.ImdbId = imdbId;
+        }
         title.ImdbRating = metadata.ImdbRating;
         title.ImdbVotes = metadata.ImdbVotes;
         title.Metascore = metadata.Metascore;
@@ -34,6 +38,7 @@ internal static class TitleMetadataMapper
         title.BoxOffice = metadata.BoxOffice;
         if (updateLastSeenAt)
         {
+            title.FirstSeenAt ??= updatedAt;
             title.LastSeenAt = updatedAt;
         }
 

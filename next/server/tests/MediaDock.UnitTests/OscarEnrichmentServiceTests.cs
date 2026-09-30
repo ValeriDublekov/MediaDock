@@ -11,9 +11,9 @@ public sealed class OscarEnrichmentServiceTests
         var now = new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
         var repository = new FakeOscarEnrichmentRepository(
         [
-            new OscarEnrichmentCandidate(1, "Newest Film", 2025, null, 0),
-            new OscarEnrichmentCandidate(2, "Older Film", 2024, null, 2),
-            new OscarEnrichmentCandidate(3, "Unmatched Film", 2023, null, 0)
+            new OscarEnrichmentCandidate(1, "Newest Film", 2025, null, null, 0),
+            new OscarEnrichmentCandidate(2, "Older Film", 2024, null, null, 2),
+            new OscarEnrichmentCandidate(3, "Unmatched Film", 2023, null, null, 0)
         ]);
         var client = new StubOmdbClient(
         [
@@ -56,8 +56,8 @@ public sealed class OscarEnrichmentServiceTests
         var now = new DateTimeOffset(2026, 9, 29, 23, 30, 0, TimeSpan.FromHours(3));
         var repository = new FakeOscarEnrichmentRepository(
         [
-            new OscarEnrichmentCandidate(1, "Newest Film", 2025, null, 0),
-            new OscarEnrichmentCandidate(2, "Next Film", 2024, null, 0)
+            new OscarEnrichmentCandidate(1, "Newest Film", 2025, null, null, 0),
+            new OscarEnrichmentCandidate(2, "Next Film", 2024, null, null, 0)
         ]);
         var client = new StubOmdbClient(
         [
@@ -91,8 +91,8 @@ public sealed class OscarEnrichmentServiceTests
         var now = new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
         var repository = new FakeOscarEnrichmentRepository(
         [
-            new OscarEnrichmentCandidate(1, "Newest Film", 2025, null, 0),
-            new OscarEnrichmentCandidate(2, "Next Film", 2024, null, 0)
+            new OscarEnrichmentCandidate(1, "Newest Film", 2025, null, null, 0),
+            new OscarEnrichmentCandidate(2, "Next Film", 2024, null, null, 0)
         ]);
         var client = new StubOmdbClient(
         [
@@ -117,6 +117,31 @@ public sealed class OscarEnrichmentServiceTests
         Assert.Equal(0, runRepository.LastProgress?.ProcessedFilms);
         Assert.Equal(0, runRepository.LastProgress?.HttpAttempts);
         Assert.Equal("daily_request_budget_exhausted", runRepository.ErrorCode);
+    }
+
+    [Fact]
+    public async Task RunAsyncRejectsOmdbMetadataWithConflictingImdbId()
+    {
+        var now = new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
+        var repository = new FakeOscarEnrichmentRepository(
+        [
+            new OscarEnrichmentCandidate(1, "Newest Film", 2025, "tt11111111", "tt11111111", 0)
+        ]);
+        var client = new StubOmdbClient(
+        [
+            new MetadataLookupResult(MetadataLookupStatus.Found, CreateMetadata(), HttpAttempts: 1)
+        ]);
+        var service = CreateService(repository, client, now, out _);
+
+        var run = await service.RunAsync(1, "manual");
+
+        var saved = Assert.Single(repository.SavedOutcomes).Update;
+        Assert.Equal(OscarEnrichmentStatuses.TemporaryError, saved.Status);
+        Assert.Equal("imdb_id_mismatch", saved.ErrorCode);
+        Assert.Null(saved.Metadata);
+        Assert.Equal(now.AddHours(1), saved.NextAttemptAt);
+        Assert.Equal(1, run.Summary.TemporaryErrors);
+        Assert.Equal(0, run.Summary.EnrichedFilms);
     }
 
     [Fact]

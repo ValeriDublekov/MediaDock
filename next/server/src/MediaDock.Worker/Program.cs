@@ -98,7 +98,7 @@ internal static class WorkerCommand
                 var savedSettings = await scope.ServiceProvider.GetRequiredService<MediaDockDbContext>()
                     .Settings
                     .AsNoTracking()
-                    .OrderBy(settings => settings.Id)
+                    .Where(settings => settings.Id == 1)
                     .Select(settings => new
                     {
                         settings.OmdbApiKey,
@@ -106,7 +106,7 @@ internal static class WorkerCommand
                         settings.OscarEnrichmentMaxFilmsPerRun,
                         settings.OscarEnrichmentMaxRequestsPerDay
                     })
-                    .FirstOrDefaultAsync(applicationLifetime.ApplicationStopping);
+                    .SingleOrDefaultAsync(applicationLifetime.ApplicationStopping);
 
                 if (savedSettings is null || string.IsNullOrWhiteSpace(savedSettings.OmdbApiKey))
                 {

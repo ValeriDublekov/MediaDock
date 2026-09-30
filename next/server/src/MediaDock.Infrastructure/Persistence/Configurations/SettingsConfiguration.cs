@@ -10,6 +10,7 @@ internal sealed class SettingsConfiguration : IEntityTypeConfiguration<AppSettin
     {
         builder.ToTable("settings", table =>
         {
+            table.HasCheckConstraint("ck_settings_singleton_id", "id = 1");
             table.HasCheckConstraint("ck_settings_min_movie_rating", "min_movie_rating BETWEEN 0 AND 10");
             table.HasCheckConstraint("ck_settings_min_series_rating", "min_series_rating BETWEEN 0 AND 10");
             table.HasCheckConstraint("ck_settings_min_imdb_votes", "min_imdb_votes BETWEEN 0 AND 1000000000");

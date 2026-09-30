@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using MediaDock.Api.Catalog;
 using MediaDock.Api.Common;
 using MediaDock.Api.OscarAwards;
 using MediaDock.Infrastructure.Persistence;
@@ -47,6 +48,12 @@ public sealed class OscarApiTests
         using var factory = new ApiFactory(connectionString);
         using var client = factory.CreateClient();
 
+        using var catalogResponse = await client.GetAsync("/api/catalog");
+        Assert.Equal(HttpStatusCode.OK, catalogResponse.StatusCode);
+        var catalog = await catalogResponse.Content.ReadFromJsonAsync<PageResponse<CatalogTitleResponse>>();
+        Assert.NotNull(catalog);
+        Assert.Equal(0, catalog.TotalCount);
+
         using var pageResponse = await client.GetAsync("/api/oscars?page=1&pageSize=1");
         Assert.Equal(HttpStatusCode.OK, pageResponse.StatusCode);
         var page = await pageResponse.Content.ReadFromJsonAsync<PageResponse<OscarFilmResponse>>();
@@ -54,6 +61,14 @@ public sealed class OscarApiTests
         Assert.Equal(3, page.TotalCount);
         Assert.Equal(3, page.TotalPages);
         Assert.Single(page.Items);
+
+        using var titleDetailsResponse = await client.GetAsync($"/api/titles/{films[0].TitleId}");
+        Assert.Equal(HttpStatusCode.OK, titleDetailsResponse.StatusCode);
+        var titleDetails = await titleDetailsResponse.Content.ReadFromJsonAsync<TitleDetailsResponse>();
+        Assert.NotNull(titleDetails);
+        Assert.Null(titleDetails.FirstSeenAt);
+        Assert.Null(titleDetails.LastSeenAt);
+        Assert.Equal(0, titleDetails.OccurrenceCount);
 
         using var winnerResponse = await client.GetAsync(
             "/api/oscars?category=BEST%20PICTURE&result=winner&enrichmentStatus=pending");
@@ -121,8 +136,6 @@ public sealed class OscarApiTests
                 ContentKind = "standard",
                 ImdbId = stableKey == "oppenheimer-2023" ? "tt15398776" : null,
                 ImdbRating = imdbRating,
-                FirstSeenAt = now,
-                LastSeenAt = now,
                 UpdatedAt = now
             },
             Nominations = nominations

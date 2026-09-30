@@ -96,6 +96,8 @@ namespace MediaDock.Infrastructure.Persistence.Migrations
                             t.HasCheckConstraint("ck_settings_oscar_max_films_per_run", "oscar_enrichment_max_films_per_run BETWEEN 0 AND 100000");
 
                             t.HasCheckConstraint("ck_settings_oscar_max_requests_per_day", "oscar_enrichment_max_requests_per_day >= 0");
+
+                            t.HasCheckConstraint("ck_settings_singleton_id", "id = 1");
                         });
                 });
 
@@ -252,7 +254,10 @@ namespace MediaDock.Infrastructure.Persistence.Migrations
                     b.HasIndex("TitleId", "LastSeenAt")
                         .HasDatabaseName("ix_occurrences_title_id_last_seen_at");
 
-                    b.ToTable("occurrences", (string)null);
+                    b.ToTable("occurrences", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_occurrences_seen_range", "first_seen_at <= last_seen_at");
+                        });
                 });
 
             modelBuilder.Entity("MediaDock.Infrastructure.Persistence.Entities.OmdbDailyUsage", b =>
@@ -356,6 +361,8 @@ namespace MediaDock.Infrastructure.Persistence.Migrations
                         {
                             t.HasCheckConstraint("ck_oscar_enrichment_runs_counts", "eligible_films >= 0 AND processed_films >= 0 AND enriched_films >= 0 AND not_found_films >= 0 AND temporary_errors >= 0 AND cache_hits >= 0 AND http_attempts >= 0");
 
+                            t.HasCheckConstraint("ck_oscar_enrichment_runs_finish_time", "(status = 'running' AND finished_at IS NULL) OR (status <> 'running' AND finished_at IS NOT NULL)");
+
                             t.HasCheckConstraint("ck_oscar_enrichment_runs_status", "status IN ('running', 'succeeded', 'partial', 'quota_stopped', 'failed', 'cancelled')");
 
                             t.HasCheckConstraint("ck_oscar_enrichment_runs_trigger", "trigger IN ('manual', 'schedule')");
@@ -445,7 +452,12 @@ namespace MediaDock.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("TitleId");
 
-                    b.ToTable("oscar_films", (string)null);
+                    b.ToTable("oscar_films", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_oscar_films_enrichment_attempt_count", "enrichment_attempt_count >= 0");
+
+                            t.HasCheckConstraint("ck_oscar_films_enrichment_status", "enrichment_status IN ('pending', 'enriched', 'not_found', 'temporary_error')");
+                        });
                 });
 
             modelBuilder.Entity("MediaDock.Infrastructure.Persistence.Entities.OscarNomination", b =>
@@ -723,6 +735,8 @@ namespace MediaDock.Infrastructure.Persistence.Migrations
 
                     b.ToTable("scan_runs", null, t =>
                         {
+                            t.HasCheckConstraint("ck_scan_runs_finish_time", "(status = 'running' AND finished_at IS NULL) OR (status <> 'running' AND finished_at IS NOT NULL)");
+
                             t.HasCheckConstraint("ck_scan_runs_status", "status IN ('running', 'succeeded', 'partial', 'failed')");
 
                             t.HasCheckConstraint("ck_scan_runs_trigger", "trigger IN ('schedule', 'manual', 'local')");
@@ -822,7 +836,7 @@ namespace MediaDock.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("director");
 
-                    b.Property<DateTimeOffset>("FirstSeenAt")
+                    b.Property<DateTimeOffset?>("FirstSeenAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("first_seen_at");
 
@@ -847,7 +861,7 @@ namespace MediaDock.Infrastructure.Persistence.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("imdb_votes");
 
-                    b.Property<DateTimeOffset>("LastSeenAt")
+                    b.Property<DateTimeOffset?>("LastSeenAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("last_seen_at");
 
@@ -900,14 +914,21 @@ namespace MediaDock.Infrastructure.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_titles");
 
-                    b.HasIndex("NormalizedTitle")
-                        .HasDatabaseName("ix_titles_normalized_title");
+                    b.HasIndex("ImdbId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_titles_imdb_id")
+                        .HasFilter("imdb_id IS NOT NULL AND btrim(imdb_id) <> ''");
+
+                    b.HasIndex("NormalizedTitle", "Year", "MediaType")
+                        .HasDatabaseName("ix_titles_normalized_title_year_media_type");
 
                     b.ToTable("titles", null, t =>
                         {
                             t.HasCheckConstraint("ck_titles_content_kind", "content_kind IS NULL OR content_kind IN ('standard', 'documentary', 'short')");
 
                             t.HasCheckConstraint("ck_titles_media_type", "media_type IN ('movie', 'series', 'documentary', 'short')");
+
+                            t.HasCheckConstraint("ck_titles_seen_range", "(first_seen_at IS NULL AND last_seen_at IS NULL) OR (first_seen_at IS NOT NULL AND last_seen_at IS NOT NULL AND first_seen_at <= last_seen_at)");
 
                             t.HasCheckConstraint("ck_titles_source_type", "source_type IS NULL OR source_type IN ('movie', 'series')");
                         });

@@ -24,8 +24,8 @@ public sealed class Title
     public string? Runtime { get; set; }
     public string? Awards { get; set; }
     public string? BoxOffice { get; set; }
-    public DateTimeOffset FirstSeenAt { get; set; }
-    public DateTimeOffset LastSeenAt { get; set; }
+    public DateTimeOffset? FirstSeenAt { get; set; }
+    public DateTimeOffset? LastSeenAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 
     public ICollection<Occurrence> Occurrences { get; set; } = new List<Occurrence>();

@@ -40,6 +40,21 @@ public sealed record MetadataDetails(
     string? Awards,
     string? BoxOffice);
 
+public static class ImdbIdNormalizer
+{
+    public static string? Normalize(string? imdbId) =>
+        string.IsNullOrWhiteSpace(imdbId) ? null : imdbId.Trim().ToLowerInvariant();
+
+    public static bool IsCompatible(string? first, string? second)
+    {
+        var normalizedFirst = Normalize(first);
+        var normalizedSecond = Normalize(second);
+        return normalizedFirst is null
+            || normalizedSecond is null
+            || string.Equals(normalizedFirst, normalizedSecond, StringComparison.Ordinal);
+    }
+}
+
 public sealed record MetadataLookupResult(
     MetadataLookupStatus Status,
     MetadataDetails? Metadata = null,

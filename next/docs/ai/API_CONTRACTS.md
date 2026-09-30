@@ -33,13 +33,13 @@ All paged query DTOs accept optional `Page` in `1..1,000,000` and `PageSize` in 
 
 | Query DTO | Additional fields and behavior |
 | --- | --- |
-| `CatalogQuery` | `Search` (max 200 characters) is trimmed and matched with PostgreSQL `ILIKE` against title and normalized title. `MediaType` is `movie`, `series`, `documentary`, or `short`; `SourceType` is `movie` or `series`; `ContentKind` is `standard`, `documentary`, or `short`. `YearFrom` and `YearTo` each range from 1800 through 2200 and are inclusive; `YearFrom` greater than `YearTo` is a validation error. `Genre` and `Country` are trimmed exact array-membership filters (max 100 characters each). `SourceId` must be at least 1 and matches titles having an occurrence from that source. Supplied filters are combined. |
+| `CatalogQuery` | `Search` (max 200 characters) is trimmed and matched with PostgreSQL `ILIKE` against title and normalized title. `MediaType` is `movie`, `series`, `documentary`, or `short`; `SourceType` is `movie` or `series`; `ContentKind` is `standard`, `documentary`, or `short`. `YearFrom` and `YearTo` each range from 1800 through 2200 and are inclusive; `YearFrom` greater than `YearTo` is a validation error. `Genre` and `Country` are trimmed exact array-membership filters (max 100 characters each). `SourceId` must be at least 1 and matches titles having an occurrence from that source. The catalog list and `TotalCount` always exclude titles without any occurrence; Oscar-only films are listed by the Oscar API. Supplied filters are combined. |
 | `OscarCatalogQuery` | `Search` (max 200 characters) is trimmed and matched with `ILIKE` against the Oscar CSV title, normalized title, and linked title metadata. `YearFrom` and `YearTo` range from 1800 through 2200, are inclusive, and filter the Oscar film year; a reversed range is a validation error. `Category` (max 100 characters) matches a canonical category case-insensitively. `Result` is `winner` or `nominee`; each matches films with at least one winning or non-winning nomination in the selected category. `EnrichmentStatus` is `pending`, `enriched`, `not_found`, or `temporary_error`. Supplied filters are combined. |
 | `OccurrencesQuery` | Only the common `Page` and `PageSize` fields. |
 | `ParseLogQuery` | `SourceId` must be at least 1; `ParsedSuccessfully` and `Ignored` are optional booleans; `RetryState` is `retryable`, `terminal`, or `resolved`; `Search` (max 200 characters) is trimmed and matched with `ILIKE` against raw title, feed name, or parsed title. Supplied filters are combined. |
 | `ScanRunQuery` | `Status` is `running`, `succeeded`, `partial`, or `failed`; `Trigger` is `schedule`, `manual`, or `local`. Supplied filters are combined. |
 
-Catalog titles sort by `LastSeenAt` descending, then `Id` descending; Oscar films sort by film year descending, normalized title ascending, then `Id` ascending; occurrences use the catalog ordering. Parse logs sort by `ProcessedAt` descending, then `Id` descending; scan runs sort by `StartedAt` descending, then `Id` descending. `PageResponse<T>` contains `Items`, `Page`, `PageSize`, `TotalCount`, and `TotalPages`; `TotalPages` is zero for an empty result and otherwise the ceiling of `TotalCount / PageSize`.
+Catalog titles with occurrences sort by `LastSeenAt` descending, then `Id` descending; Oscar films sort by film year descending, normalized title ascending, then `Id` ascending; occurrences use the catalog ordering. Oscar-only titles can still be opened through `GET /api/titles/{id}` when following an Oscar catalog link. Parse logs sort by `ProcessedAt` descending, then `Id` descending; scan runs sort by `StartedAt` descending, then `Id` descending. `PageResponse<T>` contains `Items`, `Page`, `PageSize`, `TotalCount`, and `TotalPages`; `TotalPages` is zero for an empty result and otherwise the ceiling of `TotalCount / PageSize`.
 
 ## Request DTOs
 
@@ -58,10 +58,10 @@ Nullable response fields are marked `?`; collection fields are returned as lists
 | --- | --- |
 | `HealthResponse` | `Status` |
 | `PageResponse<T>` | `Items`, `Page`, `PageSize`, `TotalCount`, `TotalPages` |
-| `CatalogTitleResponse` | `Id`, `Title`, `Year?`, `MediaType`, `SourceType?`, `ContentKind?`, `ImdbRating?`, `PosterUrl?`, `Genres`, `Countries`, `LastSeenAt`, `OccurrenceCount` |
+| `CatalogTitleResponse` | `Id`, `Title`, `Year?`, `MediaType`, `SourceType?`, `ContentKind?`, `ImdbRating?`, `PosterUrl?`, `Genres`, `Countries`, `LastSeenAt?`, `OccurrenceCount` |
 | `OscarFilmResponse` | `Id`, `TitleId`, `Title` (CSV title), `MetadataTitle`, `MetadataYear?`, `FilmYear`, `ImdbId?`, `EnrichmentStatus`, `EnrichmentAttemptCount`, `LastEnrichmentAttemptAt?`, `NextEnrichmentAttemptAt?`, `LastEnrichmentError?`, `MediaType`, `ImdbRating?`, `ImdbVotes?`, `Metascore?`, `Genres`, `Countries`, `Director?`, `Plot?`, `PosterUrl?`, `Runtime?`, `Awards?`, `BoxOffice?`, `Nominations` |
 | `OscarNominationResponse` | `Id`, `Ceremony`, `Class`, `CanonicalCategory`, `Category`, `Name`, `Nominees`, `NomineeIds`, `Detail`, `IsWinner` |
-| `TitleDetailsResponse` | `Id`, `Title`, `Year?`, `MediaType`, `SourceType?`, `ContentKind?`, `BroadcastRangeStartYear?`, `BroadcastRangeEndYear?`, `BroadcastRangeRaw?`, `ImdbId?`, `ImdbRating?`, `ImdbVotes?`, `Metascore?`, `Genres`, `Countries`, `Director?`, `Plot?`, `PosterUrl?`, `Runtime?`, `Awards?`, `BoxOffice?`, `FirstSeenAt`, `LastSeenAt`, `UpdatedAt`, `OccurrenceCount` |
+| `TitleDetailsResponse` | `Id`, `Title`, `Year?`, `MediaType`, `SourceType?`, `ContentKind?`, `BroadcastRangeStartYear?`, `BroadcastRangeEndYear?`, `BroadcastRangeRaw?`, `ImdbId?`, `ImdbRating?`, `ImdbVotes?`, `Metascore?`, `Genres`, `Countries`, `Director?`, `Plot?`, `PosterUrl?`, `Runtime?`, `Awards?`, `BoxOffice?`, `FirstSeenAt?`, `LastSeenAt?`, `UpdatedAt`, `OccurrenceCount` |
 | `OccurrenceResponse` | `Id`, `TitleId`, `SourceId`, `SourceName`, `SourceItemKey`, `FeedEntryId?`, `TorrentUrl`, `RawTitle`, `SourceFeedName`, `FeedType?`, `SourcePublishedAt?`, `ObservedAt?`, `Quality?`, `RipType?`, `FirstSeenAt`, `LastSeenAt` |
 | `SourceResponse` | `Id`, `StableKey`, `Name`, `FeedType`, `Url`, `IsEnabled` |
 | `SettingsResponse` | `ExcludedGenres`, `ExcludedCountries`, `MinMovieRating`, `MinSeriesRating`, `MinImdbVotes`, `UpdatedAt?` |
@@ -69,7 +69,7 @@ Nullable response fields are marked `?`; collection fields are returned as lists
 | `ParseLogResponse` | `Id`, `SourceId?`, `SourceName?`, `SourceItemKey?`, `RawTitle`, `FeedName`, `ParsedSuccessfully`, `ParsedTitle?`, `ParsedYear?`, `OmdbStatus`, `Ignored`, `IgnoreReason?`, `ErrorMessage?`, `Decision?`, `ProcessedAt`, `RetryState`, `AttemptCount`, `LastAttemptAt?`, `FeedType?`, `SourcePublishedAt?`, `ObservedAt?`, `EventKind?` |
 | `ScanRunResponse` | `Id`, `StartedAt`, `FinishedAt?`, `Status`, `Trigger`, `FeedsProcessed`, `EntriesSeen`, `TitlesCreated`, `OccurrencesCreated`, `CacheHits`, `OmdbRequests`, `IgnoredEntries`, `ErrorCount`, `ErrorSummary` |
 
-When no settings row exists, `GET /api/settings` returns empty exclusion arrays, zero thresholds, and `UpdatedAt = null`.
+When no settings row exists, `GET /api/settings` returns empty exclusion arrays, zero thresholds, and `UpdatedAt = null`. Writes create or update the singleton row with `id = 1`; concurrent first initialization resolves to that row.
 When no settings row exists, `GET /api/settings/providers/omdb` returns `OmdbApiKeyConfigured = false` and zero limits.
 
 ## Error And Access Semantics

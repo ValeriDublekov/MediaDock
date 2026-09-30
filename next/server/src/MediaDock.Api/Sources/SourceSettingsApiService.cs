@@ -3,6 +3,7 @@ using MediaDock.Infrastructure.Persistence;
 using MediaDock.Infrastructure.Persistence.Entities;
 using MediaDock.Infrastructure.Rss;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace MediaDock.Api.Sources;
 
@@ -114,7 +115,7 @@ internal sealed class SourceSettingsApiService(MediaDockDbContext dbContext) : I
     {
         var settings = await dbContext.Settings
             .AsNoTracking()
-            .OrderBy(setting => setting.Id)
+            .Where(setting => setting.Id == 1)
             .Select(setting => new SettingsResponse(
                 setting.ExcludedGenres,
                 setting.ExcludedCountries,
@@ -122,7 +123,7 @@ internal sealed class SourceSettingsApiService(MediaDockDbContext dbContext) : I
                 setting.MinSeriesRating,
                 setting.MinImdbVotes,
                 setting.UpdatedAt))
-            .FirstOrDefaultAsync(cancellationToken);
+            .SingleOrDefaultAsync(cancellationToken);
 
         return settings ?? new SettingsResponse([], [], 0m, 0m, 0, null);
     }
@@ -139,12 +140,8 @@ internal sealed class SourceSettingsApiService(MediaDockDbContext dbContext) : I
             throw new ApiValidationException(errors);
         }
 
-        var settings = await dbContext.Settings.OrderBy(value => value.Id).FirstOrDefaultAsync(cancellationToken);
-        if (settings is null)
-        {
-            settings = new AppSetting();
-            dbContext.Settings.Add(settings);
-        }
+        var settings = await dbContext.Settings.SingleOrDefaultAsync(value => value.Id == 1, cancellationToken)
+            ?? await GetOrCreateSettingsAsync(cancellationToken);
 
         settings.ExcludedGenres = excludedGenres;
         settings.ExcludedCountries = excludedCountries;
@@ -167,14 +164,14 @@ internal sealed class SourceSettingsApiService(MediaDockDbContext dbContext) : I
     {
         var settings = await dbContext.Settings
             .AsNoTracking()
-            .OrderBy(setting => setting.Id)
+            .Where(setting => setting.Id == 1)
             .Select(setting => new ProviderSettingsResponse(
                 !string.IsNullOrWhiteSpace(setting.OmdbApiKey),
                 setting.OmdbDailyRequestLimit,
                 setting.OscarEnrichmentMaxFilmsPerRun,
                 setting.OscarEnrichmentMaxRequestsPerDay,
                 setting.UpdatedAt))
-            .FirstOrDefaultAsync(cancellationToken);
+            .SingleOrDefaultAsync(cancellationToken);
 
         return settings ?? new ProviderSettingsResponse(false, 0, 0, 0, null);
     }
@@ -183,7 +180,7 @@ internal sealed class SourceSettingsApiService(MediaDockDbContext dbContext) : I
         UpdateProviderSettingsRequest request,
         CancellationToken cancellationToken)
     {
-        var settings = await dbContext.Settings.OrderBy(value => value.Id).FirstOrDefaultAsync(cancellationToken);
+        var settings = await dbContext.Settings.SingleOrDefaultAsync(value => value.Id == 1, cancellationToken);
         var errors = new Dictionary<string, string[]>();
         if (request.ClearOmdbApiKey && !string.IsNullOrWhiteSpace(request.OmdbApiKey))
         {
@@ -212,8 +209,7 @@ internal sealed class SourceSettingsApiService(MediaDockDbContext dbContext) : I
 
         if (settings is null)
         {
-            settings = new AppSetting();
-            dbContext.Settings.Add(settings);
+            settings = await GetOrCreateSettingsAsync(cancellationToken);
         }
 
         if (request.ClearOmdbApiKey)
@@ -289,4 +285,33 @@ internal sealed class SourceSettingsApiService(MediaDockDbContext dbContext) : I
         settings.OscarEnrichmentMaxFilmsPerRun,
         settings.OscarEnrichmentMaxRequestsPerDay,
         settings.UpdatedAt);
+
+    private async Task<AppSetting> GetOrCreateSettingsAsync(CancellationToken cancellationToken)
+    {
+        var settings = await dbContext.Settings.SingleOrDefaultAsync(value => value.Id == 1, cancellationToken);
+        if (settings is not null)
+        {
+            return settings;
+        }
+
+        settings = new AppSetting { Id = 1, UpdatedAt = DateTimeOffset.UtcNow };
+        dbContext.Settings.Add(settings);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return settings;
+        }
+        catch (DbUpdateException exception) when (IsSettingsSingletonViolation(exception))
+        {
+            dbContext.ChangeTracker.Clear();
+            return await dbContext.Settings.SingleAsync(value => value.Id == 1, cancellationToken);
+        }
+    }
+
+    private static bool IsSettingsSingletonViolation(DbUpdateException exception) =>
+        exception.InnerException is PostgresException
+        {
+            SqlState: PostgresErrorCodes.UniqueViolation,
+            ConstraintName: "pk_settings"
+        };
 }

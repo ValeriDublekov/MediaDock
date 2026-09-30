@@ -5,6 +5,7 @@ using MediaDock.Infrastructure.Metadata;
 using MediaDock.Infrastructure.Persistence;
 using MediaDock.Infrastructure.Persistence.Entities;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace MediaDock.Infrastructure.Ingestion;
 
@@ -28,8 +29,7 @@ public sealed class PostgresRssIngestionRepository(MediaDockDbContext dbContext)
         CancellationToken cancellationToken = default)
     {
         var setting = await dbContext.Settings.AsNoTracking()
-            .OrderBy(value => value.Id)
-            .FirstOrDefaultAsync(cancellationToken);
+            .SingleOrDefaultAsync(value => value.Id == 1, cancellationToken);
         return setting is null
             ? new IngestionMatchSettings([], [])
             : new IngestionMatchSettings(setting.ExcludedCountries, setting.ExcludedGenres);
@@ -60,22 +60,46 @@ public sealed class PostgresRssIngestionRepository(MediaDockDbContext dbContext)
         DateTimeOffset observedAt,
         CancellationToken cancellationToken = default)
     {
+        try
+        {
+            return await UpsertCatalogItemOnceAsync(
+                source, feedItem, sourceItemKey, parsed, metadata, observedAt, cancellationToken);
+        }
+        catch (DbUpdateException exception) when (IsImdbIdentityUniqueViolation(exception))
+        {
+            dbContext.ChangeTracker.Clear();
+            return await UpsertCatalogItemOnceAsync(
+                source, feedItem, sourceItemKey, parsed, metadata, observedAt, cancellationToken);
+        }
+    }
+
+    private async Task<IngestionUpsertResult> UpsertCatalogItemOnceAsync(
+        IngestionSource source,
+        IngestionFeedItem feedItem,
+        string sourceItemKey,
+        ParsedRutrackerTitle parsed,
+        MetadataDetails metadata,
+        DateTimeOffset observedAt,
+        CancellationToken cancellationToken)
+    {
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
         try
         {
-            var normalizedTitle = TitleMetadataMapper.NormalizeTitle(metadata.Title);
+                var normalizedTitle = TitleMetadataMapper.NormalizeTitle(metadata.Title);
+                var imdbId = ImdbIdNormalizer.Normalize(metadata.ImdbId);
             Title? title = null;
-            if (!string.IsNullOrWhiteSpace(metadata.ImdbId))
+                if (imdbId is not null)
             {
                 title = await dbContext.Titles.FirstOrDefaultAsync(
-                    entity => entity.ImdbId == metadata.ImdbId,
+                    entity => entity.ImdbId == imdbId,
                     cancellationToken);
             }
 
             title ??= await dbContext.Titles
                 .Where(entity => entity.NormalizedTitle == normalizedTitle
                     && entity.Year == metadata.Year
-                    && entity.MediaType == metadata.MediaType)
+                    && entity.MediaType == metadata.MediaType
+                    && (imdbId == null || entity.ImdbId == null || entity.ImdbId == imdbId))
                 .OrderBy(entity => entity.Id)
                 .FirstOrDefaultAsync(cancellationToken);
 
@@ -179,5 +203,12 @@ public sealed class PostgresRssIngestionRepository(MediaDockDbContext dbContext)
         run.ErrorSummary = summary.ErrorSummary.ToArray();
         await dbContext.SaveChangesAsync(cancellationToken);
     }
+
+    private static bool IsImdbIdentityUniqueViolation(DbUpdateException exception) =>
+        exception.InnerException is PostgresException
+        {
+            SqlState: PostgresErrorCodes.UniqueViolation,
+            ConstraintName: "ux_titles_imdb_id"
+        };
 
 }

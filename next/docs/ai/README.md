@@ -20,3 +20,4 @@ Start here for work under `next/`. These guides cover only the new app; use the 
 ## Planned work
 
 - [Oscar catalog plan](OSCAR_CATALOG_PLAN.md)
+- [Database model review](DATABASE_MODEL_REVIEW.md)

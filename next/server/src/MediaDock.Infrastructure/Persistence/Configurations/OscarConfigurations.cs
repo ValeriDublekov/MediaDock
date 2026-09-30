@@ -8,7 +8,15 @@ internal sealed class OscarFilmConfiguration : IEntityTypeConfiguration<OscarFil
 {
     public void Configure(EntityTypeBuilder<OscarFilm> builder)
     {
-        builder.ToTable("oscar_films");
+        builder.ToTable("oscar_films", table =>
+        {
+            table.HasCheckConstraint(
+                "ck_oscar_films_enrichment_status",
+                "enrichment_status IN ('pending', 'enriched', 'not_found', 'temporary_error')");
+            table.HasCheckConstraint(
+                "ck_oscar_films_enrichment_attempt_count",
+                "enrichment_attempt_count >= 0");
+        });
         builder.HasKey(entity => entity.Id).HasName("pk_oscar_films");
         builder.Property(entity => entity.Id).UseIdentityByDefaultColumn().HasColumnName("id");
         builder.Property(entity => entity.TitleId).HasColumnName("title_id");

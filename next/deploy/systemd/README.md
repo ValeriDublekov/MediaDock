@@ -49,6 +49,28 @@ sudo systemctl status --no-pager mediadock-next-backup.service
 The dump contains the database-stored OMDb key. Keep the backup directory
 root-only and never print the archive or the production `.env`.
 
+## One-Time Baseline Reset (Per Environment)
+
+The schema now has one baseline migration, `20260930122500_InitialRelationalSchema`, replacing the previous six-migration chain. An existing database whose `__EFMigrationsHistory` contains the old migration IDs cannot apply this baseline in place: EF will consider it pending and its table creation will collide with the existing schema. This is an explicit data/schema reset, not a normal deployment migration. The deployment script does not delete the Compose `postgres_data` volume.
+
+Perform this procedure separately for each environment, only after its owner approves the data disposition:
+
+1. Confirm that no required data will be lost or that required data has a reviewed export/import path. Record the target environment and approval; do not infer approval from a successful build or deployment gate.
+2. Create a final custom-format PostgreSQL dump with the root-only backup service. Validate it with `pg_restore -l` and verify restoreability in an isolated database. The dump contains the plaintext OMDb key and must remain root-only.
+3. Disable that environment's deployment and Worker timers, stop any active deploy/Worker/API writers, and keep the API stopped for the schema operation.
+4. Use the separately approved database-administration procedure for that environment to provision an empty database or fresh volume. Retain the old volume and verified dump until application checks pass. Do not use `docker compose down -v` as routine cleanup and do not add volume deletion to `deploy.sh`.
+5. Start PostgreSQL from the release containing the new baseline and run the existing one-shot migration profile from the Compose project directory:
+
+	```sh
+	cd /opt/docker/projects/mediadock-next/next
+	docker compose --project-name mediadock-next --project-directory "$PWD" --env-file "$PWD/.env" --file "$PWD/compose.yaml" --profile tools run --rm migrate
+	```
+
+6. Verify that `__EFMigrationsHistory` contains `20260930122500_InitialRelationalSchema`, then start the API and check `/health/ready`, `/api/catalog`, and `/api/oscars`. Confirm the empty catalog responses and that provider settings use singleton `id = 1` before enabling any Worker run.
+7. Keep the verified dump and old volume until the API checks and an explicitly approved Worker smoke run succeed. Re-enable only the schedules approved for that environment.
+
+Never point the one-shot migration profile at the old schema as a substitute for this procedure. Persistent production reset was not performed by this code change and still requires separate environment-specific approval.
+
 ## Automated deployment
 
 The deployment unit fetches only the exact public GitHub repository

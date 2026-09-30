@@ -12,6 +12,9 @@ internal sealed class ScanRunConfiguration : IEntityTypeConfiguration<ScanRun>
         {
             table.HasCheckConstraint("ck_scan_runs_status", "status IN ('running', 'succeeded', 'partial', 'failed')");
             table.HasCheckConstraint("ck_scan_runs_trigger", "trigger IN ('schedule', 'manual', 'local')");
+            table.HasCheckConstraint(
+                "ck_scan_runs_finish_time",
+                "(status = 'running' AND finished_at IS NULL) OR (status <> 'running' AND finished_at IS NOT NULL)");
         });
         builder.HasKey(entity => entity.Id).HasName("pk_scan_runs");
         builder.Property(entity => entity.Id).UseIdentityByDefaultColumn().HasColumnName("id");

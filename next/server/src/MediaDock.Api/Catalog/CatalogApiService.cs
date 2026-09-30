@@ -36,7 +36,9 @@ internal sealed class CatalogApiService(MediaDockDbContext dbContext) : ICatalog
             });
         }
 
-        IQueryable<Title> titles = dbContext.Titles.AsNoTracking();
+        IQueryable<Title> titles = dbContext.Titles
+            .AsNoTracking()
+            .Where(title => title.Occurrences.Any());
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {

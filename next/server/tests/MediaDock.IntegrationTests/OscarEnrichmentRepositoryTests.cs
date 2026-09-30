@@ -200,6 +200,62 @@ public sealed class OscarEnrichmentRepositoryTests
         Assert.Empty(await db.Occurrences.ToListAsync());
     }
 
+    [Fact]
+    public async Task SaveOutcomeRejectsMetadataWithConflictingImdbIdentity()
+    {
+        await using var postgres = PostgreSqlTestContainerBuilder.Create("mediadock_oscar_enrichment_identity_test").Build();
+        await postgres.StartAsync();
+
+        var options = new DbContextOptionsBuilder<MediaDockDbContext>()
+            .UseNpgsql(postgres.GetConnectionString())
+            .Options;
+        await using var db = new MediaDockDbContext(options);
+        await db.Database.MigrateAsync();
+
+        var importedAt = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+        var film = CreateFilm("film-identity", "Identity Film", 2025, "pending", importedAt);
+        film.ImdbId = "tt11111111";
+        film.Title.ImdbId = "tt11111111";
+        db.OscarFilms.Add(film);
+        await db.SaveChangesAsync();
+
+        var attemptedAt = importedAt.AddDays(1);
+        var conflictingMetadata = new MetadataDetails(
+            "Other Film",
+            2025,
+            "tt22222222",
+            "movie",
+            "movie",
+            "standard",
+            null,
+            9.1m,
+            5000,
+            90m,
+            ["Drama"],
+            ["US"],
+            "Other Director",
+            "Other plot",
+            null,
+            "100 min",
+            null,
+            null);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new PostgresOscarEnrichmentRepository(db).SaveOutcomeAsync(
+                film.Id,
+                new OscarEnrichmentUpdate("enriched", 1, attemptedAt, null, null, conflictingMetadata)));
+
+        db.ChangeTracker.Clear();
+        var unchangedFilm = await db.OscarFilms.AsNoTracking()
+            .Include(candidate => candidate.Title)
+            .SingleAsync(candidate => candidate.Id == film.Id);
+        Assert.Equal("pending", unchangedFilm.EnrichmentStatus);
+        Assert.Equal("tt11111111", unchangedFilm.ImdbId);
+        Assert.Equal("tt11111111", unchangedFilm.Title.ImdbId);
+        Assert.Equal("Identity Film", unchangedFilm.Title.TitleText);
+        Assert.Null(unchangedFilm.Title.ImdbRating);
+    }
+
     private static OscarFilm CreateFilm(
         string stableKey,
         string titleText,

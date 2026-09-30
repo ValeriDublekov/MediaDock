@@ -25,7 +25,7 @@ public sealed class OscarDatasetImporterTests
             "Ceremony", "Year", "Class", "CanonicalCategory", "Category", "Film", "FilmId",
             "Name", "Nominees", "NomineeIds", "Winner", "Detail");
         var row = string.Join('\t',
-            "98", "2025", "Title", "BEST PICTURE", "BEST PICTURE", "Tab Film", "tt12345678",
+            "98", "2025", "Title", "BEST PICTURE", "BEST PICTURE", "Tab Film", " TT12345678 ",
             "Producers", "Producer A|Producer B", "nm0000001|nm0000002", "True", "");
         var tsvPath = Path.Combine(Path.GetTempPath(), $"mediadock-oscar-{Guid.NewGuid():N}.tsv");
         await File.WriteAllTextAsync(tsvPath, $"{headers}{Environment.NewLine}{row}{Environment.NewLine}");
@@ -169,6 +169,8 @@ public sealed class OscarDatasetImporterTests
             Assert.Equal("New Film", placeholder.TitleText);
             Assert.Equal(2025, placeholder.Year);
             Assert.Null(placeholder.ImdbRating);
+            Assert.Null(placeholder.FirstSeenAt);
+            Assert.Null(placeholder.LastSeenAt);
 
             var importedFilm = await db.OscarFilms.SingleAsync(film => film.ImdbId == "tt9999999");
             importedFilm.EnrichmentStatus = "enriched";
@@ -193,6 +195,55 @@ public sealed class OscarDatasetImporterTests
             var preservedFilm = await db.OscarFilms.SingleAsync(film => film.ImdbId == "tt9999999");
             Assert.Equal("enriched", preservedFilm.EnrichmentStatus);
             Assert.Equal(1, preservedFilm.EnrichmentAttemptCount);
+        }
+        finally
+        {
+            File.Delete(csvPath);
+        }
+    }
+
+    [Fact]
+    public async Task ImportDoesNotMergeSameTitleAndYearWithDifferentImdbIds()
+    {
+        await using var postgres = PostgreSqlTestContainerBuilder.Create("mediadock_oscar_identity_conflict_test").Build();
+        await postgres.StartAsync();
+
+        var options = new DbContextOptionsBuilder<MediaDockDbContext>()
+            .UseNpgsql(postgres.GetConnectionString())
+            .Options;
+        await using var db = new MediaDockDbContext(options);
+        await db.Database.MigrateAsync();
+
+        var now = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero);
+        var existingTitle = new Title
+        {
+            TitleText = "Shared Film",
+            NormalizedTitle = "shared film",
+            Year = 2025,
+            MediaType = "movie",
+            ImdbId = "tt11111111",
+            UpdatedAt = now
+        };
+        db.Titles.Add(existingTitle);
+        await db.SaveChangesAsync();
+
+        const string csv = """
+            Ceremony,Year,Class,CanonicalCategory,Category,Film,FilmId,Name,Nominees,NomineeIds,Detail,Winner
+            98,2025,Title,BEST PICTURE,BEST PICTURE,Shared Film,TT22222222,Producers,Producers,,,True
+            """;
+        var csvPath = Path.Combine(Path.GetTempPath(), $"mediadock-oscar-{Guid.NewGuid():N}.csv");
+
+        try
+        {
+            await File.WriteAllTextAsync(csvPath, csv);
+            var summary = await new OscarDatasetImporter(db).ImportAsync(csvPath);
+
+            Assert.Equal(1, summary.TitlesCreated);
+            Assert.Equal(2, await db.Titles.CountAsync());
+            var importedFilm = await db.OscarFilms.Include(film => film.Title).SingleAsync();
+            Assert.Equal("tt22222222", importedFilm.ImdbId);
+            Assert.NotEqual(existingTitle.Id, importedFilm.TitleId);
+            Assert.Equal("tt11111111", (await db.Titles.SingleAsync(title => title.Id == existingTitle.Id)).ImdbId);
         }
         finally
         {

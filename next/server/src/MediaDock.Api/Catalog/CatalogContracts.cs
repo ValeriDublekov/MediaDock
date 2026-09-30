@@ -61,7 +61,7 @@ public sealed record CatalogTitleResponse(
     string? PosterUrl,
     IReadOnlyList<string> Genres,
     IReadOnlyList<string> Countries,
-    DateTimeOffset LastSeenAt,
+    DateTimeOffset? LastSeenAt,
     int OccurrenceCount);
 
 /// <summary>Full metadata for one catalog title.</summary>
@@ -87,8 +87,8 @@ public sealed record TitleDetailsResponse(
     string? Runtime,
     string? Awards,
     string? BoxOffice,
-    DateTimeOffset FirstSeenAt,
-    DateTimeOffset LastSeenAt,
+    DateTimeOffset? FirstSeenAt,
+    DateTimeOffset? LastSeenAt,
     DateTimeOffset UpdatedAt,
     int OccurrenceCount);
 

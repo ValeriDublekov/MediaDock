@@ -13,6 +13,9 @@ internal sealed class TitleConfiguration : IEntityTypeConfiguration<Title>
             table.HasCheckConstraint("ck_titles_media_type", "media_type IN ('movie', 'series', 'documentary', 'short')");
             table.HasCheckConstraint("ck_titles_source_type", "source_type IS NULL OR source_type IN ('movie', 'series')");
             table.HasCheckConstraint("ck_titles_content_kind", "content_kind IS NULL OR content_kind IN ('standard', 'documentary', 'short')");
+            table.HasCheckConstraint(
+                "ck_titles_seen_range",
+                "(first_seen_at IS NULL AND last_seen_at IS NULL) OR (first_seen_at IS NOT NULL AND last_seen_at IS NOT NULL AND first_seen_at <= last_seen_at)");
         });
         builder.HasKey(entity => entity.Id).HasName("pk_titles");
         builder.Property(entity => entity.Id).UseIdentityByDefaultColumn().HasColumnName("id");
@@ -46,7 +49,12 @@ internal sealed class TitleConfiguration : IEntityTypeConfiguration<Title>
         builder.Property(entity => entity.FirstSeenAt).HasColumnName("first_seen_at");
         builder.Property(entity => entity.LastSeenAt).HasColumnName("last_seen_at");
         builder.Property(entity => entity.UpdatedAt).HasColumnName("updated_at");
-        builder.HasIndex(entity => entity.NormalizedTitle).HasDatabaseName("ix_titles_normalized_title");
+        builder.HasIndex(entity => entity.ImdbId)
+            .IsUnique()
+            .HasDatabaseName("ux_titles_imdb_id")
+            .HasFilter("imdb_id IS NOT NULL AND btrim(imdb_id) <> ''");
+        builder.HasIndex(entity => new { entity.NormalizedTitle, entity.Year, entity.MediaType })
+            .HasDatabaseName("ix_titles_normalized_title_year_media_type");
     }
 }
 
@@ -71,7 +79,8 @@ internal sealed class OccurrenceConfiguration : IEntityTypeConfiguration<Occurre
 {
     public void Configure(EntityTypeBuilder<Occurrence> builder)
     {
-        builder.ToTable("occurrences");
+        builder.ToTable("occurrences", table =>
+            table.HasCheckConstraint("ck_occurrences_seen_range", "first_seen_at <= last_seen_at"));
         builder.HasKey(entity => entity.Id).HasName("pk_occurrences");
         builder.HasAlternateKey(entity => new { entity.SourceId, entity.SourceItemKey })
             .HasName("ak_occurrences_source_id_source_item_key");

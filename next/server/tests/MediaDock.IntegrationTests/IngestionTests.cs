@@ -3,12 +3,14 @@ using System.Text;
 using System.Text.Json;
 using MediaDock.Application.Ingestion;
 using MediaDock.Application.Metadata;
+using MediaDock.Application.Parsing;
 using MediaDock.Infrastructure.Ingestion;
 using MediaDock.Infrastructure.Metadata;
 using MediaDock.Infrastructure.Persistence;
 using MediaDock.Infrastructure.Persistence.Entities;
 using MediaDock.Infrastructure.Rss;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace MediaDock.IntegrationTests;
 
@@ -30,6 +32,7 @@ public sealed class IngestionTests
             .Options;
         await using var db = new MediaDockDbContext(options);
         await db.Database.MigrateAsync();
+        var importedAt = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero);
         db.Sources.Add(new Source
         {
             StableKey = "movies-main",
@@ -37,7 +40,32 @@ public sealed class IngestionTests
             FeedType = "movie",
             Url = SuccessfulFeedUrl
         });
+        db.OscarFilms.Add(new OscarFilm
+        {
+            StableKey = "imdb:tt0133093",
+            FilmTitle = "The Matrix",
+            NormalizedTitle = "the matrix",
+            FilmYear = 1999,
+            ImdbId = "tt0133093",
+            EnrichmentStatus = "pending",
+            ImportedAt = importedAt,
+            UpdatedAt = importedAt,
+            Title = new Title
+            {
+                TitleText = "The Matrix",
+                NormalizedTitle = "the matrix",
+                Year = 1999,
+                MediaType = "movie",
+                SourceType = "movie",
+                ContentKind = "standard",
+                ImdbId = "tt0133093",
+                UpdatedAt = importedAt
+            }
+        });
         await db.SaveChangesAsync();
+        var oscarTitle = await db.OscarFilms.Include(film => film.Title).Select(film => film.Title).SingleAsync();
+        Assert.Null(oscarTitle.FirstSeenAt);
+        Assert.Null(oscarTitle.LastSeenAt);
 
         var handler = new MockProviderHandler();
         using var httpClient = new HttpClient(handler)
@@ -49,12 +77,16 @@ public sealed class IngestionTests
 
         var first = await service.RunAsync();
         Assert.Equal("succeeded", first.Summary.Status);
-        Assert.Equal(1, first.Summary.TitlesCreated);
+        Assert.Equal(0, first.Summary.TitlesCreated);
         Assert.Equal(1, first.Summary.OccurrencesCreated);
         Assert.Equal(3, first.Summary.OmdbRequests);
         Assert.Equal(1, await db.Titles.CountAsync());
         Assert.Equal(1, await db.Occurrences.CountAsync());
         Assert.Contains(await db.MetadataCache.ToListAsync(), entry => entry.Status == "confirmed_not_found");
+        var matrixFirstSeenAt = (await db.Titles.AsNoTracking()
+            .SingleAsync(title => title.ImdbId == "tt0133093")).FirstSeenAt;
+        Assert.NotNull(matrixFirstSeenAt);
+        Assert.NotNull((await db.Titles.SingleAsync(title => title.ImdbId == "tt0133093")).LastSeenAt);
 
         var repeated = await service.RunAsync();
         Assert.Equal("succeeded", repeated.Summary.Status);
@@ -64,6 +96,9 @@ public sealed class IngestionTests
         Assert.Equal(3, handler.OmdbRequestCount);
         Assert.Equal(1, await db.Titles.CountAsync());
         Assert.Equal(1, await db.Occurrences.CountAsync());
+        Assert.Equal(
+            matrixFirstSeenAt,
+            (await db.Titles.AsNoTracking().SingleAsync(title => title.ImdbId == "tt0133093")).FirstSeenAt);
 
         var source = await db.Sources.SingleAsync();
         source.Url = PartialFeedUrl;
@@ -95,6 +130,119 @@ public sealed class IngestionTests
         Assert.DoesNotContain(logs, log => log.RawTitle.Contains(FakeApiKey, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task UpsertDoesNotMergeSameTitleAndYearWithDifferentImdbIds()
+    {
+        await using var postgres = PostgreSqlTestContainerBuilder.Create("mediadock_ingestion_identity_conflict_test").Build();
+        await postgres.StartAsync();
+
+        var options = new DbContextOptionsBuilder<MediaDockDbContext>()
+            .UseNpgsql(postgres.GetConnectionString())
+            .Options;
+        await using var db = new MediaDockDbContext(options);
+        await db.Database.MigrateAsync();
+
+        var now = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero);
+        var source = new Source
+        {
+            StableKey = "movies-identity",
+            Name = "Movies",
+            FeedType = "movie",
+            Url = SuccessfulFeedUrl
+        };
+        var existingTitle = new Title
+        {
+            TitleText = "Shared Film",
+            NormalizedTitle = "shared film",
+            Year = 2020,
+            MediaType = "movie",
+            ImdbId = "tt11111111",
+            FirstSeenAt = now,
+            LastSeenAt = now,
+            UpdatedAt = now
+        };
+        db.Sources.Add(source);
+        db.Titles.Add(existingTitle);
+        await db.SaveChangesAsync();
+
+        var sourceInfo = new IngestionSource(source.Id, source.StableKey, source.Name, source.FeedType, source.Url);
+        var feedItem = new IngestionFeedItem(
+            "Shared Film (2020)",
+            "identity-conflict",
+            "https://feed.example/topic/identity-conflict",
+            now);
+        var result = await new PostgresRssIngestionRepository(db).UpsertCatalogItemAsync(
+            sourceInfo,
+            feedItem,
+            SourceItemIdentity.From(feedItem.FeedEntryId, feedItem.TorrentUrl),
+            RutrackerTitleParser.Parse(feedItem.Title, "movie"),
+            CreateMetadata("Shared Film", 2020, "TT22222222"),
+            now);
+
+        Assert.True(result.TitleCreated);
+        Assert.Equal(2, await db.Titles.CountAsync());
+        Assert.Equal("tt11111111", (await db.Titles.SingleAsync(title => title.Id == existingTitle.Id)).ImdbId);
+        Assert.Equal(1, await db.Titles.CountAsync(title => title.ImdbId == "tt22222222"));
+    }
+
+    [Fact]
+    public async Task ConcurrentUpsertsForOneImdbIdReuseTheCanonicalTitle()
+    {
+        await using var postgres = PostgreSqlTestContainerBuilder.Create("mediadock_ingestion_concurrency_test").Build();
+        await postgres.StartAsync();
+
+        var connectionString = postgres.GetConnectionString();
+        var seedOptions = new DbContextOptionsBuilder<MediaDockDbContext>()
+            .UseNpgsql(connectionString)
+            .Options;
+        long sourceId;
+        await using (var seedDb = new MediaDockDbContext(seedOptions))
+        {
+            await seedDb.Database.MigrateAsync();
+            var source = new Source
+            {
+                StableKey = "movies-concurrent",
+                Name = "Movies",
+                FeedType = "movie",
+                Url = SuccessfulFeedUrl
+            };
+            seedDb.Sources.Add(source);
+            await seedDb.SaveChangesAsync();
+            sourceId = source.Id;
+        }
+
+        var barrier = new ConcurrentSaveChangesInterceptor();
+        var concurrentOptions = new DbContextOptionsBuilder<MediaDockDbContext>()
+            .UseNpgsql(connectionString)
+            .AddInterceptors(barrier)
+            .Options;
+        var now = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero);
+        var sourceInfo = new IngestionSource(sourceId, "movies-concurrent", "Movies", "movie", SuccessfulFeedUrl);
+        var parsed = RutrackerTitleParser.Parse("Shared Film (2020)", "movie");
+        var results = await Task.WhenAll(Enumerable.Range(1, 2).Select(async index =>
+        {
+            await using var context = new MediaDockDbContext(concurrentOptions);
+            var feedItem = new IngestionFeedItem(
+                "Shared Film (2020)",
+                $"concurrent-{index}",
+                $"https://feed.example/topic/concurrent-{index}",
+                now);
+            return await new PostgresRssIngestionRepository(context).UpsertCatalogItemAsync(
+                sourceInfo,
+                feedItem,
+                SourceItemIdentity.From(feedItem.FeedEntryId, feedItem.TorrentUrl),
+                parsed,
+                CreateMetadata("Shared Film", 2020, index == 1 ? "TT33333333" : "tt33333333"),
+                now);
+        }));
+
+        await using var verifyDb = new MediaDockDbContext(seedOptions);
+        Assert.Equal(1, results.Count(result => result.TitleCreated));
+        Assert.Equal(1, await verifyDb.Titles.CountAsync());
+        Assert.Equal("tt33333333", (await verifyDb.Titles.SingleAsync()).ImdbId);
+        Assert.Equal(2, await verifyDb.Occurrences.CountAsync());
+    }
+
     private static RssIngestionService CreateService(
         MediaDockDbContext db,
         HttpClient httpClient,
@@ -108,6 +256,10 @@ public sealed class IngestionTests
             new RssFeedTransportAdapter(rssTransport),
             resolver);
     }
+
+    private static MetadataDetails CreateMetadata(string title, int year, string imdbId) =>
+        new(title, year, imdbId, "movie", "movie", "standard", null, null, null, null, [], [],
+            null, null, null, null, null, null);
 
     private sealed class MockProviderHandler : HttpMessageHandler
     {
@@ -221,6 +373,31 @@ public sealed class IngestionTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") });
+        }
+    }
+
+    private sealed class ConcurrentSaveChangesInterceptor : SaveChangesInterceptor
+    {
+        private readonly TaskCompletionSource _bothSaving = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _savingCount;
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            var count = Interlocked.Increment(ref _savingCount);
+            if (count <= 2)
+            {
+                if (count == 2)
+                {
+                    _bothSaving.TrySetResult();
+                }
+
+                await _bothSaving.Task.WaitAsync(TimeSpan.FromSeconds(20), cancellationToken);
+            }
+
+            return result;
         }
     }
 }

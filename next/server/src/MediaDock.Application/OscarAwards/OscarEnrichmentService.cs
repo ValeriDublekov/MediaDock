@@ -85,7 +85,7 @@ public sealed class OscarEnrichmentService
                 }
 
                 var attemptCount = candidate.AttemptCount + 1;
-                var update = CreateUpdate(resolution, attemptCount, attemptedAt);
+                var update = CreateUpdate(resolution, candidate, attemptCount, attemptedAt);
 
                 await _repository.SaveOutcomeAsync(candidate.Id, update, cancellationToken);
                 attemptedFilms++;
@@ -164,11 +164,26 @@ public sealed class OscarEnrichmentService
 
     private static OscarEnrichmentUpdate CreateUpdate(
         MetadataResolution resolution,
+        OscarEnrichmentCandidate candidate,
         int attemptCount,
         DateTimeOffset attemptedAt)
     {
         if (resolution.Status == MetadataLookupStatus.Found && resolution.Metadata is not null)
         {
+            var metadataImdbId = ImdbIdNormalizer.Normalize(resolution.Metadata.ImdbId);
+            if (!ImdbIdNormalizer.IsCompatible(candidate.ImdbId, candidate.TitleImdbId)
+                || !ImdbIdNormalizer.IsCompatible(candidate.ImdbId, metadataImdbId)
+                || !ImdbIdNormalizer.IsCompatible(candidate.TitleImdbId, metadataImdbId))
+            {
+                return new OscarEnrichmentUpdate(
+                    OscarEnrichmentStatuses.TemporaryError,
+                    attemptCount,
+                    attemptedAt,
+                    attemptedAt.Add(GetRetryDelay(attemptCount)),
+                    "imdb_id_mismatch",
+                    null);
+            }
+
             return new OscarEnrichmentUpdate(
                 OscarEnrichmentStatuses.Enriched,
                 attemptCount,

@@ -20,7 +20,7 @@ export interface CatalogTitle {
   posterUrl: string | null
   genres: string[]
   countries: string[]
-  lastSeenAt: string
+  lastSeenAt: string | null
   occurrenceCount: number
 }
 
@@ -36,7 +36,7 @@ export interface TitleDetails extends CatalogTitle {
   runtime: string | null
   awards: string | null
   boxOffice: string | null
-  firstSeenAt: string
+  firstSeenAt: string | null
   updatedAt: string
 }
 

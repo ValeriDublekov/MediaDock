@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using MediaDock.Application.Metadata;
 using Microsoft.VisualBasic.FileIO;
 
 namespace MediaDock.Infrastructure.OscarAwards;
@@ -136,7 +137,7 @@ internal static class OscarCsvDatasetReader
                 canonicalCategory,
                 ReadField(fields, columnIndexes, "Category"),
                 filmTitle,
-                NullIfEmpty(ReadField(fields, columnIndexes, "FilmId")),
+                ImdbIdNormalizer.Normalize(NullIfEmpty(ReadField(fields, columnIndexes, "FilmId"))),
                 ReadField(fields, columnIndexes, "Name"),
                 ReadField(fields, columnIndexes, "Nominees"),
                 ReadField(fields, columnIndexes, "NomineeIds"),
