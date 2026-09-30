@@ -6,6 +6,7 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
+Environment=DOCKER_CONFIG=/var/lib/mediadock-deploy/docker
 EnvironmentFile=/etc/default/mediadock-next-deploy
 ExecStart=/usr/local/sbin/mediadock-next-deploy
 User=root

@@ -67,6 +67,7 @@ sudo install -o root -g root -m 0644 next/deploy/systemd/mediadock-next-deploy.s
 sudo install -o root -g root -m 0644 next/deploy/systemd/mediadock-next-deploy.timer /etc/systemd/system/mediadock-next-deploy.timer
 sudo install -o root -g root -m 0600 next/deploy/systemd/mediadock-next-deploy.env.example /etc/default/mediadock-next-deploy
 sudo install -d -o root -g mediadock -m 0750 /var/lib/mediadock-deploy
+sudo install -d -o root -g root -m 0700 /var/lib/mediadock-deploy/docker
 sudo install -o root -g mediadock -m 0660 /dev/null /var/lib/mediadock-deploy/mediadock-next-operation.lock
 sudo systemctl daemon-reload
 sudo systemctl is-enabled mediadock-next-deploy.timer || true
