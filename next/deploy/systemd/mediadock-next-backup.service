@@ -1,0 +1,18 @@
+[Unit]
+Description=Daily MediaDock PostgreSQL dump
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+Before=homeserver-restic-backup.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mediadock-next-backup
+User=root
+Group=root
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+NoNewPrivileges=true
+ReadWritePaths=/opt/docker/backups/mediadock-next /run/lock
+TimeoutStartSec=15min

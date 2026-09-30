@@ -106,6 +106,8 @@ run_logged dotnet-integration docker run --rm \
     --env DOTNET_CLI_HOME=/tmp/dotnet-home \
     --env NUGET_PACKAGES=/tmp/nuget-packages \
     --env DOCKER_HOST=unix:///var/run/docker.sock \
+    --env TESTCONTAINERS_HOST_OVERRIDE=127.0.0.1 \
+    --env TESTCONTAINERS_RYUK_DISABLED=true \
     --mount "type=bind,source=$SERVER_ROOT,target=/workspace/server" \
     --mount "type=bind,source=$TEMP_DIR/nuget,target=/tmp/nuget-packages" \
     --mount "type=bind,source=$DOCKER_SOCKET,target=/var/run/docker.sock" \

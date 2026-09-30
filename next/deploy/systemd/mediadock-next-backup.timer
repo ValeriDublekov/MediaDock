@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily MediaDock PostgreSQL dump schedule
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+Persistent=true
+Unit=mediadock-next-backup.service
+
+[Install]
+WantedBy=timers.target

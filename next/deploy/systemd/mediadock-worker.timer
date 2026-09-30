@@ -1,8 +1,9 @@
 [Unit]
-Description=Daily MediaDock RSS ingestion schedule
+Description=Twice-daily MediaDock RSS ingestion schedule
 
 [Timer]
-OnCalendar=*-*-* 03:17:00 Europe/Sofia
+OnCalendar=*-*-* 07:00:00 Europe/Sofia
+OnCalendar=*-*-* 18:00:00 Europe/Sofia
 Persistent=true
 Unit=mediadock-worker.service
 
