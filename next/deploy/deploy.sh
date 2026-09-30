@@ -190,7 +190,7 @@ fi
 
 gate_log="/var/log/mediadock-next-gate-$target_tag.log"
 install -o root -g root -m 0600 /dev/null "$gate_log"
-if ! runuser -u mediadock -g docker -- env HOME=/var/lib/mediadock DEPLOY_COMMIT="$target_sha" \
+if ! runuser -u mediadock -g docker -- env -u DOCKER_CONFIG HOME=/var/lib/mediadock DEPLOY_COMMIT="$target_sha" \
     bash "$staging_dir/next/deploy/test.sh" > "$gate_log" 2>&1; then
     printf 'The clean GitHub staging gate failed for %s.\n' "$target_sha" >&2
     exit 1
