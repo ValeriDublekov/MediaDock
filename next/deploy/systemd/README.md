@@ -45,26 +45,29 @@ It creates a clean worktree without `.env`, runs `next/deploy/test.sh`, builds
 images tagged with the full commit SHA, creates and validates a database dump
 before the migration command, and checks `/health/ready` plus the configured
 API bind after startup. It records the deployed SHA in
-`/var/lib/mediadock/deploy-state` and root-only gate/deploy logs under
-`/var/log`.
+`/var/lib/mediadock-deploy`; that directory is root-owned and group-readable by
+the Worker service account, while its state files remain root-managed. Gate and
+deployment logs under `/var/log` are root-only.
 
 The deployment unit and Worker share
-`/run/lock/mediadock-next-operation.lock`; a Worker run is skipped while a
-deployment holds the lock. The deployment script does not automatically roll
-back after a migration or health failure. It leaves the API stopped or on the
-failed version and records the previous image SHA so an operator can choose a
-validated restore point.
+`/var/lib/mediadock-deploy/mediadock-next-operation.lock`; the persistent lock survives
+reboots, and a Worker run is skipped while deployment holds it. Immediately
+before stopping the API, deployment writes `/var/lib/mediadock-deploy/deploy-failed`
+with the target SHA, last-good SHA, and exact validated dump path. A failed
+migration leaves this marker in place; later deployments and Worker runs refuse
+to proceed until an operator restores and verifies the previous state.
 
 Install the files and host-only bind configuration, but keep the timer disabled
 until the clean-main gate and unit validation have passed:
 
 ```sh
 sudo install -o root -g root -m 0750 next/deploy/deploy.sh /usr/local/sbin/mediadock-next-deploy
-sudo install -o root -g root -m 0750 next/deploy/worker-run.sh /usr/local/sbin/mediadock-next-worker
+sudo install -o root -g root -m 0755 next/deploy/worker-run.sh /usr/local/sbin/mediadock-next-worker
 sudo install -o root -g root -m 0644 next/deploy/systemd/mediadock-next-deploy.service /etc/systemd/system/mediadock-next-deploy.service
 sudo install -o root -g root -m 0644 next/deploy/systemd/mediadock-next-deploy.timer /etc/systemd/system/mediadock-next-deploy.timer
 sudo install -o root -g root -m 0600 next/deploy/systemd/mediadock-next-deploy.env.example /etc/default/mediadock-next-deploy
-sudo install -o root -g mediadock -m 0660 /dev/null /run/lock/mediadock-next-operation.lock
+sudo install -d -o root -g mediadock -m 0750 /var/lib/mediadock-deploy
+sudo install -o root -g mediadock -m 0660 /dev/null /var/lib/mediadock-deploy/mediadock-next-operation.lock
 sudo systemctl daemon-reload
 sudo systemctl is-enabled mediadock-next-deploy.timer || true
 ```
@@ -78,13 +81,37 @@ sudo systemctl show mediadock-next-deploy.service --property=Result --value
 sudo systemctl status --no-pager mediadock-next-deploy.service
 ```
 
-For a failed migration or health check, first disable the timer and preserve
-the logs. Stop the API, choose the pre-migration `daily-*.dump` that was logged
-for that deployment, restore it into the production database with
-`pg_restore`, then start the preserved `mediadock-next-api:<previous_sha>` image
-and verify readiness. Do not start an older API against a database whose
-migration state has not been restored. Review the database and API state before
-re-enabling the timer.
+For a failed migration or health check, disable deployment and Worker schedules,
+preserve the logs, and do not start an older API until the pre-migration schema
+has been restored. The deployment log records the dump path; the last successful
+`deploy-state` remains unchanged until recovery. The failure marker records the
+exact dump path and last-good API SHA. Inspect those values before running the
+following recovery commands from Bash:
+
+```sh
+sudo systemctl disable --now mediadock-next-deploy.timer
+sudo systemctl disable --now mediadock-worker.timer 2>/dev/null || true
+sudo systemctl stop mediadock-worker.service 2>/dev/null || true
+sudo cat /var/lib/mediadock-deploy/deploy-failed
+app_dir=/opt/docker/projects/mediadock-next/next
+dump=$(sudo awk -F= '$1 == "pre_migration_dump" { print $2; exit }' /var/lib/mediadock-deploy/deploy-failed)
+previous_sha=$(sudo awk -F= '$1 == "previous_sha" { print $2; exit }' /var/lib/mediadock-deploy/deploy-failed)
+compose=(docker compose --project-name mediadock-next --project-directory "$app_dir" --env-file "$app_dir/.env" --file "$app_dir/compose.yaml")
+sudo "${compose[@]}" stop api
+sudo docker cp "$dump" mediadock-next-db-1:/tmp/mediadock-rollback.dump
+sudo docker exec -u 0 mediadock-next-db-1 chmod 0644 /tmp/mediadock-rollback.dump
+sudo "${compose[@]}" exec -T db sh -c 'dropdb -U "$POSTGRES_USER" "$POSTGRES_DB" && createdb -U "$POSTGRES_USER" "$POSTGRES_DB" && pg_restore --exit-on-error -U "$POSTGRES_USER" -d "$POSTGRES_DB" /tmp/mediadock-rollback.dump'
+sudo docker exec -u 0 mediadock-next-db-1 rm -f /tmp/mediadock-rollback.dump
+sudo env API_IMAGE="mediadock-next-api:$previous_sha" WORKER_IMAGE="mediadock-next-worker:$previous_sha" "${compose[@]}" up -d --no-build api
+api_address=$(sudo awk -F= '$1 == "APP_BIND_ADDRESS" { print $2; exit }' /etc/default/mediadock-next-deploy)
+api_port=$(sudo awk -F= '$1 == "APP_PORT" { print $2; exit }' /etc/default/mediadock-next-deploy)
+curl --fail --silent --show-error "http://$api_address:$api_port/health/ready"
+sudo rm -f /var/lib/mediadock-deploy/deploy-failed
+```
+
+Confirm the marker values and restore result before removing the marker. Keep
+the dump root-only; it contains the database-stored OMDb key. Review database
+and API state before re-enabling either schedule.
 
 Only after the manual deployment and rollback materials are reviewed may the
 timer be enabled:
@@ -99,11 +126,20 @@ more scheduled times. systemd coalesces the missed activations into at most one
 immediate run; it does not replay each missed day. PostgreSQL advisory locking
 also prevents a manual one-shot scan from overlapping the scheduled run.
 
-After installing the app and reviewing the host account and paths, an operator
-can install and enable the units with:
+After a successful deployment and only after the operator has configured the
+OMDb key and confirmed quota, enabled desired feeds, and approved scheduled
+scans, install the Worker wrapper and service. Do not install or enable its
+timer before those Step 8 conditions are met:
 
 ```sh
+sudo install -o root -g root -m 0755 next/deploy/worker-run.sh /usr/local/sbin/mediadock-next-worker
 sudo install -o root -g root -m 0644 next/deploy/systemd/mediadock-worker.service /etc/systemd/system/mediadock-worker.service
+sudo systemctl daemon-reload
+```
+
+Only after that acceptance, install and enable the schedule:
+
+```sh
 sudo install -o root -g root -m 0644 next/deploy/systemd/mediadock-worker.timer /etc/systemd/system/mediadock-worker.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now mediadock-worker.timer
@@ -115,10 +151,16 @@ Verify both schedules with:
 systemctl list-timers mediadock-next-backup.timer homeserver-restic-backup.timer mediadock-worker.timer
 ```
 
-To run an intentional manual scan from the Compose directory, use
-`docker compose run --rm worker --trigger manual`. The systemd service passes
-`--trigger schedule`. Both paths run RSS first, then optional Oscar enrichment
-within the same database lock. Configure the OMDb key and confirmed shared
+To run an intentional production manual scan after Step 8 approval, use the
+same wrapper so it shares the deployment lock:
+
+```sh
+sudo runuser -u mediadock -g docker -- /usr/local/sbin/mediadock-next-worker manual
+```
+
+The systemd service uses the wrapper's default `schedule` trigger. Both paths
+run RSS first, then optional Oscar enrichment within the same database lock.
+Configure the OMDb key and confirmed shared
 daily quota in the web UI before running the Worker; it reads those values and
 the Oscar limits from PostgreSQL on each invocation. Existing environment
 variables for these values are no longer used. Oscar enrichment is enabled

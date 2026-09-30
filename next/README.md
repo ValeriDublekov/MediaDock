@@ -59,6 +59,11 @@ The Worker is one-shot and excluded from the default stack. It loads the OMDb ke
 docker compose -f next/compose.yaml --profile worker run --rm worker --trigger manual
 ```
 
+This is an operational scan, not a health check. Do not install or enable the
+production Worker timer until the OMDb key and quota are confirmed in the UI,
+desired feeds are enabled, and the operator explicitly approves scheduled
+scans. The deployment setup intentionally leaves that timer uninstalled.
+
 The systemd schedule uses the same `worker` service with the `schedule` trigger. Configuration settings are read from PostgreSQL on each run, so UI changes apply without editing `.env` or restarting the timer. The shared daily HTTP limit covers RSS and Oscar attempts. The Oscar daily HTTP limit is an additional cap, not a reserved allotment, so RSS may consume the shared cap before Oscar runs. Oscar enrichment requires both a positive per-run film limit and a positive Oscar daily HTTP limit.
 
 PostgreSQL stores the shared total, Oscar count, and provider-quota stop flag by UTC date in `omdb_daily_usage`; it never stores the API key. Every non-cache HTTP attempt reserves a slot before sending, including fallback lookups and retries. Cache hits use no slot. A process failure between reservation and sending can conservatively leave a slot unused. A provider quota response blocks all further HTTP reservations for that UTC day, including after a Worker restart; reaching a configured cap stops the current task. Unprocessed Oscar candidates remain eligible. Worker output reports RSS and Oscar attempt counts separately.
