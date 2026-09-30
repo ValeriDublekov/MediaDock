@@ -16,12 +16,20 @@ public sealed class OmdbClient : IOmdbClient
     private readonly string _apiKey;
     private readonly TimeSpan _timeout;
     private readonly int _maximumResponseBytes;
+    private readonly IOmdbRequestBudget? _requestBudget;
+    private readonly int _dailyRequestLimit;
+    private readonly int _oscarDailyRequestLimit;
+    private readonly TimeProvider _timeProvider;
 
     public OmdbClient(
         HttpClient httpClient,
         string apiKey,
         TimeSpan? timeout = null,
-        int maximumResponseBytes = DefaultMaximumResponseBytes)
+        int maximumResponseBytes = DefaultMaximumResponseBytes,
+        IOmdbRequestBudget? requestBudget = null,
+        int dailyRequestLimit = int.MaxValue,
+        int oscarDailyRequestLimit = int.MaxValue,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         if (string.IsNullOrWhiteSpace(apiKey))
@@ -34,10 +42,19 @@ public sealed class OmdbClient : IOmdbClient
             throw new ArgumentOutOfRangeException(nameof(timeout));
         }
 
+        if (requestBudget is not null && (dailyRequestLimit <= 0 || oscarDailyRequestLimit < 0))
+        {
+            throw new ArgumentOutOfRangeException(nameof(dailyRequestLimit));
+        }
+
         _httpClient = httpClient;
         _apiKey = apiKey;
         _timeout = timeout ?? TimeSpan.FromSeconds(8);
         _maximumResponseBytes = maximumResponseBytes;
+        _requestBudget = requestBudget;
+        _dailyRequestLimit = dailyRequestLimit;
+        _oscarDailyRequestLimit = oscarDailyRequestLimit;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public static OmdbClient FromEnvironment(
@@ -49,20 +66,21 @@ public sealed class OmdbClient : IOmdbClient
         string title,
         int? year,
         string sourceType,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        OmdbRequestPurpose requestPurpose = OmdbRequestPurpose.RssIngestion)
     {
         if (string.IsNullOrWhiteSpace(title) || sourceType is not ("movie" or "series"))
         {
             return new MetadataLookupResult(MetadataLookupStatus.InvalidRequest, ErrorCode: "invalid_lookup");
         }
 
-        var first = await RequestAsync(title.Trim(), year, sourceType, cancellationToken);
+        var first = await RequestAsync(title.Trim(), year, sourceType, requestPurpose, cancellationToken);
         if (first.Status != MetadataLookupStatus.ConfirmedNotFound || year is null || sourceType == "series")
         {
             return first;
         }
 
-        var fallback = await RequestAsync(title.Trim(), null, sourceType, cancellationToken);
+        var fallback = await RequestAsync(title.Trim(), null, sourceType, requestPurpose, cancellationToken);
         return fallback with { HttpAttempts = first.HttpAttempts + fallback.HttpAttempts };
     }
 
@@ -70,8 +88,33 @@ public sealed class OmdbClient : IOmdbClient
         string title,
         int? year,
         string sourceType,
+        OmdbRequestPurpose requestPurpose,
         CancellationToken cancellationToken)
     {
+        var utcDate = DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime);
+        if (_requestBudget is not null)
+        {
+            if (requestPurpose == OmdbRequestPurpose.OscarEnrichment && _oscarDailyRequestLimit == 0)
+            {
+                return new MetadataLookupResult(
+                    MetadataLookupStatus.RequestBudgetExhausted,
+                    ErrorCode: "daily_budget_exhausted");
+            }
+
+            var reserved = await _requestBudget.TryReserveAsync(
+                utcDate,
+                requestPurpose,
+                _dailyRequestLimit,
+                _oscarDailyRequestLimit,
+                cancellationToken);
+            if (!reserved)
+            {
+                return new MetadataLookupResult(
+                    MetadataLookupStatus.RequestBudgetExhausted,
+                    ErrorCode: "daily_budget_exhausted");
+            }
+        }
+
         var query = new StringBuilder()
             .Append("apikey=").Append(Uri.EscapeDataString(_apiKey))
             .Append("&t=").Append(Uri.EscapeDataString(title))
@@ -93,6 +136,7 @@ public sealed class OmdbClient : IOmdbClient
                 timeoutSource.Token);
             if (response.StatusCode == HttpStatusCode.TooManyRequests)
             {
+                await MarkProviderQuotaExceededAsync(utcDate, cancellationToken);
                 return new MetadataLookupResult(MetadataLookupStatus.QuotaExceeded, HttpAttempts: 1, ErrorCode: "quota_exceeded");
             }
 
@@ -107,7 +151,13 @@ public sealed class OmdbClient : IOmdbClient
             }
 
             var body = await ReadBoundedAsync(response.Content, timeoutSource.Token);
-            return ParseResponse(body);
+            var result = ParseResponse(body);
+            if (result.Status == MetadataLookupStatus.QuotaExceeded)
+            {
+                await MarkProviderQuotaExceededAsync(utcDate, cancellationToken);
+            }
+
+            return result;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -128,6 +178,14 @@ public sealed class OmdbClient : IOmdbClient
         catch (InvalidDataException)
         {
             return new MetadataLookupResult(MetadataLookupStatus.ProviderFailure, HttpAttempts: 1, ErrorCode: "response_too_large");
+        }
+    }
+
+    private async Task MarkProviderQuotaExceededAsync(DateOnly utcDate, CancellationToken cancellationToken)
+    {
+        if (_requestBudget is not null)
+        {
+            await _requestBudget.MarkProviderQuotaExceededAsync(utcDate, cancellationToken);
         }
     }
 

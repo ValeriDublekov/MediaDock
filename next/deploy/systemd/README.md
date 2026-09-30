@@ -1,5 +1,9 @@
 # Host Schedule
 
+## LAN API Firewall
+
+The optional `mediadock-next-firewall.service` reads `/etc/default/mediadock-next-firewall`. Create that root-owned host file with `APP_BIND_ADDRESS`, `APP_PORT`, and `TRUSTED_LAN_CIDR` before enabling the unit; use a specific IPv4 bind and the intended trusted subnet. Keep the real host address and subnet out of Git. The unit limits filtering to the configured API destination and must not be treated as authentication.
+
 These host-side systemd units are for a single Ubuntu host. They expect the
 application and Compose `worker` service to be installed at
 `/opt/mediadock/next`; the Compose service is completed with the local stack in
@@ -26,6 +30,14 @@ sudo systemctl enable --now mediadock-worker.timer
 
 To run an intentional manual scan from the Compose directory, use
 `docker compose run --rm worker --trigger manual`. The systemd service passes
-`--trigger schedule`. Both paths use the same ingestion use case and database
-lock. Check the timer with `systemctl list-timers mediadock-worker.timer` and
-service output with `journalctl -u mediadock-worker.service`.
+`--trigger schedule`. Both paths run RSS first, then optional Oscar enrichment
+within the same database lock. Set `OMDB_DAILY_REQUEST_LIMIT` in the Compose
+`.env` to the verified daily quota for the configured OMDb key; the Worker
+refuses an unset, zero, or invalid value. `OSCAR_ENRICHMENT_MAX_REQUESTS_PER_DAY`
+is the Oscar-only daily maximum, and `OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN` is the
+per-invocation candidate cap. Both Oscar values must be positive to enable
+enrichment. The shared total and Oscar count are persisted by UTC day in
+PostgreSQL; fallback requests and retries each consume a slot, while cache hits
+do not. The Oscar maximum is not reserved from RSS usage. Check the timer with
+`systemctl list-timers mediadock-worker.timer` and service output with
+`journalctl -u mediadock-worker.service`.

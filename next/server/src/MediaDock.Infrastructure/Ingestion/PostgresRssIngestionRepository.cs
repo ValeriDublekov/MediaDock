@@ -1,6 +1,7 @@
 using MediaDock.Application.Ingestion;
 using MediaDock.Application.Metadata;
 using MediaDock.Application.Parsing;
+using MediaDock.Infrastructure.Metadata;
 using MediaDock.Infrastructure.Persistence;
 using MediaDock.Infrastructure.Persistence.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -62,7 +63,7 @@ public sealed class PostgresRssIngestionRepository(MediaDockDbContext dbContext)
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
         try
         {
-            var normalizedTitle = NormalizeTitle(metadata.Title);
+            var normalizedTitle = TitleMetadataMapper.NormalizeTitle(metadata.Title);
             Title? title = null;
             if (!string.IsNullOrWhiteSpace(metadata.ImdbId))
             {
@@ -85,7 +86,7 @@ public sealed class PostgresRssIngestionRepository(MediaDockDbContext dbContext)
                 dbContext.Titles.Add(title);
             }
 
-            ApplyMetadata(title, metadata, normalizedTitle, observedAt);
+            TitleMetadataMapper.Apply(title, metadata, observedAt);
 
             var occurrence = await dbContext.Occurrences.FirstOrDefaultAsync(
                 entity => entity.SourceId == source.Id && entity.SourceItemKey == sourceItemKey,
@@ -179,37 +180,4 @@ public sealed class PostgresRssIngestionRepository(MediaDockDbContext dbContext)
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    private static void ApplyMetadata(
-        Title title,
-        MetadataDetails metadata,
-        string normalizedTitle,
-        DateTimeOffset observedAt)
-    {
-        title.TitleText = metadata.Title;
-        title.NormalizedTitle = normalizedTitle;
-        title.Year = metadata.Year;
-        title.MediaType = metadata.MediaType;
-        title.SourceType = metadata.SourceType;
-        title.ContentKind = metadata.ContentKind;
-        title.BroadcastRangeStartYear = metadata.BroadcastRange?.StartYear;
-        title.BroadcastRangeEndYear = metadata.BroadcastRange?.EndYear;
-        title.BroadcastRangeRaw = metadata.BroadcastRange?.Raw;
-        title.ImdbId = metadata.ImdbId;
-        title.ImdbRating = metadata.ImdbRating;
-        title.ImdbVotes = metadata.ImdbVotes;
-        title.Metascore = metadata.Metascore;
-        title.Genres = metadata.Genres;
-        title.Countries = metadata.Countries;
-        title.Director = metadata.Director;
-        title.Plot = metadata.Plot;
-        title.PosterUrl = metadata.PosterUrl;
-        title.Runtime = metadata.Runtime;
-        title.Awards = metadata.Awards;
-        title.BoxOffice = metadata.BoxOffice;
-        title.LastSeenAt = observedAt;
-        title.UpdatedAt = observedAt;
-    }
-
-    private static string NormalizeTitle(string title) =>
-        string.Join(' ', title.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
 }

@@ -1,5 +1,6 @@
 using MediaDock.Application.Ingestion;
 using MediaDock.Application.Metadata;
+using MediaDock.Application.OscarAwards;
 using MediaDock.Infrastructure.Ingestion;
 using MediaDock.Infrastructure.Metadata;
 using MediaDock.Infrastructure.OscarAwards;
@@ -29,6 +30,44 @@ internal static class WorkerCommand
         }
 
         var builder = Host.CreateApplicationBuilder(Array.Empty<string>());
+        var maximumOscarFilmsPerRun = 0;
+        var dailyOmdbRequestLimit = 0;
+        var maximumOscarRequestsPerDay = 0;
+        if (trigger is not null)
+        {
+            var configuredLimit = builder.Configuration["OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN"];
+            if (!string.IsNullOrWhiteSpace(configuredLimit)
+                && (!int.TryParse(configuredLimit, out maximumOscarFilmsPerRun) || maximumOscarFilmsPerRun < 0))
+            {
+                Console.Error.WriteLine("OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN must be a non-negative integer.");
+                return 2;
+            }
+
+            var configuredDailyLimit = builder.Configuration["OMDB_DAILY_REQUEST_LIMIT"];
+            if (!int.TryParse(configuredDailyLimit, out dailyOmdbRequestLimit) || dailyOmdbRequestLimit <= 0)
+            {
+                Console.Error.WriteLine(
+                    "OMDB_DAILY_REQUEST_LIMIT must be a positive integer matching the API key's daily quota.");
+                return 2;
+            }
+
+            var configuredOscarLimit = builder.Configuration["OSCAR_ENRICHMENT_MAX_REQUESTS_PER_DAY"];
+            if (!string.IsNullOrWhiteSpace(configuredOscarLimit)
+                && (!int.TryParse(configuredOscarLimit, out maximumOscarRequestsPerDay)
+                    || maximumOscarRequestsPerDay < 0))
+            {
+                Console.Error.WriteLine("OSCAR_ENRICHMENT_MAX_REQUESTS_PER_DAY must be a non-negative integer.");
+                return 2;
+            }
+
+            if (maximumOscarFilmsPerRun > 0 && maximumOscarRequestsPerDay == 0)
+            {
+                Console.Error.WriteLine(
+                    "OSCAR_ENRICHMENT_MAX_REQUESTS_PER_DAY must be positive when Oscar enrichment is enabled.");
+                return 2;
+            }
+        }
+
         var connectionString = builder.Configuration.GetConnectionString("MediaDock");
         if (string.IsNullOrWhiteSpace(connectionString))
         {
@@ -55,15 +94,24 @@ internal static class WorkerCommand
 
             var dnsResolver = new SystemRssDnsResolver();
             rssHttpClient = RssFeedHttpClientFactory.Create(dnsResolver);
-            omdbHttpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+            var configuredOmdbHttpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+            omdbHttpClient = configuredOmdbHttpClient;
             builder.Services.AddScoped<IRssIngestionRepository, PostgresRssIngestionRepository>();
             builder.Services.AddScoped<IMetadataCacheStore, PostgresMetadataCacheStore>();
+            builder.Services.AddScoped<IOmdbRequestBudget, PostgresOmdbRequestBudget>();
             builder.Services.AddScoped<MetadataResolver>();
+            builder.Services.AddScoped<IOscarEnrichmentRepository, PostgresOscarEnrichmentRepository>();
+            builder.Services.AddScoped<OscarEnrichmentService>();
             builder.Services.AddScoped<RssIngestionService>();
             builder.Services.AddSingleton<IRssDnsResolver>(dnsResolver);
             builder.Services.AddSingleton(new RssFeedTransport(rssHttpClient, dnsResolver));
             builder.Services.AddScoped<IRssFeedTransport, RssFeedTransportAdapter>();
-            builder.Services.AddSingleton<IOmdbClient>(new OmdbClient(omdbHttpClient, apiKey));
+            builder.Services.AddScoped<IOmdbClient>(serviceProvider => new OmdbClient(
+                configuredOmdbHttpClient,
+                apiKey,
+                requestBudget: serviceProvider.GetRequiredService<IOmdbRequestBudget>(),
+                dailyRequestLimit: dailyOmdbRequestLimit,
+                oscarDailyRequestLimit: maximumOscarRequestsPerDay));
         }
 
         using var rssHttpClientLifetime = rssHttpClient;
@@ -104,18 +152,41 @@ internal static class WorkerCommand
 
             Console.WriteLine(
                 $"RSS scan {result.RunId} {result.Summary.Status}: "
-                + $"{result.Summary.FeedsProcessed} feeds, {result.Summary.ErrorCount} errors.");
-            return result.Summary.Status == "succeeded" ? 0 : 1;
+                + $"{result.Summary.FeedsProcessed} feeds, {result.Summary.ErrorCount} errors, "
+                + $"{result.Summary.OmdbRequests} OMDb HTTP attempts.");
+
+            OscarEnrichmentSummary? oscarSummary = null;
+            if (maximumOscarFilmsPerRun == 0)
+            {
+                Console.WriteLine("Oscar enrichment skipped: OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN is 0.");
+            }
+            else
+            {
+                oscarSummary = await scope.ServiceProvider
+                    .GetRequiredService<OscarEnrichmentService>()
+                    .RunAsync(maximumOscarFilmsPerRun, applicationLifetime.ApplicationStopping);
+                var enrichmentStatus = oscarSummary.StoppedForQuota ? "stopped at quota" : "completed";
+                Console.WriteLine(
+                    $"Oscar enrichment {enrichmentStatus}: {oscarSummary.AttemptedFilms}/"
+                    + $"{oscarSummary.EligibleFilms} candidates, {oscarSummary.EnrichedFilms} enriched, "
+                    + $"{oscarSummary.NotFoundFilms} not found, {oscarSummary.TemporaryErrors} temporary errors, "
+                    + $"{oscarSummary.CacheHits} cache hits, {oscarSummary.HttpAttempts} OMDb HTTP attempts.");
+            }
+
+            return result.Summary.Status == "succeeded"
+                && (oscarSummary is null || oscarSummary.TemporaryErrors == 0)
+                    ? 0
+                    : 1;
         }
         catch (OperationCanceledException) when (applicationLifetime.ApplicationStopping.IsCancellationRequested)
         {
-            Console.Error.WriteLine(oscarCsvPath is null ? "RSS scan cancelled." : "Oscar import cancelled.");
+            Console.Error.WriteLine(oscarCsvPath is null ? "Worker cancelled." : "Oscar import cancelled.");
             return CancelledExitCode;
         }
         catch (Exception exception)
         {
             Console.Error.WriteLine(
-                $"{(oscarCsvPath is null ? "RSS scan" : "Oscar import")} failed ({exception.GetType().Name}).");
+                $"{(oscarCsvPath is null ? "Worker" : "Oscar import")} failed ({exception.GetType().Name}).");
             return 1;
         }
         finally

@@ -48,6 +48,57 @@ public sealed class OscarDatasetImporterTests
     }
 
     [Fact]
+    public async Task ImportMatchesTitleKeyedOscarFilmWhenUpdatedDatasetAddsImdbId()
+    {
+        await using var postgres = PostgreSqlTestContainerBuilder.Create("mediadock_oscar_identity_test").Build();
+        await postgres.StartAsync();
+
+        var options = new DbContextOptionsBuilder<MediaDockDbContext>()
+            .UseNpgsql(postgres.GetConnectionString())
+            .Options;
+        await using var db = new MediaDockDbContext(options);
+        await db.Database.MigrateAsync();
+
+        const string initialCsv = """
+            Ceremony,Year,Class,CanonicalCategory,Category,Film,FilmId,Name,Nominees,NomineeIds,Detail,Winner
+            98,2025,Title,BEST PICTURE,BEST PICTURE,Stable Film,,Producers,Producers,,,True
+            """;
+        const string updatedCsv = """
+            Ceremony,Year,Class,CanonicalCategory,Category,Film,FilmId,Name,Nominees,NomineeIds,Detail,Winner
+            98,2025,Title,BEST PICTURE,BEST PICTURE,Stable Film,tt12345678,Producers,Producers,,,True
+            """;
+        var csvPath = Path.Combine(Path.GetTempPath(), $"mediadock-oscar-{Guid.NewGuid():N}.csv");
+
+        try
+        {
+            var importer = new OscarDatasetImporter(db);
+            await File.WriteAllTextAsync(csvPath, initialCsv);
+            var initialImport = await importer.ImportAsync(csvPath);
+            var originalFilmId = (await db.OscarFilms.SingleAsync()).Id;
+
+            await File.WriteAllTextAsync(csvPath, updatedCsv);
+            var updatedImport = await importer.ImportAsync(csvPath);
+
+            Assert.Equal(1, initialImport.OscarFilmsCreated);
+            Assert.Equal(0, updatedImport.OscarFilmsCreated);
+            Assert.Equal(0, updatedImport.NominationsCreated);
+            Assert.Equal(0, updatedImport.NominationsUpdated);
+            Assert.Equal(1, await db.OscarFilms.CountAsync());
+            Assert.Equal(1, await db.OscarNominations.CountAsync());
+
+            var film = await db.OscarFilms.Include(item => item.Title).SingleAsync();
+            Assert.Equal(originalFilmId, film.Id);
+            Assert.Equal("tt12345678", film.ImdbId);
+            Assert.Equal("tt12345678", film.Title.ImdbId);
+            Assert.Equal(film.Id, (await db.OscarNominations.SingleAsync()).OscarFilmId);
+        }
+        finally
+        {
+            File.Delete(csvPath);
+        }
+    }
+
+    [Fact]
     public async Task ImportIsCategoryScopedIdempotentAndPreservesOmdbMetadata()
     {
         await using var postgres = PostgreSqlTestContainerBuilder.Create("mediadock_oscar_import_test").Build();

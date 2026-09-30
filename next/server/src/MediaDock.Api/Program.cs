@@ -1,6 +1,7 @@
 using MediaDock.Api.Catalog;
 using MediaDock.Api.Health;
 using MediaDock.Api.Middleware;
+using MediaDock.Api.OscarAwards;
 using MediaDock.Api.Operations;
 using MediaDock.Api.Sources;
 using MediaDock.Infrastructure.Persistence;
@@ -16,6 +17,7 @@ builder.Services.AddDbContext<MediaDockDbContext>(options =>
 	options.UseNpgsql(builder.Configuration.GetConnectionString("MediaDock")
 		?? throw new InvalidOperationException("ConnectionStrings:MediaDock must be configured.")));
 builder.Services.AddScoped<ICatalogApiService, CatalogApiService>();
+builder.Services.AddScoped<IOscarApiService, OscarApiService>();
 builder.Services.AddScoped<ISourceSettingsApiService, SourceSettingsApiService>();
 builder.Services.AddScoped<IOperationalHistoryApiService, OperationalHistoryApiService>();
 builder.Services.AddScoped<IReadinessService, ReadinessService>();
@@ -46,6 +48,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapHealthEndpoints();
 app.MapCatalogEndpoints();
+app.MapOscarEndpoints();
 app.MapSourceSettingsEndpoints();
 app.MapOperationalHistoryEndpoints();
 

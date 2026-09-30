@@ -40,6 +40,49 @@ export interface TitleDetails extends CatalogTitle {
   updatedAt: string
 }
 
+export type OscarEnrichmentStatus = 'pending' | 'enriched' | 'not_found' | 'temporary_error'
+
+export interface OscarNomination {
+  id: number
+  ceremony: number
+  class: string
+  canonicalCategory: string
+  category: string
+  name: string
+  nominees: string
+  nomineeIds: string
+  detail: string
+  isWinner: boolean
+}
+
+export interface OscarFilm {
+  id: number
+  titleId: number
+  title: string
+  metadataTitle: string
+  metadataYear: number | null
+  filmYear: number
+  imdbId: string | null
+  enrichmentStatus: OscarEnrichmentStatus
+  enrichmentAttemptCount: number
+  lastEnrichmentAttemptAt: string | null
+  nextEnrichmentAttemptAt: string | null
+  lastEnrichmentError: string | null
+  mediaType: MediaType
+  imdbRating: number | null
+  imdbVotes: number | null
+  metascore: number | null
+  genres: string[]
+  countries: string[]
+  director: string | null
+  plot: string | null
+  posterUrl: string | null
+  runtime: string | null
+  awards: string | null
+  boxOffice: string | null
+  nominations: OscarNomination[]
+}
+
 export interface Occurrence {
   id: number
   titleId: number
@@ -147,6 +190,17 @@ export interface CatalogQuery {
   genre?: string
   country?: string
   sourceId?: number
+}
+
+export interface OscarCatalogQuery {
+  page: number
+  pageSize: number
+  search?: string
+  yearFrom?: number
+  yearTo?: number
+  category?: string
+  result?: 'winner' | 'nominee'
+  enrichmentStatus?: OscarEnrichmentStatus
 }
 
 export interface ParseLogQuery {

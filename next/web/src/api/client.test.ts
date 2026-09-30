@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { ApiError, getCatalog, requestJson } from './client'
-import type { CatalogTitle, PageResponse } from './types'
+import { ApiError, getCatalog, getOscarFilm, getOscarFilms, requestJson } from './client'
+import type { CatalogTitle, OscarFilm, PageResponse } from './types'
 
 function response(status: number, value: unknown): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => value } as Response
@@ -31,6 +31,32 @@ describe('typed API client', () => {
     expect(requestUrl.searchParams.get('mediaType')).toBe('series')
     expect(requestUrl.searchParams.get('yearFrom')).toBe('1998')
     expect(requestUrl.searchParams.get('genre')).toBe('drama')
+  })
+
+  it('serializes Oscar filters and requests one film with its nomination details', async () => {
+    const page: PageResponse<OscarFilm> = { items: [], page: 2, pageSize: 20, totalCount: 0, totalPages: 0 }
+    const stub = fetchStub(response(200, page))
+
+    await getOscarFilms({
+      page: 2,
+      pageSize: 20,
+      search: 'Oppenheimer',
+      yearFrom: 2022,
+      yearTo: 2024,
+      category: 'BEST PICTURE',
+      result: 'winner',
+      enrichmentStatus: 'pending',
+    }, stub.fetcher)
+    await getOscarFilm(42, stub.fetcher)
+
+    const listUrl = new URL(String(stub.calls[0]?.input), 'http://localhost')
+    expect(listUrl.pathname).toBe('/api/oscars')
+    expect(listUrl.searchParams.get('yearFrom')).toBe('2022')
+    expect(listUrl.searchParams.get('yearTo')).toBe('2024')
+    expect(listUrl.searchParams.get('category')).toBe('BEST PICTURE')
+    expect(listUrl.searchParams.get('result')).toBe('winner')
+    expect(listUrl.searchParams.get('enrichmentStatus')).toBe('pending')
+    expect(String(stub.calls[1]?.input)).toBe('/api/oscars/42')
   })
 
   it('surfaces ProblemDetails validation errors with their HTTP status', async () => {

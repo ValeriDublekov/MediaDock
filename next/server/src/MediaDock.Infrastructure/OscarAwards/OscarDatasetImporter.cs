@@ -44,8 +44,24 @@ public sealed class OscarDatasetImporter(MediaDockDbContext dbContext)
         await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
         try
         {
-            var filmKeys = preparedRows.Select(row => row.FilmStableKey).Distinct(StringComparer.Ordinal).ToArray();
-            var nominationKeys = preparedRows.Select(row => row.ImportKey).Distinct(StringComparer.Ordinal).ToArray();
+            var filmKeys = preparedRows
+                .SelectMany(row => new[]
+                {
+                    row.FilmStableKey,
+                    CreateTitleFilmStableKey(row.NormalizedTitle, row.Row.FilmYear)
+                })
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var nominationKeys = preparedRows
+                .SelectMany(row => new[]
+                {
+                    row.ImportKey,
+                    CreateNominationImportKey(
+                        row.Row,
+                        CreateTitleFilmStableKey(row.NormalizedTitle, row.Row.FilmYear))
+                })
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
             var oscarFilms = await dbContext.OscarFilms
                 .Include(film => film.Title)
                 .Where(film => filmKeys.Contains(film.StableKey))
@@ -97,6 +113,17 @@ public sealed class OscarDatasetImporter(MediaDockDbContext dbContext)
                 cancellationToken.ThrowIfCancellationRequested();
                 var row = prepared.Row;
                 filmsByStableKey.TryGetValue(prepared.FilmStableKey, out var oscarFilm);
+                if (oscarFilm is null
+                    && filmsByStableKey.TryGetValue(
+                        CreateTitleFilmStableKey(prepared.NormalizedTitle, row.FilmYear),
+                        out var titleKeyedFilm)
+                    && (row.ImdbId is null
+                        || titleKeyedFilm.ImdbId is null
+                        || string.Equals(titleKeyedFilm.ImdbId, row.ImdbId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    oscarFilm = titleKeyedFilm;
+                }
+
                 var title = FindTitle(row, prepared.NormalizedTitle, titlesByImdbId, titlesByIdentity)
                     ?? oscarFilm?.Title;
                 if (title is null)
@@ -127,16 +154,17 @@ public sealed class OscarDatasetImporter(MediaDockDbContext dbContext)
                 }
 
                 ApplyFilmSourceData(oscarFilm, row, prepared.NormalizedTitle, title, now);
-                if (!nominationsByImportKey.TryGetValue(prepared.ImportKey, out var nomination))
+                var nominationImportKey = CreateNominationImportKey(row, oscarFilm.StableKey);
+                if (!nominationsByImportKey.TryGetValue(nominationImportKey, out var nomination))
                 {
                     nomination = new OscarNomination
                     {
-                        ImportKey = prepared.ImportKey,
+                        ImportKey = nominationImportKey,
                         ImportedAt = now,
                         UpdatedAt = now
                     };
                     dbContext.OscarNominations.Add(nomination);
-                    nominationsByImportKey.Add(prepared.ImportKey, nomination);
+                    nominationsByImportKey.Add(nominationImportKey, nomination);
                     ApplyNominationSourceData(nomination, row, oscarFilm, now);
                     nominationsCreated++;
                 }
@@ -287,7 +315,7 @@ public sealed class OscarDatasetImporter(MediaDockDbContext dbContext)
         film.FilmTitle = row.FilmTitle;
         film.NormalizedTitle = normalizedTitle;
         film.FilmYear = row.FilmYear;
-        film.ImdbId = row.ImdbId;
+        film.ImdbId = row.ImdbId ?? film.ImdbId;
         film.Title = title;
         film.TitleId = title.Id;
         if (film.ImportedAt == default)
@@ -348,7 +376,10 @@ public sealed class OscarDatasetImporter(MediaDockDbContext dbContext)
     private static string CreateFilmStableKey(OscarDatasetRow row, string normalizedTitle) =>
         row.ImdbId is not null
             ? $"imdb:{row.ImdbId.ToLowerInvariant()}"
-            : $"title:{CreateTitleIdentity(normalizedTitle, row.FilmYear)}";
+            : CreateTitleFilmStableKey(normalizedTitle, row.FilmYear);
+
+    private static string CreateTitleFilmStableKey(string normalizedTitle, int year) =>
+        $"title:{CreateTitleIdentity(normalizedTitle, year)}";
 
     private static string CreateNominationImportKey(OscarDatasetRow row, string filmStableKey)
     {

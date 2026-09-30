@@ -139,10 +139,33 @@ button:disabled { cursor: not-allowed; }
 .occurrence-row a { flex: 0 0 auto; color: #a55239; font-size: 10px; font-weight: 700; text-decoration: none; }
 .occurrence-row a:hover { text-decoration: underline; }
 
+.oscar-filter-form { grid-template-columns: minmax(170px, 1.5fr) repeat(2, minmax(90px, 0.55fr)) minmax(180px, 1.3fr) minmax(115px, 0.8fr) minmax(140px, 1fr) auto; }
+.oscar-list-poster { width: 34px; height: 46px; flex: 0 0 auto; border: 1px solid #c9d8ce; background: #eaf1e9; object-fit: cover; }
+.oscar-title-stamp { color: #8d5738; background: #f4ede3; border-color: #ddc8ae; }
+.oscar-categories { display: block; max-width: 300px; color: #46594e; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.state-pill.is-winner { border-color: #dbc292; color: #77531e; background: #f7f0df; }
+.state-pill.is-pending { border-color: #e1d1a5; color: #796322; background: #faf5e5; }
+.state-pill.is-enriched { border-color: #c3d8c8; color: #386247; background: #edf5ed; }
+.state-pill.is-not-found { border-color: #d6dcd7; color: #717c75; background: #f2f4f1; }
+.state-pill.is-temporary-error { border-color: #e5b5a3; color: #a64e35; background: #fff4ef; }
+.oscar-detail-dialog { width: min(900px, 100%); }
+.oscar-details-intro { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 18px; }
+.oscar-detail-poster { width: 96px; height: 142px; border: 1px solid #c9d8ce; background: #eaf1e9; object-fit: cover; }
+.oscar-detail-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.oscar-nomination-list { display: grid; border-top: 1px solid #d4ded5; }
+.oscar-nomination-row { display: grid; grid-template-columns: minmax(105px, 0.35fr) minmax(0, 1fr) auto; grid-template-areas: "meta copy outcome"; align-items: start; gap: 12px; border-bottom: 1px solid #d4ded5; padding: 14px 2px; }
+.oscar-nomination-meta { grid-area: meta; display: grid; gap: 5px; color: #7b8780; font-size: 10px; }
+.oscar-nomination-copy { grid-area: copy; min-width: 0; }
+.oscar-nomination-copy h3 { margin: 0; color: #30483c; font-size: 12px; }
+.oscar-nomination-copy p { margin: 5px 0 0; color: #54665b; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.oscar-nomination-copy .oscar-nomination-name, .oscar-nomination-copy .oscar-nomination-detail { color: #7b8780; font-size: 10px; }
+.oscar-nomination-outcome { grid-area: outcome; }
+
 @media (max-width: 1120px) {
   .filter-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .filter-search { grid-column: span 2; }
   .filter-actions { grid-column: span 3; }
+  .oscar-filter-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 850px) {
@@ -159,8 +182,8 @@ button:disabled { cursor: not-allowed; }
 
 @media (max-width: 620px) {
   .sidebar { align-items: flex-start; flex-direction: column; gap: 10px; padding: 12px 16px 10px; }
-  .primary-nav { width: 100%; }
-  .nav-item { min-height: 34px; font-size: 11px; }
+  .primary-nav { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; overflow: visible; }
+  .nav-item { min-width: 0; min-height: 34px; grid-template-columns: 22px minmax(0, 1fr); gap: 6px; padding: 0 8px; font-size: 11px; white-space: normal; }
   .topbar { min-height: 45px; padding: 0 16px; }
   .topbar-tag { font-size: 8px; }
   .page-content { padding: 25px 16px 36px; }
@@ -169,6 +192,8 @@ button:disabled { cursor: not-allowed; }
   .edition-mark { display: none; }
   .filter-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .filter-search, .filter-actions { grid-column: span 2; }
+  .oscar-filter-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .oscar-filter-form .filter-search, .oscar-filter-form .filter-actions { grid-column: span 2; }
   .filter-actions { justify-content: flex-start; }
   .history-toolbar { align-items: flex-start; flex-direction: column; }
   .history-filters, .history-filters .field, .history-filters .field-search { width: 100%; min-width: 0; }
@@ -178,6 +203,8 @@ button:disabled { cursor: not-allowed; }
   .source-row .source-kind, .source-row .source-key { grid-column: 1; }
   .source-row .source-action { grid-column: 2; grid-row: 1 / span 3; }
   .form-grid, .detail-facts { grid-template-columns: minmax(0, 1fr); }
+  .oscar-details-intro { grid-template-columns: minmax(0, 1fr); }
+  .oscar-nomination-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "meta outcome" "copy copy"; }
   .detail-backdrop { padding: 8px; }
   .detail-header, .detail-body { padding-right: 16px; padding-left: 16px; }
   .occurrence-row { align-items: flex-start; flex-direction: column; gap: 8px; }

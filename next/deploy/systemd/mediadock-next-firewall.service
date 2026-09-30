@@ -1,0 +1,14 @@
+[Unit]
+Description=Restrict MediaDock Next API access to the trusted LAN
+Requires=docker.service
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/mediadock-next-firewall
+ExecStart=/usr/local/sbin/mediadock-next-docker-user
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

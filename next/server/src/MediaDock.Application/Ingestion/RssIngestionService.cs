@@ -66,6 +66,10 @@ public sealed class RssIngestionService
                     {
                         progress.EntriesSeen++;
                         await ProcessEntryAsync(source, entry, settings, progress, pendingLogs, cancellationToken);
+                        if (progress.OmdbBudgetExhausted)
+                        {
+                            break;
+                        }
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -102,6 +106,10 @@ public sealed class RssIngestionService
                 }
 
                 await FlushLogsAsync(pendingLogs, progress, cancellationToken);
+                if (progress.OmdbBudgetExhausted)
+                {
+                    break;
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -210,6 +218,11 @@ public sealed class RssIngestionService
             source.FeedType,
             observedAt,
             cancellationToken);
+        if (resolution.Status is MetadataLookupStatus.QuotaExceeded or MetadataLookupStatus.RequestBudgetExhausted)
+        {
+            progress.OmdbBudgetExhausted = true;
+        }
+
         progress.CacheHits += resolution.CacheHit ? 1 : 0;
         progress.OmdbRequests += resolution.HttpAttempts;
 
@@ -458,6 +471,7 @@ public sealed class RssIngestionService
     private static string StatusCode(MetadataLookupStatus status) => status switch
     {
         MetadataLookupStatus.QuotaExceeded => "quota_exhausted",
+        MetadataLookupStatus.RequestBudgetExhausted => "daily_budget_exhausted",
         MetadataLookupStatus.TransportFailure => "transport_error",
         MetadataLookupStatus.AuthenticationFailure => "authentication_error",
         MetadataLookupStatus.InvalidRequest => "invalid_request",
@@ -467,6 +481,7 @@ public sealed class RssIngestionService
     private static string OmdbStatus(MetadataLookupStatus status) => status switch
     {
         MetadataLookupStatus.QuotaExceeded => "quota_exhausted",
+        MetadataLookupStatus.RequestBudgetExhausted => "budget_exhausted",
         MetadataLookupStatus.TransportFailure => "transport_error",
         MetadataLookupStatus.AuthenticationFailure => "authentication_error",
         MetadataLookupStatus.InvalidRequest => "invalid_request",
@@ -549,6 +564,7 @@ public sealed class RssIngestionService
         public int OccurrencesCreated { get; set; }
         public int CacheHits { get; set; }
         public int OmdbRequests { get; set; }
+        public bool OmdbBudgetExhausted { get; set; }
         public int IgnoredEntries { get; set; }
         public int ErrorCount { get; private set; }
         public int ParseLogsWritten { get; set; }

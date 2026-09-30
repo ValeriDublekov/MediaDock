@@ -22,7 +22,8 @@ public sealed class MetadataResolver
         int? year,
         string sourceType,
         DateTimeOffset now,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        OmdbRequestPurpose requestPurpose = OmdbRequestPurpose.RssIngestion)
     {
         var normalizedTitle = NormalizeTitle(title);
         var normalizedSourceType = sourceType.Trim().ToLowerInvariant();
@@ -46,7 +47,12 @@ public sealed class MetadataResolver
             return new MetadataResolution(cached.Status, cached.Metadata, true, 0);
         }
 
-        var result = await _client.LookupAsync(title.Trim(), year, normalizedSourceType, cancellationToken);
+        var result = await _client.LookupAsync(
+            title.Trim(),
+            year,
+            normalizedSourceType,
+            cancellationToken,
+            requestPurpose);
         if (result.Status == MetadataLookupStatus.Found && result.Metadata is not null)
         {
             await StoreAsync(

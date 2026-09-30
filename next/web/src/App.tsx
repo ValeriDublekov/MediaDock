@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import { CatalogView } from './features/catalog/CatalogView'
 import { HistoryView } from './features/history/HistoryView'
+import { OscarCatalogView } from './features/oscar/OscarCatalogView'
 import { SourceSettingsView } from './features/sources/SourceSettingsView'
 
-type Section = 'catalog' | 'sources' | 'history'
+type Section = 'catalog' | 'oscar' | 'sources' | 'history'
 
 const sections: { id: Section; number: string; label: string }[] = [
   { id: 'catalog', number: '01', label: 'Catalog' },
-  { id: 'sources', number: '02', label: 'Sources & rules' },
-  { id: 'history', number: '03', label: 'Scan history' },
+  { id: 'oscar', number: '02', label: 'Oscar catalog' },
+  { id: 'sources', number: '03', label: 'Sources & rules' },
+  { id: 'history', number: '04', label: 'Scan history' },
 ]
 
 const sectionContent: Record<Section, { eyebrow: string; title: string; description: string }> = {
@@ -16,6 +18,11 @@ const sectionContent: Record<Section, { eyebrow: string; title: string; descript
     eyebrow: 'LIBRARY',
     title: 'Catalog',
     description: 'Browse titles collected from your configured feeds.',
+  },
+  oscar: {
+    eyebrow: 'ACADEMY AWARDS',
+    title: 'Oscar catalog',
+    description: 'Browse nominated films, award outcomes, and available metadata.',
   },
   sources: {
     eyebrow: 'CONFIGURATION',
@@ -81,6 +88,7 @@ function App() {
           </div>
 
           {section === 'catalog' && <CatalogView />}
+          {section === 'oscar' && <OscarCatalogView />}
           {section === 'sources' && <SourceSettingsView />}
           {section === 'history' && <HistoryView />}
         </div>

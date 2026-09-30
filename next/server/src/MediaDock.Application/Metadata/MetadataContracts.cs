@@ -7,10 +7,17 @@ public enum MetadataLookupStatus
     Found,
     ConfirmedNotFound,
     QuotaExceeded,
+    RequestBudgetExhausted,
     TransportFailure,
     AuthenticationFailure,
     InvalidRequest,
     ProviderFailure
+}
+
+public enum OmdbRequestPurpose
+{
+    RssIngestion,
+    OscarEnrichment
 }
 
 public sealed record MetadataDetails(
@@ -45,6 +52,21 @@ public interface IOmdbClient
         string title,
         int? year,
         string sourceType,
+        CancellationToken cancellationToken = default,
+        OmdbRequestPurpose requestPurpose = OmdbRequestPurpose.RssIngestion);
+}
+
+public interface IOmdbRequestBudget
+{
+    Task<bool> TryReserveAsync(
+        DateOnly utcDate,
+        OmdbRequestPurpose requestPurpose,
+        int dailyRequestLimit,
+        int oscarDailyRequestLimit,
+        CancellationToken cancellationToken = default);
+
+    Task MarkProviderQuotaExceededAsync(
+        DateOnly utcDate,
         CancellationToken cancellationToken = default);
 }
 

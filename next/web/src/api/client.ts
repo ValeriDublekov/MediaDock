@@ -1,6 +1,8 @@
 import type {
   CatalogQuery,
   CatalogTitle,
+  OscarCatalogQuery,
+  OscarFilm,
   Occurrence,
   PageResponse,
   ParseLog,
@@ -89,6 +91,14 @@ function withQuery(path: string, query: object): string {
 
 export function getCatalog(query: CatalogQuery, fetcher?: typeof fetch) {
   return requestJson<PageResponse<CatalogTitle>>(withQuery('/catalog', query), {}, fetcher)
+}
+
+export function getOscarFilms(query: OscarCatalogQuery, fetcher?: typeof fetch) {
+  return requestJson<PageResponse<OscarFilm>>(withQuery('/oscars', query), {}, fetcher)
+}
+
+export function getOscarFilm(id: number, fetcher?: typeof fetch) {
+  return requestJson<OscarFilm>(`/oscars/${id}`, {}, fetcher)
 }
 
 export function getTitle(id: number, fetcher?: typeof fetch) {
