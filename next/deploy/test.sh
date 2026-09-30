@@ -115,6 +115,7 @@ run_logged dotnet-integration docker run --rm \
     "$DOTNET_SDK_IMAGE" \
     dotnet test tests/MediaDock.IntegrationTests/MediaDock.IntegrationTests.csproj --configuration Release
 
+pushd "$APP_ROOT" >/dev/null
 run_logged compose-build env \
     POSTGRES_PASSWORD=validation-only \
     API_IMAGE="mediadock-next-api:validation-$APP_TAG" \
@@ -125,3 +126,4 @@ run_logged compose-build env \
         --project-name mediadock-next-validation \
         --file "$APP_ROOT/compose.yaml" \
         build api worker
+    popd >/dev/null

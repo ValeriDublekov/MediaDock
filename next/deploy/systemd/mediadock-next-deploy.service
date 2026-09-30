@@ -1,0 +1,19 @@
+[Unit]
+Description=Deploy MediaDock Next from GitHub main
+Wants=network-online.target docker.service
+After=network-online.target docker.service mediadock-next-backup.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/mediadock-next-deploy
+ExecStart=/usr/local/sbin/mediadock-next-deploy
+User=root
+Group=root
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+NoNewPrivileges=true
+ReadWritePaths=/opt/docker /var/lib/mediadock /var/log /run/lock
+TimeoutStartSec=infinity
+TimeoutStopSec=5min

@@ -100,6 +100,12 @@ The `settings` table stores the OMDb key as plain text. A SQL backup therefore c
 
 For the Ubuntu deployment, install `next/deploy/backup.sh` with `next/deploy/systemd/mediadock-next-backup.service` and `next/deploy/systemd/mediadock-next-backup.timer`. It creates a root-only custom-format dump at 03:00 UTC under `/opt/docker/backups/mediadock-next`, validates it with `pg_restore -l`, and keeps the newest 14 daily dumps. The existing Restic job backs up `/opt/docker` afterward. Do not enable this host timer until the production `.env` and Compose paths have been reviewed.
 
+The optional deployment service is documented in `next/deploy/systemd/README.md`.
+It fetches only GitHub `main`, runs the clean staging gate, creates a
+pre-migration dump, uses versioned images, and checks readiness after startup.
+Keep its timer disabled until the manual deployment and rollback procedure have
+been reviewed.
+
 Create a plain SQL backup inside the container, then copy it to the host:
 
 ```powershell

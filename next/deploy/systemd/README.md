@@ -37,6 +37,62 @@ sudo systemctl status --no-pager mediadock-next-backup.service
 The dump contains the database-stored OMDb key. Keep the backup directory
 root-only and never print the archive or the production `.env`.
 
+## Automated deployment
+
+The deployment unit fetches only the exact public GitHub repository
+`https://github.com/ValeriDublekov/MediaDock.git` and only its `main` branch.
+It creates a clean worktree without `.env`, runs `next/deploy/test.sh`, builds
+images tagged with the full commit SHA, creates and validates a database dump
+before the migration command, and checks `/health/ready` plus the configured
+API bind after startup. It records the deployed SHA in
+`/var/lib/mediadock/deploy-state` and root-only gate/deploy logs under
+`/var/log`.
+
+The deployment unit and Worker share
+`/run/lock/mediadock-next-operation.lock`; a Worker run is skipped while a
+deployment holds the lock. The deployment script does not automatically roll
+back after a migration or health failure. It leaves the API stopped or on the
+failed version and records the previous image SHA so an operator can choose a
+validated restore point.
+
+Install the files and host-only bind configuration, but keep the timer disabled
+until the clean-main gate and unit validation have passed:
+
+```sh
+sudo install -o root -g root -m 0750 next/deploy/deploy.sh /usr/local/sbin/mediadock-next-deploy
+sudo install -o root -g root -m 0750 next/deploy/worker-run.sh /usr/local/sbin/mediadock-next-worker
+sudo install -o root -g root -m 0644 next/deploy/systemd/mediadock-next-deploy.service /etc/systemd/system/mediadock-next-deploy.service
+sudo install -o root -g root -m 0644 next/deploy/systemd/mediadock-next-deploy.timer /etc/systemd/system/mediadock-next-deploy.timer
+sudo install -o root -g root -m 0600 next/deploy/systemd/mediadock-next-deploy.env.example /etc/default/mediadock-next-deploy
+sudo install -o root -g mediadock -m 0660 /dev/null /run/lock/mediadock-next-operation.lock
+sudo systemctl daemon-reload
+sudo systemctl is-enabled mediadock-next-deploy.timer || true
+```
+
+Replace the placeholder in `/etc/default/mediadock-next-deploy` locally, then
+run the service once and inspect its result before enabling the timer:
+
+```sh
+sudo systemctl start mediadock-next-deploy.service
+sudo systemctl show mediadock-next-deploy.service --property=Result --value
+sudo systemctl status --no-pager mediadock-next-deploy.service
+```
+
+For a failed migration or health check, first disable the timer and preserve
+the logs. Stop the API, choose the pre-migration `daily-*.dump` that was logged
+for that deployment, restore it into the production database with
+`pg_restore`, then start the preserved `mediadock-next-api:<previous_sha>` image
+and verify readiness. Do not start an older API against a database whose
+migration state has not been restored. Review the database and API state before
+re-enabling the timer.
+
+Only after the manual deployment and rollback materials are reviewed may the
+timer be enabled:
+
+```sh
+sudo systemctl enable --now mediadock-next-deploy.timer
+```
+
 The Worker timer runs at 07:00 and 18:00 in `Europe/Sofia`. `Persistent=true`
 requests one catch-up activation when the host or timer was down across one or
 more scheduled times. systemd coalesces the missed activations into at most one

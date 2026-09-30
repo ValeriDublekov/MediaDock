@@ -8,6 +8,6 @@ Type=oneshot
 User=mediadock
 SupplementaryGroups=docker
 WorkingDirectory=/opt/docker/projects/mediadock-next/next
-ExecStart=/usr/bin/docker compose --project-name mediadock-next --file /opt/docker/projects/mediadock-next/next/compose.yaml --profile worker run --rm worker --trigger schedule
+ExecStart=/usr/local/sbin/mediadock-next-worker
 TimeoutStartSec=infinity
 TimeoutStopSec=5min

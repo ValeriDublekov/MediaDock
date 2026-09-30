@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily MediaDock Next GitHub deployment schedule
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 UTC
+Persistent=false
+Unit=mediadock-next-deploy.service
+
+[Install]
+WantedBy=timers.target
