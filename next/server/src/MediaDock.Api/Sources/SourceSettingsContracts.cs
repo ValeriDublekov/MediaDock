@@ -74,3 +74,29 @@ public sealed record UpdateSettingsRequest
     [Range(0L, 1_000_000_000L)]
     public long MinImdbVotes { get; init; }
 }
+
+/// <summary>Provider settings returned without exposing saved credentials.</summary>
+public sealed record ProviderSettingsResponse(
+    bool OmdbApiKeyConfigured,
+    int OmdbDailyRequestLimit,
+    int OscarEnrichmentMaxFilmsPerRun,
+    int OscarEnrichmentMaxRequestsPerDay,
+    DateTimeOffset? UpdatedAt);
+
+/// <summary>Validated payload for replacing OMDb provider settings.</summary>
+public sealed record UpdateProviderSettingsRequest
+{
+    [MaxLength(512)]
+    public string? OmdbApiKey { get; init; }
+
+    public bool ClearOmdbApiKey { get; init; }
+
+    [Range(0, int.MaxValue)]
+    public int OmdbDailyRequestLimit { get; init; }
+
+    [Range(0, 100_000)]
+    public int OscarEnrichmentMaxFilmsPerRun { get; init; }
+
+    [Range(0, int.MaxValue)]
+    public int OscarEnrichmentMaxRequestsPerDay { get; init; }
+}

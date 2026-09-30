@@ -21,7 +21,7 @@ public sealed class PersistenceTests
         await db.Database.MigrateAsync();
 
         var appliedMigrations = await db.Database.GetAppliedMigrationsAsync();
-        Assert.Equal(4, appliedMigrations.Count());
+        Assert.Equal(6, appliedMigrations.Count());
 
         await db.Database.OpenConnectionAsync();
         await using (var command = db.Database.GetDbConnection().CreateCommand())
@@ -38,7 +38,7 @@ public sealed class PersistenceTests
                 new[]
                 {
                     "titles", "sources", "occurrences", "scan_runs", "parse_logs", "settings", "metadata_cache",
-                    "oscar_films", "oscar_nominations", "omdb_daily_usage"
+                    "oscar_films", "oscar_nominations", "oscar_enrichment_runs", "omdb_daily_usage"
                 },
                 tableName => Assert.Contains(tableName, tables));
         }

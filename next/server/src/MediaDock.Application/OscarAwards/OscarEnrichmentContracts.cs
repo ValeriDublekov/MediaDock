@@ -35,6 +35,32 @@ public sealed record OscarEnrichmentSummary(
     int HttpAttempts,
     bool StoppedForQuota);
 
+public static class OscarEnrichmentRunStatuses
+{
+    public const string Running = "running";
+    public const string Succeeded = "succeeded";
+    public const string Partial = "partial";
+    public const string QuotaStopped = "quota_stopped";
+    public const string Failed = "failed";
+    public const string Cancelled = "cancelled";
+}
+
+public sealed record OscarEnrichmentRunProgress(
+    int EligibleFilms,
+    int ProcessedFilms,
+    int EnrichedFilms,
+    int NotFoundFilms,
+    int TemporaryErrors,
+    int CacheHits,
+    int HttpAttempts);
+
+public sealed record OscarEnrichmentRunResult(
+    long RunId,
+    DateTimeOffset StartedAt,
+    DateTimeOffset FinishedAt,
+    string Status,
+    OscarEnrichmentSummary Summary);
+
 public interface IOscarEnrichmentRepository
 {
     Task<IReadOnlyList<OscarEnrichmentCandidate>> GetEligibleCandidatesAsync(
@@ -45,5 +71,26 @@ public interface IOscarEnrichmentRepository
     Task SaveOutcomeAsync(
         long filmId,
         OscarEnrichmentUpdate update,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IOscarEnrichmentRunRepository
+{
+    Task<long> StartAsync(
+        string trigger,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken = default);
+
+    Task SaveProgressAsync(
+        long runId,
+        OscarEnrichmentRunProgress progress,
+        CancellationToken cancellationToken = default);
+
+    Task FinishAsync(
+        long runId,
+        string status,
+        DateTimeOffset finishedAt,
+        OscarEnrichmentRunProgress progress,
+        string? errorCode,
         CancellationToken cancellationToken = default);
 }

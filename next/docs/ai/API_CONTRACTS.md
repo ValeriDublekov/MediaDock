@@ -19,6 +19,8 @@ This document describes only the API in `next/server`. The root Vite app, Python
 | `PUT /api/sources/{id:long}` | Route `id`, [UpdateSourceRequest](../../server/src/MediaDock.Api/Sources/SourceSettingsContracts.cs) | `200 SourceResponse` | `400 ValidationProblemDetails`; `404 ProblemDetails`; `409 ProblemDetails` for an existing stable key. |
 | `GET /api/settings` | None | `200 SettingsResponse` | None declared. |
 | `PUT /api/settings` | [UpdateSettingsRequest](../../server/src/MediaDock.Api/Sources/SourceSettingsContracts.cs) | `200 SettingsResponse` | `400 ValidationProblemDetails`. |
+| `GET /api/settings/providers/omdb` | None | `200 ProviderSettingsResponse`; returns `OmdbApiKeyConfigured` and limits, never the key | None declared. |
+| `PUT /api/settings/providers/omdb` | [UpdateProviderSettingsRequest](../../server/src/MediaDock.Api/Sources/SourceSettingsContracts.cs) | `200 ProviderSettingsResponse` | `400 ValidationProblemDetails`; unauthenticated LAN-trusted write. |
 | `GET /api/parse-logs` | [ParseLogQuery](../../server/src/MediaDock.Api/Operations/OperationsContracts.cs) | `200 PageResponse<ParseLogResponse>` | `400 ValidationProblemDetails` for invalid query values. |
 | `GET /api/scan-runs` | [ScanRunQuery](../../server/src/MediaDock.Api/Operations/OperationsContracts.cs) | `200 PageResponse<ScanRunResponse>` | `400 ValidationProblemDetails` for invalid query values. This lists history; it does not start a scan. |
 | `GET /openapi/v1.json` | None | OpenAPI document in Development only | `MapOpenApi` is registered only in Development. |
@@ -46,6 +48,7 @@ Catalog titles sort by `LastSeenAt` descending, then `Id` descending; Oscar film
 | `CreateSourceRequest` | `StableKey` is required, max 100, and matches `^[a-z0-9][a-z0-9._-]{0,99}$`; `Name` is required, max 200; `FeedType` is required and is `movie` or `series`; `Url` is required, `[Url]`, max 2048; `IsEnabled` defaults to `true`. In addition to `[Url]`, the service accepts only whitespace-free absolute HTTPS URLs without user-info on `feed.rutracker.cc`. Text inputs are trimmed before persistence. |
 | `UpdateSourceRequest` | Same `StableKey`, `Name`, `FeedType`, and `Url` validation as create; `IsEnabled` is a `bool` with no initializer (an omitted JSON value therefore defaults to `false`). The request replaces the source configuration. |
 | `UpdateSettingsRequest` | `ExcludedGenres` and `ExcludedCountries` are required arrays of at most 100 values. Each value must be nonblank and at most 100 characters; values are trimmed, de-duplicated case-insensitively, and sorted case-insensitively. `MinMovieRating` and `MinSeriesRating` are each `0..10`; `MinImdbVotes` is `0..1,000,000,000`. |
+| `UpdateProviderSettingsRequest` | `OmdbApiKey` is optional and max 512 characters; blank/omitted preserves the saved key. Set `ClearOmdbApiKey` to remove it, and do not provide a new key in the same request. The shared request limit and Oscar daily limit are non-negative integers; the per-run Oscar film cap is `0..100,000`. A configured key requires a positive shared limit; a positive Oscar film cap requires a positive Oscar daily cap. |
 
 ## Response DTOs
 
@@ -62,13 +65,15 @@ Nullable response fields are marked `?`; collection fields are returned as lists
 | `OccurrenceResponse` | `Id`, `TitleId`, `SourceId`, `SourceName`, `SourceItemKey`, `FeedEntryId?`, `TorrentUrl`, `RawTitle`, `SourceFeedName`, `FeedType?`, `SourcePublishedAt?`, `ObservedAt?`, `Quality?`, `RipType?`, `FirstSeenAt`, `LastSeenAt` |
 | `SourceResponse` | `Id`, `StableKey`, `Name`, `FeedType`, `Url`, `IsEnabled` |
 | `SettingsResponse` | `ExcludedGenres`, `ExcludedCountries`, `MinMovieRating`, `MinSeriesRating`, `MinImdbVotes`, `UpdatedAt?` |
+| `ProviderSettingsResponse` | `OmdbApiKeyConfigured`, `OmdbDailyRequestLimit`, `OscarEnrichmentMaxFilmsPerRun`, `OscarEnrichmentMaxRequestsPerDay`, `UpdatedAt?`; does not include the key. |
 | `ParseLogResponse` | `Id`, `SourceId?`, `SourceName?`, `SourceItemKey?`, `RawTitle`, `FeedName`, `ParsedSuccessfully`, `ParsedTitle?`, `ParsedYear?`, `OmdbStatus`, `Ignored`, `IgnoreReason?`, `ErrorMessage?`, `Decision?`, `ProcessedAt`, `RetryState`, `AttemptCount`, `LastAttemptAt?`, `FeedType?`, `SourcePublishedAt?`, `ObservedAt?`, `EventKind?` |
 | `ScanRunResponse` | `Id`, `StartedAt`, `FinishedAt?`, `Status`, `Trigger`, `FeedsProcessed`, `EntriesSeen`, `TitlesCreated`, `OccurrencesCreated`, `CacheHits`, `OmdbRequests`, `IgnoredEntries`, `ErrorCount`, `ErrorSummary` |
 
 When no settings row exists, `GET /api/settings` returns empty exclusion arrays, zero thresholds, and `UpdatedAt = null`.
+When no settings row exists, `GET /api/settings/providers/omdb` returns `OmdbApiKeyConfigured = false` and zero limits.
 
 ## Error And Access Semantics
 
 [ApiExceptionHandler.cs](../../server/src/MediaDock.Api/Middleware/ApiExceptionHandler.cs) maps `ApiValidationException` to 400 `ValidationProblemDetails`, `ApiNotFoundException` to 404 `ProblemDetails`, and `ApiConflictException` to 409 `ProblemDetails`, all with `application/problem+json`. Unrecognized exceptions are not mapped by this handler; this document does not promise their response shape. Readiness failure is a separate 503 `ProblemDetails` response.
 
-`Program.cs` does not register authentication or authorization middleware. The source write endpoints explicitly describe requests as unauthenticated and LAN-trusted; do not infer an authentication contract from these routes.
+`Program.cs` does not register authentication or authorization middleware. Source and provider-settings write endpoints explicitly describe requests as unauthenticated and LAN-trusted; do not infer an authentication contract from these routes. The provider settings response never returns the saved API key.

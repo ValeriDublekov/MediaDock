@@ -94,6 +94,31 @@ internal static class SourceSettingsEndpoints
             .Produces<SettingsResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest);
 
+        app.MapGet("/api/settings/providers/omdb", async Task<Ok<ProviderSettingsResponse>> (
+            ISourceSettingsApiService service,
+            CancellationToken cancellationToken) =>
+        {
+            var settings = await service.GetProviderSettingsAsync(cancellationToken);
+            return TypedResults.Ok(settings);
+        })
+            .WithName("GetOmdbSettings")
+            .WithSummary("Get OMDb settings without exposing the API key.")
+            .Produces<ProviderSettingsResponse>(StatusCodes.Status200OK);
+
+        app.MapPut("/api/settings/providers/omdb", async Task<Ok<ProviderSettingsResponse>> (
+            UpdateProviderSettingsRequest request,
+            ISourceSettingsApiService service,
+            CancellationToken cancellationToken) =>
+        {
+            var settings = await service.UpdateProviderSettingsAsync(request, cancellationToken);
+            return TypedResults.Ok(settings);
+        })
+            .WithName("UpdateOmdbSettings")
+            .WithSummary("Update OMDb settings and the write-only API key.")
+            .WithDescription(LanTrustedWriteDescription)
+            .Produces<ProviderSettingsResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest);
+
         return app;
     }
 }

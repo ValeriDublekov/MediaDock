@@ -31,42 +31,7 @@ internal static class WorkerCommand
 
         var builder = Host.CreateApplicationBuilder(Array.Empty<string>());
         var maximumOscarFilmsPerRun = 0;
-        var dailyOmdbRequestLimit = 0;
-        var maximumOscarRequestsPerDay = 0;
-        if (trigger is not null)
-        {
-            var configuredLimit = builder.Configuration["OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN"];
-            if (!string.IsNullOrWhiteSpace(configuredLimit)
-                && (!int.TryParse(configuredLimit, out maximumOscarFilmsPerRun) || maximumOscarFilmsPerRun < 0))
-            {
-                Console.Error.WriteLine("OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN must be a non-negative integer.");
-                return 2;
-            }
-
-            var configuredDailyLimit = builder.Configuration["OMDB_DAILY_REQUEST_LIMIT"];
-            if (!int.TryParse(configuredDailyLimit, out dailyOmdbRequestLimit) || dailyOmdbRequestLimit <= 0)
-            {
-                Console.Error.WriteLine(
-                    "OMDB_DAILY_REQUEST_LIMIT must be a positive integer matching the API key's daily quota.");
-                return 2;
-            }
-
-            var configuredOscarLimit = builder.Configuration["OSCAR_ENRICHMENT_MAX_REQUESTS_PER_DAY"];
-            if (!string.IsNullOrWhiteSpace(configuredOscarLimit)
-                && (!int.TryParse(configuredOscarLimit, out maximumOscarRequestsPerDay)
-                    || maximumOscarRequestsPerDay < 0))
-            {
-                Console.Error.WriteLine("OSCAR_ENRICHMENT_MAX_REQUESTS_PER_DAY must be a non-negative integer.");
-                return 2;
-            }
-
-            if (maximumOscarFilmsPerRun > 0 && maximumOscarRequestsPerDay == 0)
-            {
-                Console.Error.WriteLine(
-                    "OSCAR_ENRICHMENT_MAX_REQUESTS_PER_DAY must be positive when Oscar enrichment is enabled.");
-                return 2;
-            }
-        }
+        var providerSettings = new WorkerProviderSettings();
 
         var connectionString = builder.Configuration.GetConnectionString("MediaDock");
         if (string.IsNullOrWhiteSpace(connectionString))
@@ -85,13 +50,6 @@ internal static class WorkerCommand
         }
         else
         {
-            var apiKey = builder.Configuration["OMDB_API_KEY"];
-            if (string.IsNullOrWhiteSpace(apiKey))
-            {
-                Console.Error.WriteLine("OMDB_API_KEY must be configured.");
-                return 2;
-            }
-
             var dnsResolver = new SystemRssDnsResolver();
             rssHttpClient = RssFeedHttpClientFactory.Create(dnsResolver);
             var configuredOmdbHttpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
@@ -101,6 +59,7 @@ internal static class WorkerCommand
             builder.Services.AddScoped<IOmdbRequestBudget, PostgresOmdbRequestBudget>();
             builder.Services.AddScoped<MetadataResolver>();
             builder.Services.AddScoped<IOscarEnrichmentRepository, PostgresOscarEnrichmentRepository>();
+            builder.Services.AddScoped<IOscarEnrichmentRunRepository, PostgresOscarEnrichmentRunRepository>();
             builder.Services.AddScoped<OscarEnrichmentService>();
             builder.Services.AddScoped<RssIngestionService>();
             builder.Services.AddSingleton<IRssDnsResolver>(dnsResolver);
@@ -108,10 +67,11 @@ internal static class WorkerCommand
             builder.Services.AddScoped<IRssFeedTransport, RssFeedTransportAdapter>();
             builder.Services.AddScoped<IOmdbClient>(serviceProvider => new OmdbClient(
                 configuredOmdbHttpClient,
-                apiKey,
+                providerSettings.ApiKey ?? throw new InvalidOperationException(
+                    "OMDb API key must be configured in application settings."),
                 requestBudget: serviceProvider.GetRequiredService<IOmdbRequestBudget>(),
-                dailyRequestLimit: dailyOmdbRequestLimit,
-                oscarDailyRequestLimit: maximumOscarRequestsPerDay));
+                dailyRequestLimit: providerSettings.DailyRequestLimit,
+                oscarDailyRequestLimit: providerSettings.OscarDailyRequestLimit));
         }
 
         using var rssHttpClientLifetime = rssHttpClient;
@@ -133,16 +93,61 @@ internal static class WorkerCommand
                 return ScanAlreadyRunningExitCode;
             }
 
+            if (trigger is not null)
+            {
+                var savedSettings = await scope.ServiceProvider.GetRequiredService<MediaDockDbContext>()
+                    .Settings
+                    .AsNoTracking()
+                    .OrderBy(settings => settings.Id)
+                    .Select(settings => new
+                    {
+                        settings.OmdbApiKey,
+                        settings.OmdbDailyRequestLimit,
+                        settings.OscarEnrichmentMaxFilmsPerRun,
+                        settings.OscarEnrichmentMaxRequestsPerDay
+                    })
+                    .FirstOrDefaultAsync(applicationLifetime.ApplicationStopping);
+
+                if (savedSettings is null || string.IsNullOrWhiteSpace(savedSettings.OmdbApiKey))
+                {
+                    Console.Error.WriteLine("OMDb API key must be configured in application settings before a scan.");
+                    return 2;
+                }
+
+                if (savedSettings.OmdbDailyRequestLimit <= 0)
+                {
+                    Console.Error.WriteLine(
+                        "OMDb daily request limit must be a positive integer matching the API key's daily quota.");
+                    return 2;
+                }
+
+                if (savedSettings.OscarEnrichmentMaxFilmsPerRun > 0
+                    && savedSettings.OscarEnrichmentMaxRequestsPerDay <= 0)
+                {
+                    Console.Error.WriteLine(
+                        "Oscar daily request limit must be positive when Oscar enrichment is enabled.");
+                    return 2;
+                }
+
+                maximumOscarFilmsPerRun = savedSettings.OscarEnrichmentMaxFilmsPerRun;
+                providerSettings.ApiKey = savedSettings.OmdbApiKey;
+                providerSettings.DailyRequestLimit = savedSettings.OmdbDailyRequestLimit;
+                providerSettings.OscarDailyRequestLimit = savedSettings.OscarEnrichmentMaxRequestsPerDay;
+            }
+
             if (oscarCsvPath is not null)
             {
                 var summary = await scope.ServiceProvider
                     .GetRequiredService<OscarDatasetImporter>()
                     .ImportAsync(oscarCsvPath, yearAfter, applicationLifetime.ApplicationStopping);
                 Console.WriteLine(
-                    $"Oscar import completed: {summary.OscarFilmsCreated} films, "
+                    $"Oscar import completed: {summary.RowsRead} rows read; "
+                    + $"{summary.OscarFilmsCreated} films and {summary.TitlesCreated} titles created, "
                     + $"{summary.NominationsCreated} nominations added, "
-                    + $"{summary.NominationsUpdated} nominations updated, "
-                    + $"{summary.RowsSkippedByCategory} rows outside the selected categories skipped.");
+                    + $"{summary.NominationsUpdated} nominations updated; "
+                    + $"skipped {summary.RowsSkippedByYear} by year, "
+                    + $"{summary.RowsSkippedByCategory} by category, "
+                    + $"{summary.RowsSkippedWithoutFilm} without a film.");
                 return 0;
             }
 
@@ -158,19 +163,22 @@ internal static class WorkerCommand
             OscarEnrichmentSummary? oscarSummary = null;
             if (maximumOscarFilmsPerRun == 0)
             {
-                Console.WriteLine("Oscar enrichment skipped: OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN is 0.");
+                Console.WriteLine("Oscar enrichment skipped: per-run film limit is 0.");
             }
             else
             {
-                oscarSummary = await scope.ServiceProvider
+                Console.WriteLine($"Oscar enrichment started at {DateTimeOffset.UtcNow:O} ({trigger}).");
+                var oscarRun = await scope.ServiceProvider
                     .GetRequiredService<OscarEnrichmentService>()
-                    .RunAsync(maximumOscarFilmsPerRun, applicationLifetime.ApplicationStopping);
-                var enrichmentStatus = oscarSummary.StoppedForQuota ? "stopped at quota" : "completed";
+                    .RunAsync(maximumOscarFilmsPerRun, trigger!, applicationLifetime.ApplicationStopping);
+                oscarSummary = oscarRun.Summary;
                 Console.WriteLine(
-                    $"Oscar enrichment {enrichmentStatus}: {oscarSummary.AttemptedFilms}/"
-                    + $"{oscarSummary.EligibleFilms} candidates, {oscarSummary.EnrichedFilms} enriched, "
+                    $"Oscar enrichment run {oscarRun.RunId} {oscarRun.Status}: "
+                    + $"{oscarSummary.AttemptedFilms}/{oscarSummary.EligibleFilms} candidates processed, "
+                    + $"{oscarSummary.EnrichedFilms} enriched, "
                     + $"{oscarSummary.NotFoundFilms} not found, {oscarSummary.TemporaryErrors} temporary errors, "
-                    + $"{oscarSummary.CacheHits} cache hits, {oscarSummary.HttpAttempts} OMDb HTTP attempts.");
+                    + $"{oscarSummary.CacheHits} cache hits, {oscarSummary.HttpAttempts} OMDb HTTP attempts; "
+                    + $"started {oscarRun.StartedAt:O}, finished {oscarRun.FinishedAt:O}.");
             }
 
             return result.Summary.Status == "succeeded"
@@ -238,5 +246,12 @@ internal static class WorkerCommand
         }
 
         return false;
+    }
+
+    private sealed class WorkerProviderSettings
+    {
+        public string? ApiKey { get; set; }
+        public int DailyRequestLimit { get; set; }
+        public int OscarDailyRequestLimit { get; set; }
     }
 }

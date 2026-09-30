@@ -22,7 +22,7 @@ The script checks that the requested commit matches `HEAD` and that the `next/` 
 
 ## Local Docker setup
 
-Create the ignored environment file once, then replace the sample database password with a local-only value. Before a Worker scan, set `OMDB_API_KEY` and `OMDB_DAILY_REQUEST_LIMIT` to the actual daily quota for that key; the Worker refuses to start without a positive limit. Oscar CSV imports do not call OMDb. To enable Oscar enrichment, set both `OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN` and `OSCAR_ENRICHMENT_MAX_REQUESTS_PER_DAY` to positive values.
+Create the ignored environment file once, then replace the sample database password with a local-only value. OMDb credentials and runtime request limits are configured in the web UI after applying migrations and starting the API. Oscar CSV imports do not call OMDb.
 
 ```powershell
 if (-not (Test-Path next/.env)) { Copy-Item next/.env.example next/.env }
@@ -53,17 +53,33 @@ Invoke-WebRequest http://127.0.0.1:8080/
 
 ## Worker
 
-The Worker is one-shot and excluded from the default stack. It scans configured RSS sources first, then enriches eligible Oscar films when `OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN` is positive. Apply the latest schema migration first, set the actual key quota and Oscar limits in `.env`, and review source settings before explicitly running it:
+The Worker is one-shot and excluded from the default stack. It loads the OMDb key and request limits from the database at the start of each run, after acquiring the advisory lock. Apply the latest schema migration, open the Configuration screen, enter the key and the confirmed shared daily quota, and review source settings before explicitly running it. Existing `.env` values for these settings are no longer read; transfer them once through the UI after upgrading. Oscar enrichment is enabled when its per-run film limit is positive:
 
 ```powershell
 docker compose -f next/compose.yaml --profile worker run --rm worker --trigger manual
 ```
 
-The systemd schedule uses the same `worker` service with the `schedule` trigger. `OMDB_DAILY_REQUEST_LIMIT` is the required shared cap for all RSS and Oscar HTTP attempts in a UTC day. `OSCAR_ENRICHMENT_MAX_REQUESTS_PER_DAY` adds an Oscar-only maximum; it is not a reserved allotment, so RSS may consume the shared cap before Oscar runs. `OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN` remains a separate candidate cap, and both Oscar limits must be positive to enable Oscar enrichment.
+The systemd schedule uses the same `worker` service with the `schedule` trigger. Configuration settings are read from PostgreSQL on each run, so UI changes apply without editing `.env` or restarting the timer. The shared daily HTTP limit covers RSS and Oscar attempts. The Oscar daily HTTP limit is an additional cap, not a reserved allotment, so RSS may consume the shared cap before Oscar runs. Oscar enrichment requires both a positive per-run film limit and a positive Oscar daily HTTP limit.
 
 PostgreSQL stores the shared total, Oscar count, and provider-quota stop flag by UTC date in `omdb_daily_usage`; it never stores the API key. Every non-cache HTTP attempt reserves a slot before sending, including fallback lookups and retries. Cache hits use no slot. A process failure between reservation and sending can conservatively leave a slot unused. A provider quota response blocks all further HTTP reservations for that UTC day, including after a Worker restart; reaching a configured cap stops the current task. Unprocessed Oscar candidates remain eligible. Worker output reports RSS and Oscar attempt counts separately.
 
+Each enabled Oscar enrichment writes a separate `oscar_enrichment_runs` record; it does not reuse RSS `scan_runs` or `parse_logs`. The record captures the trigger, start/finish timestamps, status, eligible and processed candidates, outcomes, cache hits, actual OMDb HTTP attempts, and a safe error code. Progress is checkpointed after each lookup and saved outcome. An unfinished `running` record can indicate an interrupted process; its counts show the last saved checkpoint. Inspect recent runs and daily budget state with:
+
+```powershell
+docker compose -f next/compose.yaml exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "SELECT id, trigger, started_at, finished_at, status, eligible_films, processed_films, http_attempts, not_found_films, temporary_errors, error_code FROM oscar_enrichment_runs ORDER BY started_at DESC LIMIT 20;"'
+docker compose -f next/compose.yaml exec -T db sh -c 'psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "SELECT utc_date, total_requests, oscar_requests, provider_quota_exceeded FROM omdb_daily_usage ORDER BY utc_date DESC LIMIT 7;"'
+```
+
+A `quota_stopped` run means either a configured local cap was reached or OMDb reported quota exhaustion. `provider_quota_exceeded` distinguishes the provider response from a local cap. For a provider stop, verify the key's quota with OMDb and correct the shared limit in Configuration only to a confirmed value; do not retry within the same UTC day. The provider stop flag blocks further HTTP attempts until the next UTC day, and unprocessed candidates remain queued. A film receiving the provider quota response is deferred until the next UTC day.
+
 ### Import Oscar dataset
+
+The source is Kaggle's [The Oscar Award dataset](https://www.kaggle.com/datasets/unanimad/the-oscar-award); its page identifies the dataset as CC0. Download the source file yourself and keep it outside the repository. Record the source URL, retrieval date and dataset version (if published), SHA-256, and `--year-after` value in the operator's import notes; the importer does not store a dataset-version manifest. For example:
+
+```powershell
+$sourcePath = "$HOME\Downloads\full_data.csv"
+Get-FileHash -Path $sourcePath -Algorithm SHA256
+```
 
 Start PostgreSQL and apply the latest schema migration before importing. The Worker can import the compact CSV without an OMDb key. It imports films after 1980 from Best Picture, Directing, Original Screenplay, Adapted Screenplay, and Cinematography only:
 
@@ -76,8 +92,11 @@ docker compose -f next/compose.yaml --profile worker run --build --rm --volume "
 ```
 
 Import is idempotent, uses the Worker database lock, stores CSV title/year/IMDb ID and nomination data immediately, and does not create torrent occurrences. Existing OMDb metadata is left intact.
+Re-import the same or a refreshed dataset with the same command; matching films and nominations are upserted and existing OMDb fields are preserved. Re-import is additive: nominations absent from a later file are not deleted automatically. Worker output reports rows read, created/updated records, and rows skipped by year, category, or missing film data.
 
 ## Database backup and restore
+
+The `settings` table stores the OMDb key as plain text. A SQL backup therefore contains the provider credential; protect backup files and their storage with the same care as `.env`, and rotate the key if a backup is exposed.
 
 Create a plain SQL backup inside the container, then copy it to the host:
 

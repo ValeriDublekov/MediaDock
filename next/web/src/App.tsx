@@ -9,7 +9,7 @@ type Section = 'catalog' | 'oscar' | 'sources' | 'history'
 const sections: { id: Section; number: string; label: string }[] = [
   { id: 'catalog', number: '01', label: 'Catalog' },
   { id: 'oscar', number: '02', label: 'Oscar catalog' },
-  { id: 'sources', number: '03', label: 'Sources & rules' },
+  { id: 'sources', number: '03', label: 'Configuration' },
   { id: 'history', number: '04', label: 'Scan history' },
 ]
 
@@ -26,8 +26,8 @@ const sectionContent: Record<Section, { eyebrow: string; title: string; descript
   },
   sources: {
     eyebrow: 'CONFIGURATION',
-    title: 'Sources & rules',
-    description: 'Manage feed sources and the matching rules used during ingestion.',
+    title: 'Configuration',
+    description: 'Manage feed sources, matching rules, and OMDb provider settings.',
   },
   history: {
     eyebrow: 'OPERATIONS',

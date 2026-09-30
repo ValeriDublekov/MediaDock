@@ -82,6 +82,24 @@ Content-Type: application/json
 
 ###
 
+GET {{MediaDock.Api_HostAddress}}/api/settings/providers/omdb
+Accept: application/json
+
+###
+
+PUT {{MediaDock.Api_HostAddress}}/api/settings/providers/omdb
+Content-Type: application/json
+
+{
+	"omdbApiKey": "replace-with-local-key",
+	"clearOmdbApiKey": false,
+	"omdbDailyRequestLimit": 100,
+	"oscarEnrichmentMaxFilmsPerRun": 0,
+	"oscarEnrichmentMaxRequestsPerDay": 0
+}
+
+###
+
 GET {{MediaDock.Api_HostAddress}}/api/parse-logs?page=1&pageSize=25
 Accept: application/json
 

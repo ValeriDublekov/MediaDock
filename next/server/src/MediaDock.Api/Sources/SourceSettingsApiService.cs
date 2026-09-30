@@ -24,6 +24,12 @@ internal interface ISourceSettingsApiService
     Task<SettingsResponse> UpdateSettingsAsync(
         UpdateSettingsRequest request,
         CancellationToken cancellationToken);
+
+    Task<ProviderSettingsResponse> GetProviderSettingsAsync(CancellationToken cancellationToken);
+
+    Task<ProviderSettingsResponse> UpdateProviderSettingsAsync(
+        UpdateProviderSettingsRequest request,
+        CancellationToken cancellationToken);
 }
 
 internal sealed class SourceSettingsApiService(MediaDockDbContext dbContext) : ISourceSettingsApiService
@@ -157,6 +163,77 @@ internal sealed class SourceSettingsApiService(MediaDockDbContext dbContext) : I
             settings.UpdatedAt);
     }
 
+    public async Task<ProviderSettingsResponse> GetProviderSettingsAsync(CancellationToken cancellationToken)
+    {
+        var settings = await dbContext.Settings
+            .AsNoTracking()
+            .OrderBy(setting => setting.Id)
+            .Select(setting => new ProviderSettingsResponse(
+                !string.IsNullOrWhiteSpace(setting.OmdbApiKey),
+                setting.OmdbDailyRequestLimit,
+                setting.OscarEnrichmentMaxFilmsPerRun,
+                setting.OscarEnrichmentMaxRequestsPerDay,
+                setting.UpdatedAt))
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return settings ?? new ProviderSettingsResponse(false, 0, 0, 0, null);
+    }
+
+    public async Task<ProviderSettingsResponse> UpdateProviderSettingsAsync(
+        UpdateProviderSettingsRequest request,
+        CancellationToken cancellationToken)
+    {
+        var settings = await dbContext.Settings.OrderBy(value => value.Id).FirstOrDefaultAsync(cancellationToken);
+        var errors = new Dictionary<string, string[]>();
+        if (request.ClearOmdbApiKey && !string.IsNullOrWhiteSpace(request.OmdbApiKey))
+        {
+            errors[nameof(request.OmdbApiKey)] = ["Provide a key or clear the saved key, not both."];
+        }
+
+        var hasOmdbApiKey = !request.ClearOmdbApiKey
+            && (!string.IsNullOrWhiteSpace(request.OmdbApiKey)
+                || !string.IsNullOrWhiteSpace(settings?.OmdbApiKey));
+        if (hasOmdbApiKey && request.OmdbDailyRequestLimit <= 0)
+        {
+            errors[nameof(request.OmdbDailyRequestLimit)] =
+                ["A positive shared daily request limit is required when an API key is configured."];
+        }
+
+        if (request.OscarEnrichmentMaxFilmsPerRun > 0 && request.OscarEnrichmentMaxRequestsPerDay == 0)
+        {
+            errors[nameof(request.OscarEnrichmentMaxRequestsPerDay)] =
+                ["A positive Oscar request limit is required when enrichment is enabled."];
+        }
+
+        if (errors.Count > 0)
+        {
+            throw new ApiValidationException(errors);
+        }
+
+        if (settings is null)
+        {
+            settings = new AppSetting();
+            dbContext.Settings.Add(settings);
+        }
+
+        if (request.ClearOmdbApiKey)
+        {
+            settings.OmdbApiKey = null;
+        }
+        else if (!string.IsNullOrWhiteSpace(request.OmdbApiKey))
+        {
+            settings.OmdbApiKey = request.OmdbApiKey.Trim();
+        }
+
+        settings.OmdbDailyRequestLimit = request.OmdbDailyRequestLimit;
+        settings.OscarEnrichmentMaxFilmsPerRun = request.OscarEnrichmentMaxFilmsPerRun;
+        settings.OscarEnrichmentMaxRequestsPerDay = request.OscarEnrichmentMaxRequestsPerDay;
+        settings.UpdatedAt = DateTimeOffset.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return ToProviderSettingsResponse(settings);
+    }
+
     private static void ValidateFeedUrl(string url)
     {
         if (url.Length <= 2048
@@ -205,4 +282,11 @@ internal sealed class SourceSettingsApiService(MediaDockDbContext dbContext) : I
         source.FeedType,
         source.Url,
         source.IsEnabled);
+
+    private static ProviderSettingsResponse ToProviderSettingsResponse(AppSetting settings) => new(
+        !string.IsNullOrWhiteSpace(settings.OmdbApiKey),
+        settings.OmdbDailyRequestLimit,
+        settings.OscarEnrichmentMaxFilmsPerRun,
+        settings.OscarEnrichmentMaxRequestsPerDay,
+        settings.UpdatedAt);
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { createSource, getSettings, getSources, updateSettings, updateSource } from '../../api/client'
-import type { Settings, SettingsInput, Source, SourceInput } from '../../api/types'
+import { createSource, getProviderSettings, getSettings, getSources, updateProviderSettings, updateSettings, updateSource } from '../../api/client'
+import type { ProviderSettings, ProviderSettingsInput, Settings, SettingsInput, Source, SourceInput } from '../../api/types'
 import { EmptyState, ErrorState, LoadingState } from '../../components/Feedback'
 import { formatDate } from '../../shared/format'
 
@@ -12,8 +12,23 @@ interface SettingsDraft {
   minImdbVotes: string
 }
 
+interface ProviderSettingsDraft {
+  omdbApiKey: string
+  clearOmdbApiKey: boolean
+  omdbDailyRequestLimit: string
+  oscarEnrichmentMaxFilmsPerRun: string
+  oscarEnrichmentMaxRequestsPerDay: string
+}
+
 const emptySource: SourceInput = { stableKey: '', name: '', feedType: 'movie', url: '', isEnabled: true }
 const emptySettings: SettingsDraft = { excludedGenres: '', excludedCountries: '', minMovieRating: '0', minSeriesRating: '0', minImdbVotes: '0' }
+const emptyProviderSettings: ProviderSettingsDraft = {
+  omdbApiKey: '',
+  clearOmdbApiKey: false,
+  omdbDailyRequestLimit: '0',
+  oscarEnrichmentMaxFilmsPerRun: '0',
+  oscarEnrichmentMaxRequestsPerDay: '0',
+}
 
 function settingsToDraft(settings: Settings): SettingsDraft {
   return {
@@ -25,6 +40,15 @@ function settingsToDraft(settings: Settings): SettingsDraft {
   }
 }
 
+function providerSettingsToDraft(settings: ProviderSettings): ProviderSettingsDraft {
+  return {
+    ...emptyProviderSettings,
+    omdbDailyRequestLimit: String(settings.omdbDailyRequestLimit),
+    oscarEnrichmentMaxFilmsPerRun: String(settings.oscarEnrichmentMaxFilmsPerRun),
+    oscarEnrichmentMaxRequestsPerDay: String(settings.oscarEnrichmentMaxRequestsPerDay),
+  }
+}
+
 function splitValues(value: string): string[] {
   return value.split(',').map((part) => part.trim()).filter(Boolean)
 }
@@ -33,6 +57,8 @@ export function SourceSettingsView() {
   const [sources, setSources] = useState<Source[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
   const [settingsDraft, setSettingsDraft] = useState<SettingsDraft>(emptySettings)
+  const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null)
+  const [providerDraft, setProviderDraft] = useState<ProviderSettingsDraft>(emptyProviderSettings)
   const [sourceDraft, setSourceDraft] = useState<SourceInput>(emptySource)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [showSourceForm, setShowSourceForm] = useState(false)
@@ -41,21 +67,26 @@ export function SourceSettingsView() {
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [sourceError, setSourceError] = useState<string | null>(null)
   const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [providerError, setProviderError] = useState<string | null>(null)
   const [savingSource, setSavingSource] = useState(false)
   const [savingSettings, setSavingSettings] = useState(false)
+  const [savingProvider, setSavingProvider] = useState(false)
   const [sourceSaved, setSourceSaved] = useState(false)
   const [settingsSaved, setSettingsSaved] = useState(false)
+  const [providerSaved, setProviderSaved] = useState(false)
 
   useEffect(() => {
     let current = true
     setLoading(true)
     setLoadError(null)
-    Promise.all([getSources(), getSettings()])
-      .then(([sourceList, applicationSettings]) => {
+    Promise.all([getSources(), getSettings(), getProviderSettings()])
+      .then(([sourceList, applicationSettings, omdbSettings]) => {
         if (!current) return
         setSources(sourceList)
         setSettings(applicationSettings)
         setSettingsDraft(settingsToDraft(applicationSettings))
+        setProviderSettings(omdbSettings)
+        setProviderDraft(providerSettingsToDraft(omdbSettings))
       })
       .catch((requestError: unknown) => {
         if (current) setLoadError(requestError instanceof Error ? requestError.message : 'Could not load source settings.')
@@ -123,6 +154,30 @@ export function SourceSettingsView() {
       setSettingsError(requestError instanceof Error ? requestError.message : 'Could not save matching settings.')
     } finally {
       setSavingSettings(false)
+    }
+  }
+
+  async function saveProviderSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setSavingProvider(true)
+    setProviderError(null)
+    setProviderSaved(false)
+    const payload: ProviderSettingsInput = {
+      omdbApiKey: providerDraft.omdbApiKey.trim() || null,
+      clearOmdbApiKey: providerDraft.clearOmdbApiKey,
+      omdbDailyRequestLimit: Number(providerDraft.omdbDailyRequestLimit),
+      oscarEnrichmentMaxFilmsPerRun: Number(providerDraft.oscarEnrichmentMaxFilmsPerRun),
+      oscarEnrichmentMaxRequestsPerDay: Number(providerDraft.oscarEnrichmentMaxRequestsPerDay),
+    }
+    try {
+      const saved = await updateProviderSettings(payload)
+      setProviderSettings(saved)
+      setProviderDraft(providerSettingsToDraft(saved))
+      setProviderSaved(true)
+    } catch (requestError) {
+      setProviderError(requestError instanceof Error ? requestError.message : 'Could not save provider settings.')
+    } finally {
+      setSavingProvider(false)
     }
   }
 
@@ -198,12 +253,63 @@ export function SourceSettingsView() {
           </form>
         </section>
 
-        <section aria-labelledby="access-boundary-heading">
-          <h2 id="access-boundary-heading">Access boundary</h2>
-          <p className="section-caption">The browser sends configuration changes to the local MediaDock API. Provider credentials are not stored in this client.</p>
-          <p className="trust-note">Source and settings writes are unauthenticated. Keep the API on a trusted local network and do not expose it publicly without an authentication and authorization decision.</p>
+        <section aria-labelledby="provider-settings-heading">
+          <h2 id="provider-settings-heading">OMDb provider</h2>
+          <p className="section-caption">Credentials and request limits used by the one-shot Worker.</p>
+          <form className="settings-form" onSubmit={saveProviderSettings}>
+            <div className="field">
+              <label htmlFor="omdb-api-key">OMDb API key</label>
+              <input
+                autoComplete="new-password"
+                id="omdb-api-key"
+                maxLength={512}
+                onChange={(event) => setProviderDraft((current) => ({
+                  ...current,
+                  omdbApiKey: event.target.value,
+                  clearOmdbApiKey: false,
+                }))}
+                placeholder={providerSettings?.omdbApiKeyConfigured ? 'Leave blank to keep saved key' : 'Enter API key'}
+                type="password"
+                value={providerDraft.omdbApiKey}
+              />
+              {providerSettings?.omdbApiKeyConfigured && <span className="state-pill is-enriched">Key configured</span>}
+            </div>
+            <label className="checkbox-field">
+              <input
+                checked={providerDraft.clearOmdbApiKey}
+                disabled={!providerSettings?.omdbApiKeyConfigured}
+                onChange={(event) => setProviderDraft((current) => ({
+                  ...current,
+                  omdbApiKey: '',
+                  clearOmdbApiKey: event.target.checked,
+                }))}
+                type="checkbox"
+              />
+              Clear saved key
+            </label>
+            <div className="field">
+              <label htmlFor="omdb-daily-limit">Shared daily HTTP request limit</label>
+              <input id="omdb-daily-limit" min="0" onChange={(event) => setProviderDraft((current) => ({ ...current, omdbDailyRequestLimit: event.target.value }))} required type="number" value={providerDraft.omdbDailyRequestLimit} />
+            </div>
+            <div className="form-grid">
+              <div className="field">
+                <label htmlFor="oscar-max-films">Oscar films per run</label>
+                <input id="oscar-max-films" max="100000" min="0" onChange={(event) => setProviderDraft((current) => ({ ...current, oscarEnrichmentMaxFilmsPerRun: event.target.value }))} required type="number" value={providerDraft.oscarEnrichmentMaxFilmsPerRun} />
+              </div>
+              <div className="field">
+                <label htmlFor="oscar-daily-limit">Oscar daily HTTP limit</label>
+                <input id="oscar-daily-limit" min="0" onChange={(event) => setProviderDraft((current) => ({ ...current, oscarEnrichmentMaxRequestsPerDay: event.target.value }))} required type="number" value={providerDraft.oscarEnrichmentMaxRequestsPerDay} />
+              </div>
+            </div>
+            <p className="section-caption">Set a positive shared limit matching the OMDb key's confirmed quota. Oscar limits are additional caps, not reserved capacity; RSS runs first. Set Oscar films per run to 0 to disable enrichment.</p>
+            {providerSettings?.updatedAt && <p className="section-caption">Last updated {formatDate(providerSettings.updatedAt)}</p>}
+            {providerError && <p className="form-error" role="alert">{providerError}</p>}
+            {providerSaved && <p className="form-message" role="status">Provider settings saved.</p>}
+            <div className="form-actions"><button className="button" disabled={savingProvider} type="submit">{savingProvider ? 'Saving...' : 'Save provider settings'}</button></div>
+          </form>
         </section>
       </div>
+      <p className="trust-note">The API key is stored in the local database and never returned by the API. Settings writes are unauthenticated and use the local HTTP connection, so keep MediaDock on a trusted LAN and protect database backups.</p>
     </section>
   )
 }

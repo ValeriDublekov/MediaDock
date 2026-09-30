@@ -21,9 +21,10 @@ public sealed class OscarEnrichmentServiceTests
             new MetadataLookupResult(MetadataLookupStatus.ConfirmedNotFound, HttpAttempts: 2),
             new MetadataLookupResult(MetadataLookupStatus.TransportFailure, HttpAttempts: 1, ErrorCode: "timeout")
         ]);
-        var service = CreateService(repository, client, now);
+        var service = CreateService(repository, client, now, out var runRepository);
 
-        var summary = await service.RunAsync(3);
+        var run = await service.RunAsync(3, "manual");
+        var summary = run.Summary;
 
         Assert.Equal(3, summary.EligibleFilms);
         Assert.Equal(3, summary.AttemptedFilms);
@@ -39,6 +40,14 @@ public sealed class OscarEnrichmentServiceTests
         Assert.Equal(OscarEnrichmentStatuses.TemporaryError, repository.SavedOutcomes[2].Update.Status);
         Assert.Equal(1, repository.SavedOutcomes[2].Update.AttemptCount);
         Assert.Equal(now.AddHours(1), repository.SavedOutcomes[2].Update.NextAttemptAt);
+        Assert.Equal(41, run.RunId);
+        Assert.Equal(now, run.StartedAt);
+        Assert.Equal(now, run.FinishedAt);
+        Assert.Equal(OscarEnrichmentRunStatuses.Partial, run.Status);
+        Assert.Equal(OscarEnrichmentRunStatuses.Partial, runRepository.FinishedStatus);
+        Assert.Equal(3, runRepository.LastProgress?.EligibleFilms);
+        Assert.Equal(3, runRepository.LastProgress?.ProcessedFilms);
+        Assert.Equal(5, runRepository.LastProgress?.HttpAttempts);
     }
 
     [Fact]
@@ -55,9 +64,10 @@ public sealed class OscarEnrichmentServiceTests
             new MetadataLookupResult(MetadataLookupStatus.QuotaExceeded, HttpAttempts: 1, ErrorCode: "quota_exceeded"),
             new MetadataLookupResult(MetadataLookupStatus.Found, CreateMetadata(), HttpAttempts: 1)
         ]);
-        var service = CreateService(repository, client, now);
+        var service = CreateService(repository, client, now, out var runRepository);
 
-        var summary = await service.RunAsync(2);
+        var run = await service.RunAsync(2, "schedule");
+        var summary = run.Summary;
 
         Assert.Equal(2, summary.EligibleFilms);
         Assert.Equal(1, summary.AttemptedFilms);
@@ -70,6 +80,9 @@ public sealed class OscarEnrichmentServiceTests
             new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero),
             repository.SavedOutcomes[0].Update.NextAttemptAt);
         Assert.Equal(1, client.Calls);
+        Assert.Equal(OscarEnrichmentRunStatuses.QuotaStopped, run.Status);
+        Assert.Equal(OscarEnrichmentRunStatuses.QuotaStopped, runRepository.FinishedStatus);
+        Assert.Equal("provider_quota_exceeded", runRepository.ErrorCode);
     }
 
     [Fact]
@@ -88,9 +101,10 @@ public sealed class OscarEnrichmentServiceTests
                 HttpAttempts: 0,
                 ErrorCode: "daily_budget_exhausted")
         ]);
-        var service = CreateService(repository, client, now);
+        var service = CreateService(repository, client, now, out var runRepository);
 
-        var summary = await service.RunAsync(2);
+        var run = await service.RunAsync(2, "manual");
+        var summary = run.Summary;
 
         Assert.Equal(2, summary.EligibleFilms);
         Assert.Equal(0, summary.AttemptedFilms);
@@ -99,15 +113,39 @@ public sealed class OscarEnrichmentServiceTests
         Assert.True(summary.StoppedForQuota);
         Assert.Empty(repository.SavedOutcomes);
         Assert.Equal(1, client.Calls);
+        Assert.Equal(OscarEnrichmentRunStatuses.QuotaStopped, run.Status);
+        Assert.Equal(0, runRepository.LastProgress?.ProcessedFilms);
+        Assert.Equal(0, runRepository.LastProgress?.HttpAttempts);
+        Assert.Equal("daily_request_budget_exhausted", runRepository.ErrorCode);
+    }
+
+    [Fact]
+    public async Task RunAsyncRecordsUnexpectedFailureAndRethrowsIt()
+    {
+        var now = new DateTimeOffset(2026, 9, 29, 12, 0, 0, TimeSpan.Zero);
+        var runRepository = new FakeOscarEnrichmentRunRepository();
+        var service = new OscarEnrichmentService(
+            new FaultingOscarEnrichmentRepository(),
+            new MetadataResolver(new StubOmdbClient([]), new EmptyMetadataCacheStore()),
+            runRepository,
+            new FrozenTimeProvider(now));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RunAsync(1, "manual"));
+
+        Assert.Equal(OscarEnrichmentRunStatuses.Failed, runRepository.FinishedStatus);
+        Assert.Equal(nameof(InvalidOperationException), runRepository.ErrorCode);
+        Assert.Equal(now, runRepository.FinishedAt);
     }
 
     private static OscarEnrichmentService CreateService(
         FakeOscarEnrichmentRepository repository,
         StubOmdbClient client,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        out FakeOscarEnrichmentRunRepository runRepository)
     {
         var resolver = new MetadataResolver(client, new EmptyMetadataCacheStore());
-        return new OscarEnrichmentService(repository, resolver, new FrozenTimeProvider(now));
+        runRepository = new FakeOscarEnrichmentRunRepository();
+        return new OscarEnrichmentService(repository, resolver, runRepository, new FrozenTimeProvider(now));
     }
 
     private static MetadataDetails CreateMetadata() =>
@@ -180,6 +218,58 @@ public sealed class OscarEnrichmentServiceTests
         public Task StoreAsync(
             string cacheKey,
             MetadataCacheValue value,
+            CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class FakeOscarEnrichmentRunRepository : IOscarEnrichmentRunRepository
+    {
+        public string? FinishedStatus { get; private set; }
+        public string? ErrorCode { get; private set; }
+        public DateTimeOffset? FinishedAt { get; private set; }
+        public OscarEnrichmentRunProgress? LastProgress { get; private set; }
+
+        public Task<long> StartAsync(
+            string trigger,
+            DateTimeOffset startedAt,
+            CancellationToken cancellationToken = default) => Task.FromResult(41L);
+
+        public Task SaveProgressAsync(
+            long runId,
+            OscarEnrichmentRunProgress progress,
+            CancellationToken cancellationToken = default)
+        {
+            LastProgress = progress;
+            return Task.CompletedTask;
+        }
+
+        public Task FinishAsync(
+            long runId,
+            string status,
+            DateTimeOffset finishedAt,
+            OscarEnrichmentRunProgress progress,
+            string? errorCode,
+            CancellationToken cancellationToken = default)
+        {
+            FinishedStatus = status;
+            ErrorCode = errorCode;
+            FinishedAt = finishedAt;
+            LastProgress = progress;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FaultingOscarEnrichmentRepository : IOscarEnrichmentRepository
+    {
+        public Task<IReadOnlyList<OscarEnrichmentCandidate>> GetEligibleCandidatesAsync(
+            DateTimeOffset now,
+            int limit,
+            CancellationToken cancellationToken = default) =>
+            Task.FromException<IReadOnlyList<OscarEnrichmentCandidate>>(
+                new InvalidOperationException("Repository failure."));
+
+        public Task SaveOutcomeAsync(
+            long filmId,
+            OscarEnrichmentUpdate update,
             CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 

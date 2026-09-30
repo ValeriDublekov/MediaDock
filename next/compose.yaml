@@ -61,10 +61,6 @@ services:
         condition: service_healthy
     environment:
       ConnectionStrings__MediaDock: "Host=db;Port=5432;Database=${POSTGRES_DB:-mediadock};Username=${POSTGRES_USER:-mediadock};Password=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in next/.env or the host environment}"
-      OMDB_API_KEY: ${OMDB_API_KEY:-}
-      OMDB_DAILY_REQUEST_LIMIT: ${OMDB_DAILY_REQUEST_LIMIT:-}
-      OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN: ${OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN:-0}
-      OSCAR_ENRICHMENT_MAX_REQUESTS_PER_DAY: ${OSCAR_ENRICHMENT_MAX_REQUESTS_PER_DAY:-0}
     profiles:
       - worker
     restart: "no"

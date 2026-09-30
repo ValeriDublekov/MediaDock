@@ -3,6 +3,7 @@ using System;
 using MediaDock.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MediaDock.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(MediaDockDbContext))]
-    partial class MediaDockDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260930061644_OscarEnrichmentRuns")]
+    partial class OscarEnrichmentRuns
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -59,23 +62,6 @@ namespace MediaDock.Infrastructure.Persistence.Migrations
                         .HasColumnType("numeric(3,1)")
                         .HasColumnName("min_series_rating");
 
-                    b.Property<string>("OmdbApiKey")
-                        .HasMaxLength(512)
-                        .HasColumnType("character varying(512)")
-                        .HasColumnName("omdb_api_key");
-
-                    b.Property<int>("OmdbDailyRequestLimit")
-                        .HasColumnType("integer")
-                        .HasColumnName("omdb_daily_request_limit");
-
-                    b.Property<int>("OscarEnrichmentMaxFilmsPerRun")
-                        .HasColumnType("integer")
-                        .HasColumnName("oscar_enrichment_max_films_per_run");
-
-                    b.Property<int>("OscarEnrichmentMaxRequestsPerDay")
-                        .HasColumnType("integer")
-                        .HasColumnName("oscar_enrichment_max_requests_per_day");
-
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
@@ -90,12 +76,6 @@ namespace MediaDock.Infrastructure.Persistence.Migrations
                             t.HasCheckConstraint("ck_settings_min_movie_rating", "min_movie_rating BETWEEN 0 AND 10");
 
                             t.HasCheckConstraint("ck_settings_min_series_rating", "min_series_rating BETWEEN 0 AND 10");
-
-                            t.HasCheckConstraint("ck_settings_omdb_daily_request_limit", "omdb_daily_request_limit >= 0");
-
-                            t.HasCheckConstraint("ck_settings_oscar_max_films_per_run", "oscar_enrichment_max_films_per_run BETWEEN 0 AND 100000");
-
-                            t.HasCheckConstraint("ck_settings_oscar_max_requests_per_day", "oscar_enrichment_max_requests_per_day >= 0");
                         });
                 });
 

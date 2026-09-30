@@ -224,6 +224,60 @@ public sealed class CatalogApiTests
         Assert.Equal(HttpStatusCode.BadRequest, invalidSettingsResponse.StatusCode);
         Assert.NotNull(await invalidSettingsResponse.Content.ReadFromJsonAsync<ValidationProblemDetails>());
 
+        using var defaultProviderSettingsResponse = await client.GetAsync("/api/settings/providers/omdb");
+        var defaultProviderSettings = await defaultProviderSettingsResponse.Content
+            .ReadFromJsonAsync<ProviderSettingsResponse>();
+        Assert.NotNull(defaultProviderSettings);
+        Assert.False(defaultProviderSettings.OmdbApiKeyConfigured);
+
+        using var invalidProviderSettingsResponse = await client.PutAsJsonAsync(
+            "/api/settings/providers/omdb",
+            new UpdateProviderSettingsRequest
+            {
+                OmdbApiKey = "test-omdb-key-value",
+                OscarEnrichmentMaxFilmsPerRun = 5
+            });
+        Assert.Equal(HttpStatusCode.BadRequest, invalidProviderSettingsResponse.StatusCode);
+        Assert.NotNull(await invalidProviderSettingsResponse.Content.ReadFromJsonAsync<ValidationProblemDetails>());
+
+        const string testOmdbApiKey = "test-omdb-key-value";
+        using var updateProviderSettingsResponse = await client.PutAsJsonAsync(
+            "/api/settings/providers/omdb",
+            new UpdateProviderSettingsRequest
+            {
+                OmdbApiKey = testOmdbApiKey,
+                OmdbDailyRequestLimit = 20,
+                OscarEnrichmentMaxFilmsPerRun = 5,
+                OscarEnrichmentMaxRequestsPerDay = 8
+            });
+        Assert.Equal(HttpStatusCode.OK, updateProviderSettingsResponse.StatusCode);
+        var providerSettingsJson = await updateProviderSettingsResponse.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(testOmdbApiKey, providerSettingsJson);
+        var savedProviderSettings = await updateProviderSettingsResponse.Content
+            .ReadFromJsonAsync<ProviderSettingsResponse>();
+        Assert.NotNull(savedProviderSettings);
+        Assert.True(savedProviderSettings.OmdbApiKeyConfigured);
+        Assert.Equal(20, savedProviderSettings.OmdbDailyRequestLimit);
+        Assert.Equal(5, savedProviderSettings.OscarEnrichmentMaxFilmsPerRun);
+        Assert.Equal(8, savedProviderSettings.OscarEnrichmentMaxRequestsPerDay);
+
+        db.ChangeTracker.Clear();
+        var providerSettingsInDatabase = await db.Settings.AsNoTracking().SingleAsync();
+        Assert.Equal(testOmdbApiKey, providerSettingsInDatabase.OmdbApiKey);
+
+        using var clearProviderSettingsResponse = await client.PutAsJsonAsync(
+            "/api/settings/providers/omdb",
+            new UpdateProviderSettingsRequest
+            {
+                ClearOmdbApiKey = true,
+                OmdbDailyRequestLimit = 20,
+                OscarEnrichmentMaxFilmsPerRun = 5,
+                OscarEnrichmentMaxRequestsPerDay = 8
+            });
+        Assert.Equal(HttpStatusCode.OK, clearProviderSettingsResponse.StatusCode);
+        Assert.False((await clearProviderSettingsResponse.Content
+            .ReadFromJsonAsync<ProviderSettingsResponse>())?.OmdbApiKeyConfigured);
+
         using var logsResponse = await client.GetAsync("/api/parse-logs?page=1&pageSize=1&ignored=true");
         var logs = await logsResponse.Content.ReadFromJsonAsync<PageResponse<ParseLogResponse>>();
         Assert.NotNull(logs);

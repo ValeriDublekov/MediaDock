@@ -31,13 +31,13 @@ sudo systemctl enable --now mediadock-worker.timer
 To run an intentional manual scan from the Compose directory, use
 `docker compose run --rm worker --trigger manual`. The systemd service passes
 `--trigger schedule`. Both paths run RSS first, then optional Oscar enrichment
-within the same database lock. Set `OMDB_DAILY_REQUEST_LIMIT` in the Compose
-`.env` to the verified daily quota for the configured OMDb key; the Worker
-refuses an unset, zero, or invalid value. `OSCAR_ENRICHMENT_MAX_REQUESTS_PER_DAY`
-is the Oscar-only daily maximum, and `OSCAR_ENRICHMENT_MAX_FILMS_PER_RUN` is the
-per-invocation candidate cap. Both Oscar values must be positive to enable
-enrichment. The shared total and Oscar count are persisted by UTC day in
-PostgreSQL; fallback requests and retries each consume a slot, while cache hits
-do not. The Oscar maximum is not reserved from RSS usage. Check the timer with
+within the same database lock. Configure the OMDb key and confirmed shared
+daily quota in the web UI before running the Worker; it reads those values and
+the Oscar limits from PostgreSQL on each invocation. Existing environment
+variables for these values are no longer used. Oscar enrichment is enabled
+when both its per-run film limit and daily HTTP cap are positive. The shared
+total and Oscar count are persisted by UTC day in PostgreSQL; fallback
+requests and retries each consume a slot, while cache hits do not. The Oscar
+maximum is not reserved from RSS usage. Check the timer with
 `systemctl list-timers mediadock-worker.timer` and service output with
 `journalctl -u mediadock-worker.service`.

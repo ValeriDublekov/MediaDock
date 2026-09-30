@@ -34,7 +34,7 @@ public sealed class OmdbClient : IOmdbClient
         ArgumentNullException.ThrowIfNull(httpClient);
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            throw new InvalidOperationException("OMDB_API_KEY is required on the server.");
+            throw new InvalidOperationException("OMDb API key is required on the server.");
         }
 
         if ((timeout ?? TimeSpan.FromSeconds(8)) <= TimeSpan.Zero || maximumResponseBytes <= 0)
@@ -56,11 +56,6 @@ public sealed class OmdbClient : IOmdbClient
         _oscarDailyRequestLimit = oscarDailyRequestLimit;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
-
-    public static OmdbClient FromEnvironment(
-        HttpClient httpClient,
-        TimeSpan? timeout = null) =>
-        new(httpClient, Environment.GetEnvironmentVariable("OMDB_API_KEY") ?? string.Empty, timeout);
 
     public async Task<MetadataLookupResult> LookupAsync(
         string title,

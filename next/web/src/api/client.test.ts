@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { ApiError, getCatalog, getOscarFilm, getOscarFilms, requestJson } from './client'
-import type { CatalogTitle, OscarFilm, PageResponse } from './types'
+import { ApiError, getCatalog, getOscarFilm, getOscarFilms, getProviderSettings, requestJson, updateProviderSettings } from './client'
+import type { CatalogTitle, OscarFilm, PageResponse, ProviderSettings, ProviderSettingsInput } from './types'
 
 function response(status: number, value: unknown): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => value } as Response
@@ -57,6 +57,31 @@ describe('typed API client', () => {
     expect(listUrl.searchParams.get('result')).toBe('winner')
     expect(listUrl.searchParams.get('enrichmentStatus')).toBe('pending')
     expect(String(stub.calls[1]?.input)).toBe('/api/oscars/42')
+  })
+
+  it('loads provider settings and sends a write-only key update', async () => {
+    const providerSettings: ProviderSettings = {
+      omdbApiKeyConfigured: true,
+      omdbDailyRequestLimit: 25,
+      oscarEnrichmentMaxFilmsPerRun: 10,
+      oscarEnrichmentMaxRequestsPerDay: 8,
+      updatedAt: null,
+    }
+    const input: ProviderSettingsInput = {
+      omdbApiKey: 'new-key-value',
+      clearOmdbApiKey: false,
+      omdbDailyRequestLimit: 25,
+      oscarEnrichmentMaxFilmsPerRun: 10,
+      oscarEnrichmentMaxRequestsPerDay: 8,
+    }
+    const stub = fetchStub(response(200, providerSettings))
+
+    await getProviderSettings(stub.fetcher)
+    await updateProviderSettings(input, stub.fetcher)
+
+    expect(String(stub.calls[0]?.input)).toBe('/api/settings/providers/omdb')
+    expect(stub.calls[1]?.init?.method).toBe('PUT')
+    expect(JSON.parse(String(stub.calls[1]?.init?.body))).toEqual(input)
   })
 
   it('surfaces ProblemDetails validation errors with their HTTP status', async () => {

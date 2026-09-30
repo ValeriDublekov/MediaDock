@@ -7,6 +7,8 @@ import type {
   PageResponse,
   ParseLog,
   ParseLogQuery,
+  ProviderSettings,
+  ProviderSettingsInput,
   ScanRun,
   ScanRunQuery,
   Settings,
@@ -131,6 +133,18 @@ export function getSettings(fetcher?: typeof fetch) {
 
 export function updateSettings(input: SettingsInput, fetcher?: typeof fetch) {
   return requestJson<Settings>('/settings', { method: 'PUT', body: JSON.stringify(input) }, fetcher)
+}
+
+export function getProviderSettings(fetcher?: typeof fetch) {
+  return requestJson<ProviderSettings>('/settings/providers/omdb', {}, fetcher)
+}
+
+export function updateProviderSettings(input: ProviderSettingsInput, fetcher?: typeof fetch) {
+  return requestJson<ProviderSettings>(
+    '/settings/providers/omdb',
+    { method: 'PUT', body: JSON.stringify(input) },
+    fetcher,
+  )
 }
 
 export function getScanRuns(query: ScanRunQuery, fetcher?: typeof fetch) {

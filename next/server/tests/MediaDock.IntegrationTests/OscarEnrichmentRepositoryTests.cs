@@ -102,6 +102,46 @@ public sealed class OscarEnrichmentRepositoryTests
     }
 
     [Fact]
+    public async Task EnrichmentRunRepositoryPersistsProgressAndCompletionSeparately()
+    {
+        await using var postgres = PostgreSqlTestContainerBuilder.Create("mediadock_oscar_enrichment_run_test").Build();
+        await postgres.StartAsync();
+
+        var options = new DbContextOptionsBuilder<MediaDockDbContext>()
+            .UseNpgsql(postgres.GetConnectionString())
+            .Options;
+        await using var db = new MediaDockDbContext(options);
+        await db.Database.MigrateAsync();
+
+        var startedAt = new DateTimeOffset(2026, 9, 30, 3, 17, 0, TimeSpan.Zero);
+        var finishedAt = startedAt.AddMinutes(4);
+        var progress = new OscarEnrichmentRunProgress(7, 3, 1, 1, 1, 2, 5);
+        var repository = new PostgresOscarEnrichmentRunRepository(db);
+        var runId = await repository.StartAsync("schedule", startedAt);
+
+        await repository.SaveProgressAsync(runId, progress);
+        await repository.FinishAsync(
+            runId,
+            OscarEnrichmentRunStatuses.Partial,
+            finishedAt,
+            progress,
+            "TimeoutException");
+
+        var run = await db.OscarEnrichmentRuns.AsNoTracking().SingleAsync(candidate => candidate.Id == runId);
+        Assert.Equal(startedAt, run.StartedAt);
+        Assert.Equal(finishedAt, run.FinishedAt);
+        Assert.Equal(OscarEnrichmentRunStatuses.Partial, run.Status);
+        Assert.Equal("schedule", run.Trigger);
+        Assert.Equal(7, run.EligibleFilms);
+        Assert.Equal(3, run.ProcessedFilms);
+        Assert.Equal(1, run.NotFoundFilms);
+        Assert.Equal(1, run.TemporaryErrors);
+        Assert.Equal(5, run.HttpAttempts);
+        Assert.Equal("TimeoutException", run.ErrorCode);
+        Assert.Empty(await db.ScanRuns.ToListAsync());
+    }
+
+    [Fact]
     public async Task SaveOutcomeUpdatesTitleMetadataWithoutCreatingOccurrenceOrChangingLastSeenAt()
     {
         await using var postgres = PostgreSqlTestContainerBuilder.Create("mediadock_oscar_enrichment_save_test").Build();

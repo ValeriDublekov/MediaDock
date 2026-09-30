@@ -5,21 +5,25 @@ namespace MediaDock.Application.OscarAwards;
 public sealed class OscarEnrichmentService
 {
     private readonly IOscarEnrichmentRepository _repository;
+    private readonly IOscarEnrichmentRunRepository _runRepository;
     private readonly MetadataResolver _metadataResolver;
     private readonly TimeProvider _timeProvider;
 
     public OscarEnrichmentService(
         IOscarEnrichmentRepository repository,
         MetadataResolver metadataResolver,
+        IOscarEnrichmentRunRepository runRepository,
         TimeProvider? timeProvider = null)
     {
         _repository = repository;
         _metadataResolver = metadataResolver;
+        _runRepository = runRepository;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public async Task<OscarEnrichmentSummary> RunAsync(
+    public async Task<OscarEnrichmentRunResult> RunAsync(
         int maximumFilms,
+        string trigger,
         CancellationToken cancellationToken = default)
     {
         if (maximumFilms <= 0)
@@ -27,10 +31,9 @@ public sealed class OscarEnrichmentService
             throw new ArgumentOutOfRangeException(nameof(maximumFilms));
         }
 
-        var candidates = await _repository.GetEligibleCandidatesAsync(
-            _timeProvider.GetUtcNow(),
-            maximumFilms,
-            cancellationToken);
+        var startedAt = _timeProvider.GetUtcNow();
+        var runId = await _runRepository.StartAsync(trigger, startedAt, cancellationToken);
+        var eligibleFilms = 0;
         var attemptedFilms = 0;
         var enrichedFilms = 0;
         var notFoundFilms = 0;
@@ -38,55 +41,103 @@ public sealed class OscarEnrichmentService
         var cacheHits = 0;
         var httpAttempts = 0;
         var stoppedForQuota = false;
+        string? quotaStopErrorCode = null;
 
-        foreach (var candidate in candidates)
+        OscarEnrichmentRunProgress CreateProgress() => new(
+            eligibleFilms,
+            attemptedFilms,
+            enrichedFilms,
+            notFoundFilms,
+            temporaryErrors,
+            cacheHits,
+            httpAttempts);
+
+        Task SaveProgressAsync(CancellationToken token) =>
+            _runRepository.SaveProgressAsync(runId, CreateProgress(), token);
+
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var attemptedAt = _timeProvider.GetUtcNow();
-            var resolution = await _metadataResolver.ResolveAsync(
-                candidate.FilmTitle,
-                candidate.FilmYear,
-                "movie",
-                attemptedAt,
-                cancellationToken,
-                OmdbRequestPurpose.OscarEnrichment);
-            if (resolution.Status == MetadataLookupStatus.RequestBudgetExhausted)
+            var candidates = await _repository.GetEligibleCandidatesAsync(
+                _timeProvider.GetUtcNow(),
+                maximumFilms,
+                cancellationToken);
+            eligibleFilms = candidates.Count;
+            await SaveProgressAsync(cancellationToken);
+
+            foreach (var candidate in candidates)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                var attemptedAt = _timeProvider.GetUtcNow();
+                var resolution = await _metadataResolver.ResolveAsync(
+                    candidate.FilmTitle,
+                    candidate.FilmYear,
+                    "movie",
+                    attemptedAt,
+                    cancellationToken,
+                    OmdbRequestPurpose.OscarEnrichment);
                 httpAttempts += resolution.HttpAttempts;
-                stoppedForQuota = true;
-                break;
-            }
-
-            var attemptCount = candidate.AttemptCount + 1;
-            var update = CreateUpdate(resolution, attemptCount, attemptedAt);
-
-            await _repository.SaveOutcomeAsync(candidate.Id, update, cancellationToken);
-            attemptedFilms++;
-            cacheHits += resolution.CacheHit ? 1 : 0;
-            httpAttempts += resolution.HttpAttempts;
-
-            switch (update.Status)
-            {
-                case OscarEnrichmentStatuses.Enriched:
-                    enrichedFilms++;
+                await SaveProgressAsync(cancellationToken);
+                if (resolution.Status == MetadataLookupStatus.RequestBudgetExhausted)
+                {
+                    stoppedForQuota = true;
+                    quotaStopErrorCode = "daily_request_budget_exhausted";
                     break;
-                case OscarEnrichmentStatuses.NotFound:
-                    notFoundFilms++;
-                    break;
-                default:
-                    temporaryErrors++;
-                    break;
-            }
+                }
 
-            if (resolution.Status == MetadataLookupStatus.QuotaExceeded)
-            {
-                stoppedForQuota = true;
-                break;
+                var attemptCount = candidate.AttemptCount + 1;
+                var update = CreateUpdate(resolution, attemptCount, attemptedAt);
+
+                await _repository.SaveOutcomeAsync(candidate.Id, update, cancellationToken);
+                attemptedFilms++;
+                cacheHits += resolution.CacheHit ? 1 : 0;
+
+                switch (update.Status)
+                {
+                    case OscarEnrichmentStatuses.Enriched:
+                        enrichedFilms++;
+                        break;
+                    case OscarEnrichmentStatuses.NotFound:
+                        notFoundFilms++;
+                        break;
+                    default:
+                        temporaryErrors++;
+                        break;
+                }
+
+                await SaveProgressAsync(cancellationToken);
+                if (resolution.Status == MetadataLookupStatus.QuotaExceeded)
+                {
+                    stoppedForQuota = true;
+                    quotaStopErrorCode = "provider_quota_exceeded";
+                    break;
+                }
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await _runRepository.FinishAsync(
+                runId,
+                OscarEnrichmentRunStatuses.Cancelled,
+                _timeProvider.GetUtcNow(),
+                CreateProgress(),
+                "cancelled",
+                CancellationToken.None);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            await _runRepository.FinishAsync(
+                runId,
+                OscarEnrichmentRunStatuses.Failed,
+                _timeProvider.GetUtcNow(),
+                CreateProgress(),
+                exception.GetType().Name,
+                CancellationToken.None);
+            throw;
+        }
 
-        return new OscarEnrichmentSummary(
-            candidates.Count,
+        var summary = new OscarEnrichmentSummary(
+            eligibleFilms,
             attemptedFilms,
             enrichedFilms,
             notFoundFilms,
@@ -94,6 +145,21 @@ public sealed class OscarEnrichmentService
             cacheHits,
             httpAttempts,
             stoppedForQuota);
+        var status = stoppedForQuota
+            ? OscarEnrichmentRunStatuses.QuotaStopped
+            : temporaryErrors > 0
+                ? OscarEnrichmentRunStatuses.Partial
+                : OscarEnrichmentRunStatuses.Succeeded;
+        var finishedAt = _timeProvider.GetUtcNow();
+        await _runRepository.FinishAsync(
+            runId,
+            status,
+            finishedAt,
+            CreateProgress(),
+            quotaStopErrorCode,
+            CancellationToken.None);
+
+        return new OscarEnrichmentRunResult(runId, startedAt, finishedAt, status, summary);
     }
 
     private static OscarEnrichmentUpdate CreateUpdate(
