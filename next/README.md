@@ -4,6 +4,32 @@
 
 Standalone local MVP. The app is unauthenticated and defaults to loopback. Any LAN deployment must bind to a specific trusted interface and enforce a matching host firewall allowlist; it has no runtime dependency on the existing root app.
 
+## Production status (2026-09-30)
+
+The production deployment runs public GitHub `main` at commit
+`c04ff8ac1b8b205ed8bd5edb02d59c8deeb69644`. The server-side clean-main gate
+passed web checks, .NET unit tests (41/41), integration tests (13/13), and
+API/Worker image builds. The manual systemd deployment completed successfully.
+
+From the trusted LAN, open `http://<server-LAN-IPv4>:8081/`. The real host
+address is kept in server-only configuration and intentionally omitted from
+Git. The app has no login or authorization: every client allowed by the trusted
+LAN can read and change application data. The API uses a specific trusted
+interface; PostgreSQL remains loopback-only at `127.0.0.1:5432`. LAN checks for
+the UI, readiness, and catalog returned HTTP 200. Router port-forward and
+non-LAN denial checks remain unverified.
+
+`mediadock-next-deploy.timer` is enabled for 04:00 UTC. The daily database dump
+timer runs at 03:00 UTC before the existing Restic window. Step 6 dump, restore,
+and Restic verification passed for the earlier daily dump. The Step 7 dump
+`daily-20260930T082555Z.dump` passed `pg_restore -l`, but has not yet been
+confirmed in a later Restic snapshot.
+
+The Worker service is installed, but its production timer is not installed or
+enabled, and no scan has run. The checked-in timer is intended for 07:00 and
+18:00 `Europe/Sofia`; Step 8 configuration and operator approval remain
+pending. See the [systemd runbook](deploy/systemd/README.md).
+
 ## Prerequisites
 
 - .NET 10 SDK
@@ -103,13 +129,13 @@ Re-import the same or a refreshed dataset with the same command; matching films 
 
 The `settings` table stores the OMDb key as plain text. A SQL backup therefore contains the provider credential; protect backup files and their storage with the same care as `.env`, and rotate the key if a backup is exposed.
 
-For the Ubuntu deployment, install `next/deploy/backup.sh` with `next/deploy/systemd/mediadock-next-backup.service` and `next/deploy/systemd/mediadock-next-backup.timer`. It creates a root-only custom-format dump at 03:00 UTC under `/opt/docker/backups/mediadock-next`, validates it with `pg_restore -l`, and keeps the newest 14 daily dumps. The existing Restic job backs up `/opt/docker` afterward. Do not enable this host timer until the production `.env` and Compose paths have been reviewed.
+For a new Ubuntu host, install `next/deploy/backup.sh` with `next/deploy/systemd/mediadock-next-backup.service` and `next/deploy/systemd/mediadock-next-backup.timer`. It creates a root-only custom-format dump at 03:00 UTC under `/opt/docker/backups/mediadock-next`, validates it with `pg_restore -l`, and keeps the newest 14 daily dumps. The existing Restic job backs up `/opt/docker` afterward. Do not enable the timer until the production `.env` and Compose paths have been reviewed.
 
 The optional deployment service is documented in `next/deploy/systemd/README.md`.
 It fetches only GitHub `main`, runs the clean staging gate, creates a
 pre-migration dump, uses versioned images, and checks readiness after startup.
-Keep its timer disabled until the manual deployment and rollback procedure have
-been reviewed.
+On a new host, keep its timer disabled until the manual deployment and rollback
+procedure have been reviewed.
 
 Create a plain SQL backup inside the container, then copy it to the host:
 

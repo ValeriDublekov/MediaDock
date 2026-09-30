@@ -2,6 +2,22 @@
 
 This guide covers only the standalone app under `next/`. It is separate from the root app, Python backend, Firebase/Firestore, Google Auth, and GitHub Pages runtime; see [project context](PROJECT_CONTEXT.md). The [local runbook](../../README.md) remains the canonical source for Docker, backup, and restore commands. The [systemd runbook](../../deploy/systemd/README.md) remains canonical for host scheduling and unit installation.
 
+## Current Production Status (2026-09-30)
+
+Production runs GitHub `main` at commit
+`c04ff8ac1b8b205ed8bd5edb02d59c8deeb69644`. The API listens on the configured
+specific trusted LAN interface at port `8081`; PostgreSQL is loopback-only.
+Readiness, UI, and catalog checks from the LAN returned HTTP 200. The API has
+no authentication, so every allowed LAN client can read and change data. The
+router port-forward review and non-LAN denial test have not been completed; do
+not treat LAN checks as proof of public-network isolation.
+
+The deployment timer is enabled for 04:00 UTC. The Worker service is installed,
+but its timer is not installed or enabled, and no production scan has run. The
+Step 7 database dump passed `pg_restore -l` but still needs confirmation in a
+later Restic snapshot. See the [systemd runbook](../../deploy/systemd/README.md)
+for the current host state and the remaining operator gates.
+
 ## Trust Boundary
 
 The Compose stack publishes the API on `${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}` and PostgreSQL on `127.0.0.1:${POSTGRES_PORT:-5432}` ([Compose](../../compose.yaml)). The API defaults to loopback. A LAN deployment may bind only to a specific trusted interface and must use a matching `DOCKER-USER` source allowlist; PostgreSQL stays loopback-only. The API's container port is for Compose networking. The documented endpoints use HTTP, not TLS. Loopback limits remote network access but does not authenticate local processes or users that can reach the port.
@@ -28,7 +44,7 @@ Per feed request, connection timeout is 5 seconds, request timeout is 20 seconds
 
 Schema changes are checked in as EF Core migrations ([migration history](../../server/src/MediaDock.Infrastructure/Persistence/Migrations/)). The normal API startup does not migrate. The explicit Compose `migrate` service sets `migrate=true`, applies pending migrations, and exits; run it in the order documented in the [local runbook](../../README.md) before starting the API after a schema change. Compose does not make API startup depend on that service. `/health/ready` checks database connectivity, not whether the expected schema migration has been applied.
 
-The Worker is a one-shot process. An intentional manual invocation fetches configured RSS feeds and, when enabled, enriches Oscar candidates; it may call OMDb, so it requires outbound network access, a valid key, and the configured daily cap. Do not use it as a harmless health check. RSS runs before Oscar enrichment in the same invocation; both use the atomic PostgreSQL UTC-day budget, and exhaustion stops the current task. The systemd service invokes the same Worker with the `schedule` trigger. Its timer runs daily at 03:17 in `Europe/Sofia`; `Persistent=true` requests at most one catch-up run after downtime, not one run per missed day. A PostgreSQL advisory lock prevents overlapping Worker scans, but it does not serialize API writes or migrations. See the [systemd runbook](../../deploy/systemd/README.md) and its [timer](../../deploy/systemd/mediadock-worker.timer) and [service](../../deploy/systemd/mediadock-worker.service) for the canonical schedule and operational procedure.
+The Worker is a one-shot process. An intentional manual invocation fetches configured RSS feeds and, when enabled, enriches Oscar candidates; it may call OMDb, so it requires outbound network access, a valid key, and the configured daily cap. Do not use it as a harmless health check. RSS runs before Oscar enrichment in the same invocation; both use the atomic PostgreSQL UTC-day budget, and exhaustion stops the current task. The systemd service invokes the same Worker with the `schedule` trigger. The checked-in timer is intended for 07:00 and 18:00 in `Europe/Sofia`; `Persistent=true` requests at most one catch-up run after downtime, not one run per missed day. On the current production host, the Worker service is installed but its timer is not installed or enabled, and no scan has run. Do not install or enable the timer until the Step 8 key/quota, feed, and operator-approval conditions are met. A PostgreSQL advisory lock prevents overlapping Worker scans, but it does not serialize API writes or migrations. See the [systemd runbook](../../deploy/systemd/README.md) and its [timer](../../deploy/systemd/mediadock-worker.timer) and [service](../../deploy/systemd/mediadock-worker.service) for the canonical schedule and operational procedure.
 
 Oscar enrichment lifecycle and progress are stored in the separate `oscar_enrichment_runs` table; RSS `scan_runs` and `parse_logs` retain their existing meanings. The [local runbook](../../README.md) documents the audit and UTC-budget queries and the response to a provider quota stop. The Kaggle Oscar dataset page identifies the source dataset as CC0; keep the downloaded file, retrieval date/version, and checksum outside Git. OMDb describes its content terms as CC BY-NC 4.0; review the applicable terms before redistributing data or using it commercially.
 

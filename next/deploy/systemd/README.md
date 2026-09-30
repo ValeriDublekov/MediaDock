@@ -1,5 +1,17 @@
 # Host Schedule
 
+## Current Production Deployment (2026-09-30)
+
+The production checkout is `/opt/docker/projects/mediadock-next/next`, deployed from GitHub `main` at commit `c04ff8ac1b8b205ed8bd5edb02d59c8deeb69644`. The UI is available to trusted LAN clients at `http://<server-LAN-IPv4>:8081/`; the actual host address is stored only in server configuration. The app has no login. PostgreSQL remains bound to `127.0.0.1:5432`.
+
+- `mediadock-next-deploy.timer` is enabled for 04:00 UTC.
+- `mediadock-next-backup.timer` is enabled for 03:00 UTC; the existing Restic timer starts at about 03:30 UTC with up to 15 minutes of random delay.
+- Step 6 dump/restore/Restic verification passed. The Step 7 dump `daily-20260930T082555Z.dump` is root-only and passed `pg_restore -l`, but inclusion in a later Restic snapshot is not yet confirmed.
+- The Worker service is installed, but `mediadock-worker.timer` is not installed or enabled and no scan has run. Step 8 operator approval remains pending.
+- LAN readiness/UI/catalog checks returned HTTP 200. Router port-forward and non-LAN denial checks remain unverified.
+
+The installation instructions below describe how to provision or operate the units; this status block records the verified production state.
+
 ## LAN API Firewall
 
 The optional `mediadock-next-firewall.service` reads `/etc/default/mediadock-next-firewall`. Create that root-owned host file with `APP_BIND_ADDRESS`, `APP_PORT`, and `TRUSTED_LAN_CIDR` before enabling the unit; use a specific IPv4 bind and the intended trusted subnet. Keep the real host address and subnet out of Git. The unit limits filtering to the configured API destination and must not be treated as authentication.
@@ -57,8 +69,8 @@ with the target SHA, last-good SHA, and exact validated dump path. A failed
 migration leaves this marker in place; later deployments and Worker runs refuse
 to proceed until an operator restores and verifies the previous state.
 
-Install the files and host-only bind configuration, but keep the timer disabled
-until the clean-main gate and unit validation have passed:
+For a new host, install the files and host-only bind configuration, but keep
+the timer disabled until the clean-main gate and unit validation have passed:
 
 ```sh
 sudo install -o root -g root -m 0750 next/deploy/deploy.sh /usr/local/sbin/mediadock-next-deploy
