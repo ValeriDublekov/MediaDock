@@ -4,15 +4,21 @@ This guide covers only the standalone app under `next/`. It is separate from the
 
 ## Current Production Status (2026-09-30)
 
-Production runs GitHub `main` at commit
-`c04ff8ac1b8b205ed8bd5edb02d59c8deeb69644`. The API listens on the configured
-specific trusted LAN interface at port `8081`; PostgreSQL is loopback-only.
+Production remains at deployed GitHub `main` commit
+`753bfe03ddaf2e08f25436a24a0c7bfea467dbf7`. Current `main` is
+`08fbef59a22d56ba8f06ed732c6a948aebba3c70`, but its staging gate failed twice
+in integration tests (16 failed, 2 passed of 18), so it was not promoted. The
+root-managed gate marker suppresses retries for that SHA until `main` advances
+or an operator clears it. The API listens on the configured specific trusted
+LAN interface at port `8081`; PostgreSQL is loopback-only.
 Readiness, UI, and catalog checks from the LAN returned HTTP 200. The API has
 no authentication, so every allowed LAN client can read and change data. The
 router port-forward review and non-LAN denial test have not been completed; do
 not treat LAN checks as proof of public-network isolation.
 
-The deployment timer is enabled for 04:00 UTC. The Worker service is installed,
+The deployment timer checks GitHub `main` every five minutes. Optional success
+email requires a TLS SMTP relay and root-only netrc credentials; it is not yet
+configured on the production host. The Worker service is installed,
 but its timer is not installed or enabled, and no production scan has run. The
 Step 7 database dump passed `pg_restore -l` but still needs confirmation in a
 later Restic snapshot. See the [systemd runbook](../../deploy/systemd/README.md)

@@ -9,6 +9,7 @@ backup_dir=/opt/docker/backups/mediadock-next
 operation_lock="$state_dir/mediadock-next-operation.lock"
 state_file="$state_dir/deploy-state"
 failure_marker="$state_dir/deploy-failed"
+gate_failure_file="$state_dir/gate-failed"
 log_file=/var/log/mediadock-next-deploy.log
 firewall_config=/etc/default/mediadock-next-firewall
 github_url=https://github.com/ValeriDublekov/MediaDock.git
@@ -45,12 +46,73 @@ if [[ "$EUID" -ne 0 ]]; then
     exit 1
 fi
 
-for command_name in curl docker flock git install ip runuser systemctl; do
+for command_name in curl docker flock git install ip runuser stat systemctl; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         printf 'Required command not found: %s\n' "$command_name" >&2
         exit 1
     fi
 done
+
+send_deployment_email() {
+    local new_sha="$1"
+    local previous_sha="$2"
+    local api_image="$3"
+    local recipient="${DEPLOY_NOTIFY_TO:-}"
+    local sender="${DEPLOY_NOTIFY_FROM:-}"
+    local smtp_url="${DEPLOY_SMTP_URL:-}"
+    local netrc_file="${DEPLOY_SMTP_NETRC_FILE:-/etc/mediadock-next-deploy.smtp.netrc}"
+    local email_pattern='^[^[:space:]<>@]+@[^[:space:]<>@]+$'
+    local smtp_pattern='^smtps?://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?$'
+    local smtp_host
+    local netrc_identity
+
+    if [[ -z "$recipient" && -z "$sender" && -z "$smtp_url" ]]; then
+        printf '%s email notification skipped; SMTP is not configured\n' \
+            "$(date --iso-8601=seconds)" | tee -a "$log_file"
+        return 0
+    fi
+
+    if [[ -z "$recipient" || -z "$sender" || -z "$smtp_url" ]]; then
+        printf '%s email notification skipped; SMTP configuration is incomplete\n' \
+            "$(date --iso-8601=seconds)" | tee -a "$log_file"
+        return 0
+    fi
+
+    if [[ ! "$recipient" =~ $email_pattern || ! "$sender" =~ $email_pattern || ! "$smtp_url" =~ $smtp_pattern ]]; then
+        printf '%s email notification skipped; SMTP settings are invalid\n' \
+            "$(date --iso-8601=seconds)" | tee -a "$log_file"
+        return 0
+    fi
+
+    if [[ ! -f "$netrc_file" || -L "$netrc_file" ]]; then
+        printf '%s email notification skipped; SMTP netrc file is missing or unsafe\n' \
+            "$(date --iso-8601=seconds)" | tee -a "$log_file"
+        return 0
+    fi
+    if ! netrc_identity="$(stat -c '%U:%G %a' "$netrc_file" 2>/dev/null)" || [[ "$netrc_identity" != root:root\ 600 ]]; then
+        printf '%s email notification skipped; SMTP netrc must be root:root mode 600\n' \
+            "$(date --iso-8601=seconds)" | tee -a "$log_file"
+        return 0
+    fi
+
+    smtp_host="${smtp_url#*://}"
+    smtp_host="${smtp_host%%:*}"
+    if {
+        printf 'From: %s\r\nTo: %s\r\nDate: %s\r\nSubject: MediaDock Next deployed %s\r\n' \
+            "$sender" "$recipient" "$(LC_ALL=C date -R)" "${new_sha:0:12}"
+        printf 'MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n'
+        printf 'MediaDock Next deployment succeeded.\r\nCommit: %s\r\nPrevious commit: %s\r\nAPI image: %s\r\n' \
+            "$new_sha" "$previous_sha" "$api_image"
+    } | curl --silent --show-error --ssl-reqd --netrc-file "$netrc_file" \
+        --mail-from "$sender" --mail-rcpt "$recipient" --upload-file - "$smtp_url" 2>>"$log_file"; then
+        printf '%s email notification sent; deployed_sha=%s recipient=%s\n' \
+            "$(date --iso-8601=seconds)" "$new_sha" "$recipient" | tee -a "$log_file"
+    else
+        printf '%s email notification failed; deployed_sha=%s recipient=%s smtp_host=%s\n' \
+            "$(date --iso-8601=seconds)" "$new_sha" "$recipient" "$smtp_host" | tee -a "$log_file"
+    fi
+}
+
 if ! systemctl is-enabled --quiet mediadock-next-firewall.service || ! systemctl is-active --quiet mediadock-next-firewall.service; then
     printf 'The MediaDock API firewall unit must be enabled and active before deployment.\n' >&2
     exit 1
@@ -99,11 +161,15 @@ previous_sha=''
 target_sha=''
 staging_dir=''
 gate_log=''
+gate_failure_tmp=''
 
 cleanup() {
     status=$?
     if [[ -n "$staging_dir" && -d "$staging_dir" ]]; then
         runuser -u mediadock -- git -C "$app_root" worktree remove --force "$staging_dir" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$gate_failure_tmp" && -e "$gate_failure_tmp" ]]; then
+        rm -f -- "$gate_failure_tmp"
     fi
     if (( status != 0 )); then
         printf '%s deployment failed; production was not automatically rolled back. old_sha=%s target_sha=%s\n' \
@@ -170,6 +236,28 @@ if [[ "$target_sha" == "$previous_sha" ]]; then
         "$(date --iso-8601=seconds)" "$previous_sha" | tee -a "$log_file"
     exit 0
 fi
+if [[ -e "$gate_failure_file" ]]; then
+    if [[ ! -f "$gate_failure_file" || -L "$gate_failure_file" ]]; then
+        printf 'The staging gate failure marker is not a regular file.\n' >&2
+        exit 1
+    fi
+    gate_failure_identity="$(stat -c '%U:%G %a' "$gate_failure_file")"
+    if [[ "$gate_failure_identity" != root:mediadock\ 640 ]]; then
+        printf 'The staging gate failure marker has unsafe ownership or permissions.\n' >&2
+        exit 1
+    fi
+    failed_gate_sha="$(cat "$gate_failure_file")"
+    if [[ ! "$failed_gate_sha" =~ ^[[:xdigit:]]{40}$ ]]; then
+        printf 'The staging gate failure marker contains an invalid commit SHA.\n' >&2
+        exit 1
+    fi
+    if [[ "$failed_gate_sha" == "$target_sha" ]]; then
+        printf '%s deployment skipped; the staging gate already failed for %s; waiting for a new main commit or manual retry\n' \
+            "$(date --iso-8601=seconds)" "$target_sha" | tee -a "$log_file"
+        exit 0
+    fi
+    rm -f -- "$gate_failure_file"
+fi
 
 target_tag="${target_sha:0:12}"
 staging_dir="$staging_root/staging-$target_tag"
@@ -192,7 +280,12 @@ gate_log="/var/log/mediadock-next-gate-$target_tag.log"
 install -o root -g root -m 0600 /dev/null "$gate_log"
 if ! runuser -u mediadock -g docker -- env -u DOCKER_CONFIG HOME=/var/lib/mediadock DEPLOY_COMMIT="$target_sha" \
     bash "$staging_dir/next/deploy/test.sh" > "$gate_log" 2>&1; then
-    printf 'The clean GitHub staging gate failed for %s.\n' "$target_sha" >&2
+    gate_failure_tmp="$(mktemp "${gate_failure_file}.XXXXXX")"
+    printf '%s\n' "$target_sha" > "$gate_failure_tmp"
+    install -o root -g mediadock -m 0640 "$gate_failure_tmp" "$gate_failure_file"
+    rm -f -- "$gate_failure_tmp"
+    gate_failure_tmp=''
+    printf 'The clean GitHub staging gate failed for %s; it will not be retried until main advances or the failure marker is cleared.\n' "$target_sha" >&2
     exit 1
 fi
 runuser -u mediadock -- git -C "$app_root" merge --ff-only "$target_sha"
@@ -266,3 +359,4 @@ rm -f -- "$failure_marker"
 
 printf '%s deployment succeeded; deployed_sha=%s previous_sha=%s api_image=%s\n' \
     "$(date --iso-8601=seconds)" "$target_sha" "$previous_sha" "$api_image" | tee -a "$log_file"
+send_deployment_email "$target_sha" "$previous_sha" "$api_image"

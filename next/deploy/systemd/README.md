@@ -2,9 +2,20 @@
 
 ## Current Production Deployment (2026-09-30)
 
-The production checkout is `/opt/docker/projects/mediadock-next/next`, deployed from GitHub `main` at commit `c04ff8ac1b8b205ed8bd5edb02d59c8deeb69644`. The UI is available to trusted LAN clients at `http://<server-LAN-IPv4>:8081/`; the actual host address is stored only in server configuration. The app has no login. PostgreSQL remains bound to `127.0.0.1:5432`.
+The production checkout is `/opt/docker/projects/mediadock-next/next` and
+remains deployed at GitHub `main` commit
+`753bfe03ddaf2e08f25436a24a0c7bfea467dbf7`. Current GitHub `main` is
+`08fbef59a22d56ba8f06ed732c6a948aebba3c70`; its staging gate failed twice in
+integration tests (16 failed, 2 passed of 18), so no promotion or migration
+occurred. The root-managed gate marker prevents repeated tests for that SHA.
+The UI is available to trusted LAN clients at
+`http://<server-LAN-IPv4>:8081/`; the actual host address is stored only in
+server configuration. The app has no login. PostgreSQL remains bound to
+`127.0.0.1:5432`.
 
-- `mediadock-next-deploy.timer` is enabled for 04:00 UTC.
+- `mediadock-next-deploy.timer` checks for a new GitHub `main` commit every five
+	minutes, starting five minutes after boot and then five minutes after each
+	check finishes.
 - `mediadock-next-backup.timer` is enabled for 03:00 UTC; the existing Restic timer starts at about 03:30 UTC with up to 15 minutes of random delay.
 - Step 6 dump/restore/Restic verification passed. The Step 7 dump `daily-20260930T082555Z.dump` is root-only and passed `pg_restore -l`, but inclusion in a later Restic snapshot is not yet confirmed.
 - The Worker service is installed, but `mediadock-worker.timer` is not installed or enabled and no scan has run. Step 8 operator approval remains pending.
@@ -82,6 +93,45 @@ API bind after startup. It records the deployed SHA in
 `/var/lib/mediadock-deploy`; that directory is root-owned and group-readable by
 the Worker service account, while its state files remain root-managed. Gate and
 deployment logs under `/var/log` are root-only.
+
+After a new version passes the staging gate, database backup, migration, and
+readiness check, the deploy script can send a success email over SMTP. A run
+with no new commit sends no email. Configure the non-secret settings in
+`/etc/default/mediadock-next-deploy`:
+
+```ini
+DEPLOY_NOTIFY_TO=recipient@example.net
+DEPLOY_NOTIFY_FROM=mediadock@example.net
+DEPLOY_SMTP_URL=smtps://smtp.provider.example:465
+DEPLOY_SMTP_NETRC_FILE=/etc/mediadock-next-deploy.smtp.netrc
+```
+
+The sender must be accepted by the relay. Create the credential file with
+`sudo install -o root -g root -m 0600 /dev/null /etc/mediadock-next-deploy.smtp.netrc`,
+then edit it with `sudoedit`. Its `machine` value must match the SMTP URL host:
+
+```text
+machine smtp.provider.example
+login smtp-account
+password smtp-app-password
+```
+
+Keep real credentials out of Git. The deploy script requires the netrc file to
+be a regular root-owned file with mode `600`, and requires TLS for SMTP. If
+configuration is missing or sending fails, the successful deployment remains
+successful; the outcome is recorded in the root-only deployment log. Email
+delivery is best-effort and is not retried automatically.
+
+If the clean staging gate fails, the failing commit SHA is recorded in
+`/var/lib/mediadock-deploy/gate-failed`; later five-minute polls skip that SHA
+instead of repeating the full test suite. A newer `main` commit is tested
+normally. To retry the same commit after fixing a transient host issue, clear
+the marker and start the service explicitly:
+
+```sh
+sudo rm -f /var/lib/mediadock-deploy/gate-failed
+sudo systemctl start mediadock-next-deploy.service
+```
 
 The deployment unit and Worker share
 `/var/lib/mediadock-deploy/mediadock-next-operation.lock`; the persistent lock survives

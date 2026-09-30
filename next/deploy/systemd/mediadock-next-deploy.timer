@@ -1,9 +1,10 @@
 [Unit]
-Description=Daily MediaDock Next GitHub deployment schedule
+Description=Check MediaDock Next GitHub deployment every five minutes
 
 [Timer]
-OnCalendar=*-*-* 04:00:00 UTC
-Persistent=false
+OnBootSec=5min
+OnUnitInactiveSec=5min
+AccuracySec=1s
 Unit=mediadock-next-deploy.service
 
 [Install]
