@@ -55,6 +55,8 @@ remove_rule() {
     done
 }
 
+remove_rule -p tcp -m conntrack --ctstate ESTABLISHED --ctorigdst "$host_ip" --ctorigdstport "$host_port" -j RETURN
+
 if [[ "$action" == apply ]]; then
     ensure_rule 1 -p tcp -d "$lan_cidr" -m conntrack --ctstate ESTABLISHED --ctorigdst "$host_ip" --ctorigdstport "$host_port" -j RETURN
     ensure_rule 2 -p tcp -s "$lan_cidr" -m conntrack --ctorigdst "$host_ip" --ctorigdstport "$host_port" -j RETURN
