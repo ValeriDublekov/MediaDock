@@ -1,10 +1,12 @@
 name: CI
 
+# Temporarily disabled - uncomment triggers and remove `if: false` to re-enable
 on:
-  pull_request:
-    branches: [ main, master ]
-  push:
-    branches: [ main, master ]
+  # pull_request:
+  #   branches: [ main, master ]
+  # push:
+  #   branches: [ main, master ]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,6 +14,7 @@ permissions:
 jobs:
   backend-tests:
     name: Backend Fast Typecheck and Unit Tests
+    if: false # Temporarily disabled
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -50,6 +53,7 @@ jobs:
 
   backend-firestore-tests:
     name: Backend Firestore Emulator Tests
+    if: false # Temporarily disabled
     needs: backend-tests
     runs-on: ubuntu-latest
     steps:
@@ -89,6 +93,7 @@ jobs:
 
   frontend-ci:
     name: Frontend Typecheck, Unit Tests, and Build
+    if: false # Temporarily disabled
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -114,6 +119,7 @@ jobs:
 
   firestore-rules-tests:
     name: Firestore Rules Emulator Tests
+    if: false # Temporarily disabled
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

@@ -1,8 +1,9 @@
 name: Deploy Frontend to GitHub Pages
 
+# Temporarily disabled - uncomment push trigger and remove `if: false` to re-enable
 on:
-  push:
-    branches: ["main"]
+  # push:
+  #   branches: ["main"]
   workflow_dispatch:
 
 permissions:
@@ -16,6 +17,7 @@ concurrency:
 
 jobs:
   build:
+    if: false # Temporarily disabled
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -56,6 +58,7 @@ jobs:
           path: './dist'
 
   deploy:
+    if: false # Temporarily disabled
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

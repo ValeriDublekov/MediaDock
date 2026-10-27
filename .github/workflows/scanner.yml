@@ -1,9 +1,10 @@
 name: Daily Scanner
 
+# Temporarily disabled - uncomment schedule trigger and remove `if: false` to re-enable
 on:
-  schedule:
-    # Run daily at 04:00 UTC
-    - cron: "0 4 * * *"
+  # schedule:
+  #   # Run daily at 04:00 UTC
+  #   - cron: "0 4 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -53,6 +54,7 @@ concurrency:
 jobs:
   scan:
     name: Run Media Scanner
+    if: false # Temporarily disabled
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
